@@ -1,8 +1,15 @@
 /*
- * MemoryAllocator.cpp
+ * HeapAllocator
+ * Author: Arkadiusz Szlanta
+ * Date: 17 Dec 2024
  *
- *  Created on: 15 gru 2024
- *      Author: Administrator
+ * License:
+ * This source code is provided for hobbyist and private use only.
+ * Any commercial or industrial use, including distribution, reproduction, or
+ * incorporation in commercial or industrial products or services is prohibited.
+ * Use at your own risk. The author(s) hold no responsibility for any damages
+ * or losses resulting from the use of this software.
+ *
  */
 
 #include <HeapAllocator.hpp>
