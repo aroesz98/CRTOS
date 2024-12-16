@@ -6,12 +6,12 @@
  */
 #include <cstdint>
 #include <cassert>
-#include <cstdio>
 #include <cstring>
 #include <list>
 #include <algorithm>
 
 #include <rtos.hpp>
+#include <HeapAllocator.hpp>
 
 typedef void (*TaskFunction)(void*);
 
@@ -32,9 +32,7 @@ typedef struct
     volatile uint32_t VAL;
 } SysTick_Type;
 
-extern uint32_t SystemCoreClock;
-
-__attribute__((used )) volatile TaskControlBlock *sCurrentTCB = NULL;
+__attribute__((used)) volatile TaskControlBlock *sCurrentTCB = NULL;
 
 #define NVIC_MIN_PRIO                     (0xFFul)
 #define NVIC_PENDSV_PRIO                  (NVIC_MIN_PRIO << 16u)
@@ -51,42 +49,46 @@ __attribute__((used )) volatile TaskControlBlock *sCurrentTCB = NULL;
 #define SysTick_CTRL_TICKINT_Msk    (1ul << 1u)
 #define SysTick_CTRL_ENABLE_Msk     (1ul)
 
-extern "C" void SVC_Handler(void) __attribute__ (( naked ));
-extern "C" void PendSV_Handler(void) __attribute__ (( naked ));
+extern "C" void SVC_Handler(void) __attribute__((naked));
+extern "C" void PendSV_Handler(void) __attribute__((naked));
 extern "C" void SysTick_Handler(void);
 
-extern "C" void RestoreCtxOfTheFirstTask(void) __attribute__((naked ));
-extern "C" uint32_t getInterruptMask(void) __attribute__((naked ));
-extern "C" void setInterruptMask(uint32_t ulMask) __attribute__((naked ));
-extern "C" void startFirstTask(void) __attribute__((naked ));
+extern "C" void RestoreCtxOfTheFirstTask(void) __attribute__((naked));
+extern "C" uint32_t getInterruptMask(void) __attribute__((naked));
+extern "C" void setInterruptMask(uint32_t ulMask) __attribute__((naked));
+extern "C" void startFirstTask(void) __attribute__((naked));
 
-static std::atomic<uint32_t> tickCount(0u);
+static volatile uint32_t tickCount = 0u;
 static std::list<volatile TaskControlBlock*> tcbList;
 
 static uint32_t MAX_TASK_PRIORITY = 10u;
+static uint32_t sTickRate = 1000u;
+static uint32_t sCoreClock = 150000000u;
 
-//
-RTOS::Semaphore TmrSvc_Smphr(0u);
+static RTOS::Semaphore TmrSvc_Smphr(0u);
 static std::list<RTOS::Timer::SoftwareTimer*> sTimerList;
+static HeapAllocator mem;
+
+extern "C" void SystemCoreClockUpdate (void);
 
 RTOS::Semaphore::Semaphore(uint32_t initialValue) : value(initialValue) {}
 
-void RTOS::Semaphore::wait(uint32_t timeoutTicks)
+RTOS::Result RTOS::Semaphore::wait(uint32_t timeoutTicks)
 {
-    uint32_t startTick = tickCount.load();
+    uint32_t startTick = tickCount;
 
     while (true)
     {
         uint32_t oldValue = value.load();
         if (oldValue > 0u && value.compare_exchange_strong(oldValue, oldValue - 1u))
         {
-            return;
+            return RTOS::Result::RESULT_SUCCESS;
         }
 
-        uint32_t currentTick = tickCount.load();
+        uint32_t currentTick = tickCount;
         if ((currentTick - startTick) >= timeoutTicks)
         {
-            return;
+            return RTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
         }
     }
 }
@@ -96,37 +98,113 @@ void RTOS::Semaphore::signal()
     value++;
 }
 
-void RTOS::Semaphore::destroy()
+RTOS::Result RTOS::Config::initMem(void *pool, uint32_t size)
 {
-    value.store(0u);
+    if (pool == nullptr || size == 0u)
+    {
+        return RTOS::Result::RESULT_NO_MEMORY;
+    }
+
+    mem.init(pool, size);
+
+    return RTOS::Result::RESULT_SUCCESS;
 }
 
-void RTOS::Timer::Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload)
+size_t RTOS::Config::getAllocatedMemory()
 {
+    return mem.getAllocatedMemory();
+}
+
+size_t RTOS::Config::getFreeMemory()
+{
+    return mem.getFreeMemory();
+}
+
+RTOS::Result RTOS::Timer::Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload)
+{
+    if (timer == nullptr || callback == nullptr)
+    {
+        return RTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
     timer->timeoutTicks = timeoutTicks;
     timer->elapsedTicks = 0u;
     timer->isActive = false;
     timer->callback = callback;
     timer->callbackArgs = callbackArgs;
     timer->autoReload = autoReload;
+
     sTimerList.push_back(timer);
+
+    return RTOS::Result::RESULT_SUCCESS;
 }
 
-void RTOS::Timer::Start(SoftwareTimer *timer)
+RTOS::Result RTOS::Timer::Start(SoftwareTimer *timer)
 {
+    if (timer == nullptr)
+    {
+        return RTOS::Result::RESULT_BAD_PARAMETER;
+    }
+    if (timer->isActive == true)
+    {
+        return RTOS::Result::RESULT_TIMER_ALREADY_ACTIVE;
+    }
+
     timer->elapsedTicks = 0u;
     timer->isActive = true;
+
+    return RTOS::Result::RESULT_SUCCESS;
 }
 
-void RTOS::Timer::Stop(SoftwareTimer *timer)
+RTOS::Result RTOS::Timer::Stop(SoftwareTimer *timer)
 {
+    if (timer == nullptr)
+    {
+        return RTOS::Result::RESULT_BAD_PARAMETER;
+    }
+    if (timer->isActive == true)
+    {
+        return RTOS::Result::RESULT_TIMER_ALREADY_STOPPED;
+    }
+
     timer->isActive = false;
     timer->elapsedTicks = 0u;
+
+    return RTOS::Result::RESULT_SUCCESS;
 }
 
-void RTOS::Timer::Reset(SoftwareTimer *timer)
+void RTOS::Config::SetCoreClock(uint32_t clock)
 {
-    timer->elapsedTicks = 0u;
+    if (clock > 1000000u)
+    {
+        sCoreClock = clock;
+    }
+}
+
+void RTOS::Config::SetTickRate(uint32_t ticks)
+{
+    if (ticks < 1000000)
+    {
+        sTickRate = ticks;
+    }
+}
+
+RTOS::Mutex::Mutex() : flag(ATOMIC_FLAG_INIT)
+{
+}
+
+RTOS::Mutex::~Mutex()
+{
+}
+
+void RTOS::Mutex::lock()
+{
+    while (flag.test_and_set(std::memory_order_acquire));
+}
+
+void RTOS::Mutex::unlock()
+{
+    flag.clear(std::memory_order_release);
 }
 
 uint32_t getInterruptMask(void)
@@ -271,30 +349,8 @@ __attribute__((always_inline)) static inline void __DSB(void)
     __asm volatile ("dsb 0xF":::"memory");
 }
 
-extern "C" void SVC_ISR(uint32_t *svcArgs)
-{
-    // https://developer.arm.com/documentation/ka004005/latest/
-    unsigned int svc_number;
-    svc_number = ((char*)svcArgs[6])[-2];
-
-    switch (svc_number)
-    {
-        case 7:
-            RestoreCtxOfTheFirstTask();
-            break;
-
-        default:
-            assert(true);
-    }
-}
-
 extern "C" void switchCtx()
 {
-    if (tcbList.empty())
-    {
-        return;
-    }
-
     auto it = std::find(tcbList.begin(), tcbList.end(), sCurrentTCB);
     if (it != tcbList.end() && ++it != tcbList.end())
     {
@@ -383,8 +439,20 @@ void TimerISR(void *)
     }
 }
 
-void RTOS::Scheduler::Start(void)
+RTOS::Result RTOS::Scheduler::Start(void)
 {
+    RTOS::Result result = RTOS::Result::RESULT_SUCCESS;
+    void *pool = nullptr;
+    uint32_t poolSize = 0u;
+
+    mem.getMemoryPool(&pool, poolSize);
+
+    if ((pool == nullptr) || (poolSize == 0u))
+    {
+        result = RTOS::Result::RESULT_MEMORY_NOT_INITIALIZED;
+        return result;
+    }
+
     *NVIC_SHPR3_REG |= NVIC_PENDSV_PRIO;
     *NVIC_SHPR3_REG |= NVIC_SYSTICK_PRIO;
 
@@ -397,38 +465,50 @@ void RTOS::Scheduler::Start(void)
 
     sCurrentTCB = tcbList.front();
 
-    SysTick->LOAD = 150000 - 1ul;
+    SystemCoreClockUpdate();
+
+    SysTick->LOAD = (sCoreClock / sTickRate) - 1ul;
     SysTick->VAL = 0u;
     SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
 
     startFirstTask();
 
-    while (1);
+    return result;
 }
 
-RTOS::TaskResult RTOS::Task::Create(TaskFunction function,  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle)
+RTOS::Result RTOS::Task::Create(TaskFunction function,  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle)
 {
-    RTOS::TaskResult result = RTOS::TaskResult::RESULT_SUCCESS;
+    RTOS::Result result = RTOS::Result::RESULT_SUCCESS;
     uint32_t prevMask = getInterruptMask();
+    void *pool = nullptr;
+    uint32_t poolSize = 0u;
 
     __DSB();
     __ISB();
 
+    mem.getMemoryPool(&pool, poolSize);
+
+    if ((pool == nullptr) || (poolSize == 0u))
+    {
+        result = RTOS::Result::RESULT_MEMORY_NOT_INITIALIZED;
+        return result;
+    }
+
     do
     {
-        TaskControlBlock *tmpTCB = new TaskControlBlock;
+        TaskControlBlock *tmpTCB = (TaskControlBlock*)(mem.allocate(sizeof(TaskControlBlock)));
         if (tmpTCB == nullptr)
         {
-            delete tmpTCB;
-            result = RTOS::TaskResult::RESULT_NO_MEMORY;
+            mem.deallocate(tmpTCB);
+            result = RTOS::Result::RESULT_NO_MEMORY;
             continue;
         }
 
-        uint32_t *tmpStack = new uint32_t[stackDepth];
+        uint32_t *tmpStack = (uint32_t*)(mem.allocate(stackDepth * sizeof(uint32_t)));
         if (tmpStack == nullptr)
         {
-            delete []tmpStack;
-            result = RTOS::TaskResult::RESULT_NO_MEMORY;
+            mem.deallocate(tmpStack);
+            result = RTOS::Result::RESULT_NO_MEMORY;
             continue;
         }
 
@@ -479,8 +559,8 @@ void RTOS::Task::Delete(void)
     auto it = std::find(tcbList.begin(), tcbList.end(), sCurrentTCB);
     tcbList.erase(it);
 
-    delete sCurrentTCB->stack;
-    delete sCurrentTCB;
+    mem.deallocate((void*)(sCurrentTCB->stack));
+    mem.deallocate((void*)(sCurrentTCB));
 
     *ICSR_REG = NVIC_PENDSV_BIT;
 
@@ -498,8 +578,8 @@ void RTOS::Task::Delete(TaskHandle *handle)
     auto it = std::find(tcbList.begin(), tcbList.end(), tmp);
     tcbList.erase(it);
 
-    delete tmp->stack;
-    delete tmp;
+    mem.deallocate((void*)(tmp->stack));
+    mem.deallocate((void*)(tmp));
 
     *ICSR_REG = NVIC_PENDSV_BIT;
 
@@ -510,3 +590,81 @@ char* RTOS::Task::GetCurrentTaskName(void)
 {
     return ((char*)(sCurrentTCB->name));
 }
+
+RTOS::Queue::Queue(uint32_t maxsize, uint32_t element_size)
+    : mFront(0u), mRear(0u), mSize(0u), mMaxSize(maxsize), mElementSize(element_size) {
+    mQueue = mem.allocate(maxsize * element_size);
+}
+
+RTOS::Queue::~Queue()
+{
+    mem.deallocate(mQueue);
+    mQueue = nullptr;
+}
+
+RTOS::Result RTOS::Queue::queueSend(void* item, uint32_t timeout)
+{
+    RTOS::Result result = RTOS::Result::RESULT_SUCCESS;
+    uint32_t start_time = tickCount;
+
+    if (mQueue == nullptr)
+    {
+        result = RTOS::Result::RESULT_NO_MEMORY;
+        return result;
+    }
+
+    if (item == nullptr)
+    {
+        result = RTOS::Result::RESULT_BAD_PARAMETER;
+        return result;
+    }
+
+    while (mSize == mMaxSize)
+    {
+        if (tickCount - start_time >= timeout)
+        {
+            result = RTOS::Result::RESULT_QUEUE_TIMEOUT;
+            return result;
+        }
+    }
+
+    memcpy(static_cast<char*>(mQueue) + mRear * mElementSize, item, mElementSize);
+    mRear = (mRear + 1) % mMaxSize;
+    mSize++;
+
+    return result;
+}
+
+RTOS::Result RTOS::Queue::queueReceive(void* item, uint32_t timeout)
+{
+    RTOS::Result result = RTOS::Result::RESULT_SUCCESS;
+    uint32_t start_time = tickCount;
+
+    if (mQueue == nullptr)
+    {
+        result = RTOS::Result::RESULT_NO_MEMORY;
+        return result;
+    }
+
+    if (item == nullptr)
+    {
+        result = RTOS::Result::RESULT_BAD_PARAMETER;
+        return result;
+    }
+
+    while (mSize == 0)
+    {
+        if (tickCount - start_time >= timeout)
+        {
+            result = RTOS::Result::RESULT_QUEUE_TIMEOUT;
+            return result;
+        }
+    }
+
+    memcpy(item, static_cast<char*>(mQueue) + mFront * mElementSize, mElementSize);
+    mFront = (mFront + 1) % mMaxSize;
+    mSize--;
+
+    return result;
+}
+
