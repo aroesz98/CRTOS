@@ -431,13 +431,16 @@ CRTOS::Mutex::~Mutex(void)
 
 void CRTOS::Mutex::lock(void)
 {
-    while (flag.test_and_set(std::memory_order_acquire))
-        ;
+    CRTOS::Task::EnterCriticalSection();
+
+    while (flag.test_and_set(std::memory_order_acquire));
 }
 
 void CRTOS::Mutex::unlock(void)
 {
     flag.clear(std::memory_order_release);
+
+    CRTOS::Task::ExitCriticalSection();
 }
 
 uint32_t getInterruptMask(void)
@@ -453,7 +456,7 @@ uint32_t getInterruptMask(void)
         ".align 4        \n" ::"i"(MAX_SYSCALL_INTERRUPT_PRIORITY) : "memory");
 }
 
-void setInterruptMask(uint32_t mask)
+void setInterruptMask(uint32_t mask = 0u)
 {
     __asm volatile(
         ".syntax unified \n"
@@ -462,6 +465,19 @@ void setInterruptMask(uint32_t mask)
         "isb             \n"
         "bx lr           \n"
         ".align 4        \n" ::: "memory");
+}
+
+void CRTOS::Task::EnterCriticalSection(void)
+{
+    getInterruptMask();
+
+    __asm volatile ( "dsb" ::: "memory" );
+    __asm volatile ( "isb" );
+}
+
+void CRTOS::Task::ExitCriticalSection(void)
+{
+    setInterruptMask();
 }
 
 void RestoreCtxOfTheFirstTask(void)
