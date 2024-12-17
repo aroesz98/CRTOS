@@ -15,7 +15,7 @@ Custom Real-Time Operating System for ARM Cortex-M
 
 This CRTOS implementation provides several core functionalities:
 
-- **RTOS Configuration:**
+- **CRTOS Configuration:**
   - `SetCoreClock(uint32_t clock)`: Sets the core clock frequency.
   - `SetTickRate(uint32_t ticks)`: Sets the system tick rate.
   - `initMem(void *pool, uint32_t size)`: Initializes the memory pool for RTOS.
