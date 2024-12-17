@@ -607,6 +607,7 @@ void SysTick_Handler(void)
 static void dummyTask(void)
 {
     volatile uint32_t ulDummy = 0UL;
+    CRTOS::Task::Delete();
 
     getInterruptMask();
 
