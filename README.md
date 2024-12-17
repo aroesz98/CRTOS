@@ -1,7 +1,7 @@
 # CRTOS
 Custom Real-Time Operating System for ARM Cortex-M
 
-# Technical Documentation of RTOS Implementation
+# Technical Documentation of CRTOS Implementation
 
 ## Table of Contents
 1. **Functional Overview**
