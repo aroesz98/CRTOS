@@ -17,16 +17,15 @@
 
 const uint32_t MARKER = 0xDEADBEEF;
 
-HeapAllocator::HeapAllocator() :
-        head(nullptr),
-        mPool(nullptr),
-        mPoolSize(0u)
+HeapAllocator::HeapAllocator() : head(nullptr),
+                                 mPool(nullptr),
+                                 mPoolSize(0u)
 {
 }
 
 void HeapAllocator::init(void *memoryPool, uint32_t totalSize)
 {
-    head = (Block*) memoryPool;
+    head = (Block *)memoryPool;
     head->size = totalSize - sizeof(Block) - 2 * sizeof(uint32_t);
     head->free = true;
     head->prev = nullptr;
@@ -38,7 +37,7 @@ void HeapAllocator::init(void *memoryPool, uint32_t totalSize)
     mPoolSize = totalSize;
 }
 
-void* HeapAllocator::allocate(uint32_t size)
+void *HeapAllocator::allocate(uint32_t size)
 {
     size = align8(size);
     Block *current = head;
@@ -51,7 +50,7 @@ void* HeapAllocator::allocate(uint32_t size)
                 split(current, size);
             }
             current->free = false;
-            return (void*) ((char*) current + sizeof(Block) + sizeof(uint32_t));
+            return (void *)((char *)current + sizeof(Block) + sizeof(uint32_t));
         }
         current = current->next;
     }
@@ -63,7 +62,7 @@ void HeapAllocator::deallocate(void *ptr)
     if (!ptr)
         return;
 
-    Block *block = (Block*) ((char*) ptr - sizeof(Block) - sizeof(uint32_t));
+    Block *block = (Block *)((char *)ptr - sizeof(Block) - sizeof(uint32_t));
     if (block->startMarker != MARKER || block->endMarker != MARKER)
     {
         assert(false);
@@ -116,8 +115,7 @@ uint32_t HeapAllocator::align8(uint32_t size)
 
 void HeapAllocator::split(Block *block, uint32_t size)
 {
-    Block *newBlock = (Block*) ((char*) block + sizeof(Block) + size
-            + 2 * sizeof(uint32_t));
+    Block *newBlock = (Block *)((char *)block + sizeof(Block) + size + 2 * sizeof(uint32_t));
     newBlock->size = block->size - size - sizeof(Block) - 2 * sizeof(uint32_t);
     newBlock->free = true;
     newBlock->prev = block;
@@ -157,4 +155,3 @@ void HeapAllocator::join(Block *block)
         block->endMarker = MARKER;
     }
 }
-
