@@ -30,7 +30,8 @@ namespace CRTOS
         RESULT_TIMER_ALREADY_ACTIVE,
         RESULT_TIMER_ALREADY_STOPPED,
         RESULT_QUEUE_TIMEOUT,
-        RESULT_CIRCULAR_BUFFER_TIMEOUT
+        RESULT_CIRCULAR_BUFFER_TIMEOUT,
+        RESULT_TASK_NOT_FOUND
     };
 
     namespace Config
@@ -110,8 +111,11 @@ namespace CRTOS
         typedef void* TaskHandle;
         void SetMaximumTaskPrio(uint32_t maxPriority);
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
-        void Delete(void);
-        void Delete(TaskHandle *handle);
+        Result Delete(void);
+        Result Delete(TaskHandle *handle);
+
+        void EnterCriticalSection(void);
+        void ExitCriticalSection(void);
 
         char* GetCurrentTaskName(void);
     };
