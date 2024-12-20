@@ -23,7 +23,7 @@ typedef void (*TaskFunction)(void *);
 enum class TaskState : uint32_t
 {
     TASK_RUNNING,
-    TASK_BLOCKED,
+    TASK_DELAYED,
 };
 
 struct TaskControlBlock
@@ -35,6 +35,7 @@ struct TaskControlBlock
     char name[20u];
     uint32_t priority;
     TaskState state;
+    uint32_t delayUpTo;
 };
 
 typedef struct TaskControlBlock TaskControlBlock;
@@ -595,8 +596,9 @@ __attribute__((always_inline)) static inline void __DSB(void)
 
 extern "C" void switchCtx(void)
 {
-    // Find the next task with the highest priority
     Node<TaskControlBlock> *temp = tcbList;
+    Node<TaskControlBlock> *highestPriorityTask = nullptr;
+
     while (temp != nullptr)
     {
         if (temp->data == sCurrentTCB)
@@ -607,15 +609,50 @@ extern "C" void switchCtx(void)
         temp = temp->next;
     }
 
-    // If we reach the end of the list, loop back to the beginning
     if (temp == nullptr)
     {
         temp = tcbList;
     }
 
-    // Update the current task
-    sCurrentTCB = temp->data;
+    // Find highest priority task
+    while (true)
+    {
+        if (temp->data->state == TaskState::TASK_DELAYED)
+        {
+            if (temp->data->delayUpTo == tickCount)
+            {
+                temp->data->state = TaskState::TASK_RUNNING;
+            }
+        }
+
+
+        if (temp->data->state == TaskState::TASK_RUNNING)
+        {
+            if (highestPriorityTask == nullptr || temp->data->priority > highestPriorityTask->data->priority)
+            {
+                highestPriorityTask = temp;
+            }
+        }
+
+        temp = temp->next;
+        if (temp == nullptr)
+        {
+            temp = tcbList;
+        }
+
+        if (highestPriorityTask != nullptr)
+        {
+            break;
+        }
+    }
+
+    if (highestPriorityTask != nullptr)
+    {
+        sCurrentTCB = highestPriorityTask->data;
+    }
 }
+
+
 
 void SysTick_Handler(void)
 {
@@ -802,7 +839,6 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         tmpTCB->stackTop = initStack(stackTop, tmpTCB->stack, function, args);
 
         ListInsertAtEnd(tcbList, tmpTCB);
-        SortListByPriority(tcbList);
 
         if (handle != NULL)
         {
@@ -908,6 +944,21 @@ CRTOS::Result CRTOS::Task::Delete(TaskHandle *handle)
     setInterruptMask(prevMask);
 
     return result;
+}
+
+void CRTOS::Task::Delay(uint32_t ticks)
+{
+    uint32_t prevMask = getInterruptMask();
+
+    __DSB();
+    __ISB();
+
+    sCurrentTCB->state = TaskState::TASK_DELAYED;
+    sCurrentTCB->delayUpTo = tickCount + ticks;
+
+    *ICSR_REG = NVIC_PENDSV_BIT;
+
+    setInterruptMask(prevMask);
 }
 
 char *CRTOS::Task::GetCurrentTaskName(void)

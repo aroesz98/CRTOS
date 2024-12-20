@@ -113,6 +113,7 @@ namespace CRTOS
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
         Result Delete(void);
         Result Delete(TaskHandle *handle);
+        void Delay(uint32_t ticks);
 
         void EnterCriticalSection(void);
         void ExitCriticalSection(void);
