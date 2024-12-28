@@ -127,6 +127,8 @@ void HeapAllocator::deallocate(void *ptr)
     {
         tail = block;
     }
+
+    join(block);
 }
 
 void HeapAllocator::getMemoryPool(void **memoryPool, uint32_t &totalSize)
