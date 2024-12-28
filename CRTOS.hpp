@@ -26,6 +26,7 @@ namespace CRTOS
         RESULT_BAD_PARAMETER,
         RESULT_NO_MEMORY,
         RESULT_MEMORY_NOT_INITIALIZED,
+        RESULT_SEMAPHORE_BUSY,
         RESULT_SEMAPHORE_TIMEOUT,
         RESULT_TIMER_ALREADY_ACTIVE,
         RESULT_TIMER_ALREADY_STOPPED,
@@ -114,6 +115,8 @@ namespace CRTOS
         Result Delete(void);
         Result Delete(TaskHandle *handle);
         void Delay(uint32_t ticks);
+        uint32_t GetTaskCycles(void);
+        uint32_t GetFreeStack(void);
 
         void EnterCriticalSection(void);
         void ExitCriticalSection(void);

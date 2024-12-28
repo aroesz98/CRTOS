@@ -17,13 +17,17 @@
 
 #include <CRTOS.hpp>
 #include <HeapAllocator.hpp>
+#include <cstdio>
+#include <algorithm>
 
 typedef void (*TaskFunction)(void *);
 
 enum class TaskState : uint32_t
 {
     TASK_RUNNING,
+    TASK_READY,
     TASK_DELAYED,
+    TASK_BLOCKED
 };
 
 struct TaskControlBlock
@@ -32,10 +36,13 @@ struct TaskControlBlock
     volatile uint32_t *stack;
     TaskFunction function;
     void *function_args;
-    char name[20u];
     uint32_t priority;
     TaskState state;
     uint32_t delayUpTo;
+    uint32_t stackWatermark;
+    uint32_t enterCycles;
+    uint32_t exitCycles;
+    char name[20u];
 };
 
 typedef struct TaskControlBlock TaskControlBlock;
@@ -47,6 +54,12 @@ typedef struct
     volatile uint32_t VAL;
 } SysTick_Type;
 
+typedef struct
+{
+  volatile uint32_t CTRL;
+  volatile uint32_t CYCCNT;
+} DWT_Type;
+
 __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = NULL;
 
 #define NVIC_MIN_PRIO                   (0xFFul)
@@ -55,14 +68,17 @@ __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = NULL;
 #define MAX_SYSCALL_INTERRUPT_PRIORITY  (2ul << 5u)
 #define NVIC_PENDSV_BIT                 (1ul << 28u)
 
-#define NVIC_SHPR3_REG  ((volatile uint32_t *)0xE000ED20ul)
-#define ICSR_REG        ((volatile uint32_t *)0xE000ED04ul)
-#define SYSTICK_REG     ((volatile uint32_t *)0xE000E010ul)
-#define SysTick         ((SysTick_Type *)SYSTICK_REG)
+#define NVIC_SHPR3_REG                  ((volatile uint32_t *)0xE000ED20ul)
+#define ICSR_REG                        ((volatile uint32_t *)0xE000ED04ul)
+#define SYSTICK_REG                     ((volatile uint32_t *)0xE000E010ul)
+#define DWT_REG                         ((volatile uint32_t *)0xE0001000ul)
 
-#define SysTick_CTRL_CLKSOURCE_Msk  (1ul << 2u)
-#define SysTick_CTRL_TICKINT_Msk    (1ul << 1u)
-#define SysTick_CTRL_ENABLE_Msk     (1ul)
+#define SysTick                         ((SysTick_Type *)SYSTICK_REG)
+#define DWT                             ((DWT_Type*)DWT_REG)
+
+#define SysTick_CTRL_CLKSOURCE_Msk      (1ul << 2u)
+#define SysTick_CTRL_TICKINT_Msk        (1ul << 1u)
+#define SysTick_CTRL_ENABLE_Msk         (1ul)
 
 extern "C" void SVC_Handler(void) __attribute__((naked));
 extern "C" void PendSV_Handler(void) __attribute__((naked));
@@ -293,10 +309,13 @@ void SortListByPriority(Node<T> *&head)
     } while (swapped);
 }
 
-static Node<TaskControlBlock> *tcbList = nullptr;
+static Node<TaskControlBlock> *readyTaskList = nullptr;
 static Node<CRTOS::Timer::SoftwareTimer> *sTimerList = nullptr;
 
-CRTOS::Semaphore::Semaphore(uint32_t initialValue) : value(initialValue) {}
+CRTOS::Semaphore::Semaphore(uint32_t initialValue) :
+    value(initialValue)
+{
+}
 
 CRTOS::Result CRTOS::Semaphore::wait(uint32_t timeoutTicks)
 {
@@ -528,11 +547,12 @@ void SVC_Handler(void)
         "ldr r1, SVC_ISR_ADDR                         \n"
         "bx r1                                        \n"
         ".align 4                                     \n"
-        "SVC_ISR_ADDR: .word RestoreCtxOfTheFirstTask \n"
+        "SVC_ISR_ADDR:                                \n"
+        "\t.word RestoreCtxOfTheFirstTask             \n"
     );
 }
 
-void PendSV_Handler(void)
+extern "C" void PendSV_Handler(void)
 {
     __asm volatile (
         ".syntax unified     \n"
@@ -546,11 +566,22 @@ void PendSV_Handler(void)
         "ldr r2, currentTCB  \n"
         "ldr r1, [r2]        \n"
         "str r0, [r1]        \n"
+        // Update stack watermark
+        "ldr r4, [r1, #(4)]  \n"  // Load stack
+        "sub r5, r0, r4      \n"  // Calculate used stack
+        "lsr r5, r5, #2 \n"
+        "ldr r6, [r1, #(28)] \n"  // Load stackWatermark
+        "cmp r5, r6          \n"
+        "bls update_watermark\n"
+        "b skip_update_watermark \n"
+        "update_watermark:   \n"
+        "str r5, [r1, #(28)] \n"  // Update stackWatermark
+        "skip_update_watermark: \n"
+        // Perform context switch
         "mov r0, %0          \n"
         "msr basepri, r0     \n"
         "dsb                 \n"
         "isb                 \n"
-        // Switch to next TCN
         "bl switchCtx        \n"
         "mov r0, #0          \n"
         "msr basepri, r0     \n"
@@ -569,6 +600,8 @@ void PendSV_Handler(void)
         "currentTCB: .word sCurrentTCB \n" ::"i"(MAX_SYSCALL_INTERRUPT_PRIORITY)
     );
 }
+
+
 
 void startFirstTask(void)
 {
@@ -594,10 +627,22 @@ __attribute__((always_inline)) static inline void __DSB(void)
     __asm volatile("dsb 0xF" ::: "memory");
 }
 
+extern "C" char *currentTaskName(void)
+{
+    return (char*)(&(sCurrentTCB->name[0]));
+}
+
+extern "C" void delete_current_task(void)
+{
+    CRTOS::Task::Delete();
+}
+
 extern "C" void switchCtx(void)
 {
-    Node<TaskControlBlock> *temp = tcbList;
+    Node<TaskControlBlock> *temp = readyTaskList;
     Node<TaskControlBlock> *highestPriorityTask = nullptr;
+
+    sCurrentTCB->exitCycles = DWT->CYCCNT;
 
     while (temp != nullptr)
     {
@@ -611,7 +656,7 @@ extern "C" void switchCtx(void)
 
     if (temp == nullptr)
     {
-        temp = tcbList;
+        temp = readyTaskList;
     }
 
     // Find highest priority task
@@ -637,7 +682,7 @@ extern "C" void switchCtx(void)
         temp = temp->next;
         if (temp == nullptr)
         {
-            temp = tcbList;
+            temp = readyTaskList;
         }
 
         if (highestPriorityTask != nullptr)
@@ -650,9 +695,9 @@ extern "C" void switchCtx(void)
     {
         sCurrentTCB = highestPriorityTask->data;
     }
+
+    sCurrentTCB->enterCycles = DWT->CYCCNT;
 }
-
-
 
 void SysTick_Handler(void)
 {
@@ -661,6 +706,8 @@ void SysTick_Handler(void)
     tickCount++;
 
     TmrSvc_Smphr.signal();
+
+    sCurrentTCB->exitCycles = DWT->CYCCNT;
 
     *ICSR_REG = NVIC_PENDSV_BIT;
 
@@ -734,6 +781,16 @@ void TimerISR(void *)
     }
 }
 
+void idleTask(void *)
+{
+    for(;;)
+    {
+        uint32_t prevMask = getInterruptMask();
+        *ICSR_REG = NVIC_PENDSV_BIT;
+        setInterruptMask(prevMask);
+    }
+}
+
 CRTOS::Result CRTOS::Scheduler::Start(void)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
@@ -758,15 +815,21 @@ CRTOS::Result CRTOS::Scheduler::Start(void)
         SysTick->CTRL = 0ul;
         SysTick->VAL = 0ul;
 
-        result = CRTOS::Task::Create(TimerISR, "TimerSVC", 400, NULL, MAX_TASK_PRIORITY - 2u, NULL);
+        result = CRTOS::Task::Create(TimerISR, "TimerSVC", 256, NULL, MAX_TASK_PRIORITY - 2u, NULL);
         if (result != CRTOS::Result::RESULT_SUCCESS)
         {
             continue;
         }
 
-        SortListByPriority(tcbList);
+        result = CRTOS::Task::Create(idleTask, "IDLE", 64, NULL, 0u, NULL);
+        if (result != CRTOS::Result::RESULT_SUCCESS)
+        {
+            continue;
+        }
 
-        sCurrentTCB = tcbList->data;
+        SortListByPriority(readyTaskList);
+
+        sCurrentTCB = readyTaskList->data;
 
         SysTick->LOAD = (sCoreClock / sTickRate) - 1ul;
         SysTick->VAL = 0u;
@@ -820,6 +883,8 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         tmpTCB->function = function;
         tmpTCB->function_args = args;
         tmpTCB->state = TaskState::TASK_RUNNING;
+        tmpTCB->enterCycles = 0;
+        tmpTCB->exitCycles = 0;
 
         if (prio >= MAX_TASK_PRIORITY)
         {
@@ -833,12 +898,13 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         uint32_t nameLength = strlen(name);
         memcpy(tmpTCB->name, &name[0], nameLength < 20u ? nameLength : 20u);
 
-        volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - (uint32_t)1u]);
+        volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - (uint32_t)2u]);
         stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7lu);
 
         tmpTCB->stackTop = initStack(stackTop, tmpTCB->stack, function, args);
+        tmpTCB->stackWatermark = stackDepth;
 
-        ListInsertAtEnd(tcbList, tmpTCB);
+        ListInsertAtEnd(readyTaskList, tmpTCB);
 
         if (handle != NULL)
         {
@@ -855,7 +921,7 @@ CRTOS::Result CRTOS::Task::Delete(void)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t prevMask = getInterruptMask();
-    Node<TaskControlBlock> *tmp = tcbList;
+    Node<TaskControlBlock> *tmp = readyTaskList;
     uint32_t pos = 0;
 
     __DSB();
@@ -867,7 +933,7 @@ CRTOS::Result CRTOS::Task::Delete(void)
         {
             if (sCurrentTCB == tmp->data)
             {
-                ListDeleteAtPosition(tcbList, pos);
+                ListDeleteAtPosition(readyTaskList, pos);
                 break;
             }
 
@@ -897,7 +963,7 @@ CRTOS::Result CRTOS::Task::Delete(TaskHandle *handle)
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t prevMask = getInterruptMask();
     TaskControlBlock *tmpHandle = (TaskControlBlock *)(*handle);
-    Node<TaskControlBlock> *tmp = tcbList;
+    Node<TaskControlBlock> *tmp = readyTaskList;
     uint32_t pos = 0;
 
     __DSB();
@@ -921,7 +987,7 @@ CRTOS::Result CRTOS::Task::Delete(TaskHandle *handle)
         {
             if (tmpHandle == tmp->data)
             {
-                ListDeleteAtPosition(tcbList, pos);
+                ListDeleteAtPosition(readyTaskList, pos);
                 break;
             }
 
@@ -965,6 +1031,18 @@ char *CRTOS::Task::GetCurrentTaskName(void)
 {
     return ((char *)(sCurrentTCB->name));
 }
+
+uint32_t CRTOS::Task::GetTaskCycles(void)
+{
+    return sCurrentTCB->enterCycles - sCurrentTCB->exitCycles;
+}
+
+uint32_t CRTOS::Task::GetFreeStack(void)
+{
+    TaskControlBlock *tcb = (TaskControlBlock *)sCurrentTCB;
+    return tcb->stackWatermark;
+}
+
 
 CRTOS::Queue::Queue(uint32_t maxsize, uint32_t element_size)
     : mFront(0u), mRear(0u), mSize(0u), mMaxSize(maxsize), mElementSize(element_size)
