@@ -42,6 +42,7 @@ class HeapAllocator
         };
 
         Block *head;
+        Block *tail;
         void *mPool;
         uint32_t mPoolSize;
 

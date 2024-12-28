@@ -13,13 +13,14 @@
  */
 
 #include <HeapAllocator.hpp>
+#include <cstdint>
+#include <cstdio>
 #include <cassert>
 
-const uint32_t MARKER = 0xDEADBEEF;
+static constexpr uint32_t MARKER = 0xDEADBEEFul;
 
-HeapAllocator::HeapAllocator() : head(nullptr),
-                                 mPool(nullptr),
-                                 mPoolSize(0u)
+HeapAllocator::HeapAllocator() : head(nullptr), tail(nullptr),
+                                 mPool(nullptr), mPoolSize(0u)
 {
 }
 
@@ -35,41 +36,97 @@ void HeapAllocator::init(void *memoryPool, uint32_t totalSize)
 
     mPool = memoryPool;
     mPoolSize = totalSize;
+    tail = head;
 }
 
-void *HeapAllocator::allocate(uint32_t size)
+void* HeapAllocator::allocate(uint32_t size)
 {
-    size = align8(size);
-    Block *current = head;
-    while (current)
+    if (size == 0)
     {
-        if (current->free && current->size >= size)
-        {
-            if (current->size >= size + sizeof(Block) + 2 * sizeof(uint32_t))
-            {
-                split(current, size);
-            }
-            current->free = false;
-            return (void *)((char *)current + sizeof(Block) + sizeof(uint32_t));
-        }
-        current = current->next;
+        return nullptr;
     }
+
+    size = align8(size);
+
+    Block* forward = head;
+    Block* backward = tail;
+
+    while (forward || backward)
+    {
+        if (forward)
+        {
+            if (forward->free && forward->size >= size)
+            {
+                if (forward->size >= size + sizeof(Block) + 2 * sizeof(uint32_t))
+                {
+                    split(forward, size);
+                }
+                forward->free = false;
+                return (void*)((char*)forward + sizeof(Block) + sizeof(uint32_t));
+            }
+            forward = forward->next;
+        }
+
+        if (backward && backward != forward)
+        {
+            if (backward->free && backward->size >= size)
+            {
+                if (backward->size >= size + sizeof(Block) + 2 * sizeof(uint32_t))
+                {
+                    split(backward, size);
+                }
+                backward->free = false;
+                return (void*)((char*)backward + sizeof(Block) + sizeof(uint32_t));
+            }
+            backward = backward->prev;
+        }
+    }
+
     return nullptr;
 }
+
 
 void HeapAllocator::deallocate(void *ptr)
 {
     if (!ptr)
+    {
         return;
+    }
 
     Block *block = (Block *)((char *)ptr - sizeof(Block) - sizeof(uint32_t));
     if (block->startMarker != MARKER || block->endMarker != MARKER)
     {
-        assert(false);
+        assert(false && "Memory corruption detected\r\n");
         return;
     }
     block->free = true;
-    join(block);
+
+    if (block->prev && block->prev->free)
+    {
+        block->prev->size += block->size + sizeof(Block) + 2 * sizeof(uint32_t);
+        block->prev->next = block->next;
+        if (block->next)
+        {
+            block->next->prev = block->prev;
+        }
+        block->prev->endMarker = MARKER;
+        block = block->prev;
+    }
+    if (block->next && block->next->free)
+    {
+        block->size += block->next->size + sizeof(Block) + 2 * sizeof(uint32_t);
+        block->next = block->next->next;
+        if (block->next)
+        {
+            block->next->prev = block;
+        }
+        block->endMarker = MARKER;
+    }
+
+    if (block->next == nullptr)
+    {
+        tail = block;
+    }
 }
 
 void HeapAllocator::getMemoryPool(void **memoryPool, uint32_t &totalSize)
@@ -82,6 +139,7 @@ uint32_t HeapAllocator::getFreeMemory() const
 {
     uint32_t freeMemory = 0;
     Block *current = head;
+
     while (current)
     {
         if (current->free)
@@ -129,6 +187,11 @@ void HeapAllocator::split(Block *block, uint32_t size)
     block->next = newBlock;
     block->size = size;
     block->endMarker = MARKER;
+
+    if (newBlock->next == nullptr)
+    {
+        tail = newBlock;
+    }
 }
 
 void HeapAllocator::join(Block *block)
@@ -137,21 +200,31 @@ void HeapAllocator::join(Block *block)
     {
         block->prev->size += block->size + sizeof(Block) + 2 * sizeof(uint32_t);
         block->prev->next = block->next;
+
         if (block->next)
         {
             block->next->prev = block->prev;
         }
+
         block->prev->endMarker = MARKER;
         block = block->prev;
     }
+
     if (block->next && block->next->free)
     {
         block->size += block->next->size + sizeof(Block) + 2 * sizeof(uint32_t);
         block->next = block->next->next;
+
         if (block->next)
         {
             block->next->prev = block;
         }
+
         block->endMarker = MARKER;
+    }
+
+    if (block->next == nullptr)
+    {
+        tail = block;
     }
 }
