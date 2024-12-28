@@ -707,8 +707,6 @@ void SysTick_Handler(void)
 
     TmrSvc_Smphr.signal();
 
-    sCurrentTCB->exitCycles = DWT->CYCCNT;
-
     *ICSR_REG = NVIC_PENDSV_BIT;
 
     setInterruptMask(prevMask);
