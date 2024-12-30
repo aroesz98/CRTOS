@@ -40,8 +40,8 @@ namespace CRTOS
         void SetCoreClock(uint32_t ClockInMHz);
         void SetTickRate(uint32_t TicksPerSecond);
         Result initMem(void *pool, uint32_t size);
-        size_t getFreeMemory(void);
-        size_t getAllocatedMemory(void);
+        uint32_t getFreeMemory(void);
+        uint32_t getAllocatedMemory(void);
     }
 
     class Semaphore

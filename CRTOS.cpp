@@ -12,13 +12,8 @@
  *
  */
 
-#include <cstdint>
-#include <cstring>
-
 #include <CRTOS.hpp>
 #include <HeapAllocator.hpp>
-#include <cstdio>
-#include <algorithm>
 
 typedef void (*TaskFunction)(void *);
 
@@ -60,7 +55,7 @@ typedef struct
   volatile uint32_t CYCCNT;
 } DWT_Type;
 
-__attribute__((used)) volatile TaskControlBlock *sCurrentTCB = NULL;
+__attribute__((used)) volatile TaskControlBlock *sCurrentTCB = nullptr;
 
 #define NVIC_MIN_PRIO                   (0xFFul)
 #define NVIC_PENDSV_PRIO                (NVIC_MIN_PRIO << 16u)
@@ -88,6 +83,9 @@ extern "C" void RestoreCtxOfTheFirstTask(void) __attribute__((naked));
 extern "C" uint32_t getInterruptMask(void) __attribute__((naked));
 extern "C" void setInterruptMask(uint32_t ulMask) __attribute__((naked));
 extern "C" void startFirstTask(void) __attribute__((naked));
+
+extern "C" void memcpy_optimized(void *d, void *s, uint32_t len);
+extern "C" void memset_optimized(void *d, uint32_t val, uint32_t len);
 
 static volatile uint32_t tickCount = 0u;
 
@@ -118,7 +116,7 @@ template <typename T>
 void ListInsertAtBeginning(Node<T> *&head, T *data)
 {
     Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
-    memset(newNode, 0, sizeof(Node<T>));
+    memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
     if (head == nullptr)
@@ -136,7 +134,7 @@ template <typename T>
 void ListInsertAtEnd(Node<T> *&head, T *data)
 {
     Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
-    memset(newNode, 0, sizeof(Node<T>));
+    memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
     if (head == nullptr)
@@ -171,7 +169,7 @@ void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
     }
 
     Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
-    memset(newNode, 0, sizeof(Node<T>));
+    memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
     Node<T> *temp = head;
@@ -312,6 +310,24 @@ void SortListByPriority(Node<T> *&head)
 static Node<TaskControlBlock> *readyTaskList = nullptr;
 static Node<CRTOS::Timer::SoftwareTimer> *sTimerList = nullptr;
 
+uint32_t pStringLength(const char *buffer)
+{
+    uint32_t len = 0;
+    char *tmp = (char*)&buffer[0];
+
+    while (*tmp)
+    {
+        if (*tmp == 0)
+        {
+            break;
+        }
+        len++;
+        tmp++;
+    }
+
+    return len;
+}
+
 CRTOS::Semaphore::Semaphore(uint32_t initialValue) :
     value(initialValue)
 {
@@ -369,12 +385,12 @@ CRTOS::Result CRTOS::Config::initMem(void *pool, uint32_t size)
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
-size_t CRTOS::Config::getAllocatedMemory(void)
+uint32_t CRTOS::Config::getAllocatedMemory(void)
 {
     return mem.getAllocatedMemory();
 }
 
-size_t CRTOS::Config::getFreeMemory(void)
+uint32_t CRTOS::Config::getFreeMemory(void)
 {
     return mem.getFreeMemory();
 }
@@ -523,7 +539,7 @@ void RestoreCtxOfTheFirstTask(void)
         "movs r1, #2                           \n"
         "msr  CONTROL, r1                      \n"
         // Discard R4-R11
-        "adds r0, #32                          \n"
+        "ldm   r0!, {r4-r11}                   \n"
         // Update current PSP
         "msr  psp, r0                          \n"
         "isb                                   \n"
@@ -630,11 +646,6 @@ __attribute__((always_inline)) static inline void __DSB(void)
 extern "C" char *currentTaskName(void)
 {
     return (char*)(&(sCurrentTCB->name[0]));
-}
-
-extern "C" void delete_current_task(void)
-{
-    CRTOS::Task::Delete();
 }
 
 extern "C" void switchCtx(void)
@@ -813,13 +824,13 @@ CRTOS::Result CRTOS::Scheduler::Start(void)
         SysTick->CTRL = 0ul;
         SysTick->VAL = 0ul;
 
-        result = CRTOS::Task::Create(TimerISR, "TimerSVC", 256, NULL, MAX_TASK_PRIORITY - 2u, NULL);
+        result = CRTOS::Task::Create(TimerISR, "TimerSVC", 256, nullptr, MAX_TASK_PRIORITY - 2u, nullptr);
         if (result != CRTOS::Result::RESULT_SUCCESS)
         {
             continue;
         }
 
-        result = CRTOS::Task::Create(idleTask, "IDLE", 64, NULL, 0u, NULL);
+        result = CRTOS::Task::Create(idleTask, "IDLE", 64, nullptr, 0u, nullptr);
         if (result != CRTOS::Result::RESULT_SUCCESS)
         {
             continue;
@@ -874,15 +885,15 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
             continue;
         }
 
-        memset(&tmpStack[0u], 0u, sizeof(stackDepth * 4u));
-        memset(&(tmpTCB->name[0u]), 0u, 20u);
+        memset_optimized(&tmpStack[0u], 0u, sizeof(stackDepth * 4u));
+        memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
 
-        tmpTCB->stack = tmpStack;
+        tmpTCB->stack = &tmpStack[0u];
         tmpTCB->function = function;
         tmpTCB->function_args = args;
         tmpTCB->state = TaskState::TASK_RUNNING;
-        tmpTCB->enterCycles = 0;
-        tmpTCB->exitCycles = 0;
+        tmpTCB->enterCycles = 0u;
+        tmpTCB->exitCycles = 0u;
 
         if (prio >= MAX_TASK_PRIORITY)
         {
@@ -893,18 +904,18 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
             tmpTCB->priority = prio;
         }
 
-        uint32_t nameLength = strlen(name);
-        memcpy(tmpTCB->name, &name[0], nameLength < 20u ? nameLength : 20u);
+        uint32_t nameLength = pStringLength(name);
+        memcpy_optimized(tmpTCB->name, (void*)&name[0u], nameLength < 20u ? nameLength : 20u);
 
-        volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - (uint32_t)2u]);
-        stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7lu);
+        volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - 1u]);
+        stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7u);
 
         tmpTCB->stackTop = initStack(stackTop, tmpTCB->stack, function, args);
         tmpTCB->stackWatermark = stackDepth;
 
         ListInsertAtEnd(readyTaskList, tmpTCB);
 
-        if (handle != NULL)
+        if (handle != nullptr)
         {
             *handle = (TaskHandle)tmpTCB;
         }
@@ -1086,7 +1097,7 @@ CRTOS::Result CRTOS::Queue::Send(void *item, uint32_t timeout)
         }
     }
 
-    memcpy(static_cast<char *>(mQueue) + mRear * mElementSize, item, mElementSize);
+    memcpy_optimized(static_cast<char *>(mQueue) + mRear * mElementSize, item, mElementSize);
     mRear = (mRear + 1) % mMaxSize;
     mSize++;
 
@@ -1125,7 +1136,7 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
         }
     }
 
-    memcpy(item, static_cast<char *>(mQueue) + mFront * mElementSize, mElementSize);
+    memcpy_optimized(item, static_cast<char *>(mQueue) + mFront * mElementSize, mElementSize);
     mFront = (mFront + 1) % mMaxSize;
     mSize--;
 
@@ -1144,7 +1155,7 @@ CRTOS::CircularBuffer::CircularBuffer(const CircularBuffer &old)
     mCurrentSize = old.mCurrentSize;
     mBufferSize = old.mBufferSize;
     mBuffer = (uint8_t *)(mem.allocate(mBufferSize));
-    memcpy(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
+    memcpy_optimized(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
 }
 
 CRTOS::CircularBuffer::~CircularBuffer(void)
@@ -1190,13 +1201,13 @@ CRTOS::Result CRTOS::CircularBuffer::put(const uint8_t *data, uint32_t size, uin
 
     if (mHead + size <= mBufferSize)
     {
-        memcpy(&mBuffer[mHead], data, size);
+        memcpy_optimized(&mBuffer[mHead], (void*)data, size);
     }
     else
     {
         uint32_t firstPartSize = mBufferSize - mHead;
-        memcpy(&mBuffer[mHead], data, firstPartSize);
-        memcpy(mBuffer, &data[firstPartSize], size - firstPartSize);
+        memcpy_optimized(&mBuffer[mHead], (void*)data, firstPartSize);
+        memcpy_optimized(mBuffer, (void*)(&data[firstPartSize]), size - firstPartSize);
     }
 
     mHead = (mHead + size) % mBufferSize;
@@ -1225,13 +1236,13 @@ CRTOS::Result CRTOS::CircularBuffer::get(uint8_t *data, uint32_t size, uint32_t 
 
     if (mTail + size <= mBufferSize)
     {
-        memcpy(data, &mBuffer[mTail], size);
+        memcpy_optimized(data, &mBuffer[mTail], size);
     }
     else
     {
         uint32_t firstPartSize = mBufferSize - mTail;
-        memcpy(data, &mBuffer[mTail], firstPartSize);
-        memcpy(&data[firstPartSize], mBuffer, size - firstPartSize);
+        memcpy_optimized(data, &mBuffer[mTail], firstPartSize);
+        memcpy_optimized(&data[firstPartSize], mBuffer, size - firstPartSize);
     }
 
     mTail = (mTail + size) % mBufferSize;
