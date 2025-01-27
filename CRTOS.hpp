@@ -4,6 +4,9 @@
  * Date: 17 Dec 2024
  *
  * License:
+ * This source code is provided for hobbyist and private use only.
+ * Any commercial or industrial use, including distribution, reproduction, or
+ * incorporation in commercial or industrial products or services is prohibited.
  * Use at your own risk. The author(s) hold no responsibility for any damages
  * or losses resulting from the use of this software.
  *
@@ -25,6 +28,7 @@ namespace CRTOS
         RESULT_MEMORY_NOT_INITIALIZED,
         RESULT_SEMAPHORE_BUSY,
         RESULT_SEMAPHORE_TIMEOUT,
+        RESULT_SEMAPHORE_NO_OWNER,
         RESULT_TIMER_ALREADY_ACTIVE,
         RESULT_TIMER_ALREADY_STOPPED,
         RESULT_QUEUE_TIMEOUT,
@@ -50,8 +54,13 @@ namespace CRTOS
             Result wait(uint32_t timeoutTicks);
             void signal(void);
 
+            Result getOwner(void *&owner);
+            Result getTimeout(uint32_t *&timeout);
+
         private:
             std::atomic<uint32_t> value;
+            uint32_t mTimeout;
+            void *mOwner;
     };
 
     class Mutex
@@ -69,7 +78,7 @@ namespace CRTOS
     class Queue
     {
         private:
-            void    *mQueue;
+            uint8_t *mQueue;
             uint32_t mFront;
             uint32_t mRear;
             uint32_t mSize;
@@ -111,7 +120,10 @@ namespace CRTOS
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
         Result Delete(void);
         Result Delete(TaskHandle *handle);
-        void Delay(uint32_t ticks);
+        CRTOS::Result Delay(uint32_t ticks);
+        CRTOS::Result Pause(TaskHandle *handle);
+        CRTOS::Result Resume(TaskHandle *handle);
+
         uint32_t GetTaskCycles(void);
         uint32_t GetFreeStack(void);
 

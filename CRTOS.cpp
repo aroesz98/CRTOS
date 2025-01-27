@@ -11,7 +11,7 @@
 
 #include <CRTOS.hpp>
 #include <HeapAllocator.hpp>
-
+#include <cstdio>
 typedef void (*TaskFunction)(void *);
 
 enum class TaskState : uint32_t
@@ -32,8 +32,10 @@ struct TaskControlBlock
     TaskState state;
     uint32_t delayUpTo;
     uint32_t stackWatermark;
+    uint32_t stackSize;
     uint32_t enterCycles;
     uint32_t exitCycles;
+    uint32_t executionTime;
     char name[20u];
 };
 
@@ -53,12 +55,13 @@ typedef struct
 } DWT_Type;
 
 __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = nullptr;
+CRTOS::Task::TaskHandle idleTaskHandle = nullptr;
 
-#define NVIC_MIN_PRIO                   (0xFFul)
-#define NVIC_PENDSV_PRIO                (NVIC_MIN_PRIO << 16u)
-#define NVIC_SYSTICK_PRIO               (NVIC_MIN_PRIO << 24u)
-#define MAX_SYSCALL_INTERRUPT_PRIORITY  (2ul << 5u)
-#define NVIC_PENDSV_BIT                 (1ul << 28u)
+constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
+constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
+constexpr uint32_t NVIC_SYSTICK_PRIO = NVIC_MIN_PRIO << 24u;
+constexpr uint32_t MAX_SYSCALL_INTERRUPT_PRIORITY = 2ul << 5u;
+constexpr uint32_t NVIC_PENDSV_BIT = 1ul << 28u;
 
 #define NVIC_SHPR3_REG                  ((volatile uint32_t *)0xE000ED20ul)
 #define ICSR_REG                        ((volatile uint32_t *)0xE000ED04ul)
@@ -90,7 +93,6 @@ static uint32_t MAX_TASK_PRIORITY = 10u;
 static uint32_t sTickRate = 1000u;
 static uint32_t sCoreClock = 150000000u;
 
-static CRTOS::Semaphore TmrSvc_Smphr(0u);
 static HeapAllocator mem;
 
 template <typename T>
@@ -112,7 +114,7 @@ public:
 template <typename T>
 void ListInsertAtBeginning(Node<T> *&head, T *data)
 {
-    Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
     memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
@@ -130,7 +132,7 @@ void ListInsertAtBeginning(Node<T> *&head, T *data)
 template <typename T>
 void ListInsertAtEnd(Node<T> *&head, T *data)
 {
-    Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
     memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
@@ -165,7 +167,7 @@ void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
         return;
     }
 
-    Node<T> *newNode = (Node<T> *)(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
     memset_optimized(newNode, 0, sizeof(Node<T>));
     newNode->data = data;
 
@@ -222,7 +224,7 @@ void ListDeleteAtEnd(Node<T> *&head)
     if (temp->next == nullptr)
     {
         head = nullptr;
-        delete temp;
+        mem.deallocate(temp);
         return;
     }
 
@@ -306,24 +308,20 @@ void SortListByPriority(Node<T> *&head)
 
 static Node<TaskControlBlock> *readyTaskList = nullptr;
 static Node<CRTOS::Timer::SoftwareTimer> *sTimerList = nullptr;
+static Node<CRTOS::Semaphore> *waitingSemaphoresList = nullptr;
 
 uint32_t pStringLength(const char *buffer)
 {
-    uint32_t len = 0;
-    char *tmp = (char*)&buffer[0];
+    const char *tmp = buffer;
 
-    while (*tmp)
+    while (*tmp != 0)
     {
-        if (*tmp == 0)
-        {
-            break;
-        }
-        len++;
         tmp++;
     }
 
-    return len;
+    return (tmp - buffer);
 }
+
 
 CRTOS::Semaphore::Semaphore(uint32_t initialValue) :
     value(initialValue)
@@ -341,17 +339,54 @@ CRTOS::Result CRTOS::Semaphore::wait(uint32_t timeoutTicks)
         return result;
     }
 
+    mTimeout = startTick + timeoutTicks;
+    mOwner = (void*)sCurrentTCB;
+    ListInsertAtEnd(waitingSemaphoresList, this);
+
+    sCurrentTCB->state = TaskState::TASK_BLOCKED;
+
     while (true)
     {
         uint32_t oldValue = value.load();
         if (oldValue > 0u && value.compare_exchange_strong(oldValue, oldValue - 1u))
         {
+            mTimeout = 0;
+            mOwner = nullptr;
+            sCurrentTCB->state = TaskState::TASK_RUNNING;
+
+            Node<CRTOS::Semaphore>* node = waitingSemaphoresList;
+            uint32_t pos = 0;
+            while (node != nullptr)
+            {
+                if (node->data == this)
+                {
+                    ListDeleteAtPosition(waitingSemaphoresList, pos);
+                    break;
+                }
+                node = node->next;
+                pos++;
+            }
             break;
         }
 
         uint32_t currentTick = tickCount;
-        if ((currentTick - startTick) >= timeoutTicks)
+        if (currentTick >= mTimeout)
         {
+            sCurrentTCB->state = TaskState::TASK_READY;
+            mTimeout = 0;
+
+            Node<CRTOS::Semaphore>* node = waitingSemaphoresList;
+            uint32_t pos = 0;
+            while (node != nullptr)
+            {
+                if (node->data == this)
+                {
+                    ListDeleteAtPosition(waitingSemaphoresList, pos);
+                    break;
+                }
+                node = node->next;
+                pos++;
+            }
             return CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
         }
         else
@@ -368,6 +403,30 @@ CRTOS::Result CRTOS::Semaphore::wait(uint32_t timeoutTicks)
 void CRTOS::Semaphore::signal(void)
 {
     value++;
+
+    if (mOwner != nullptr)
+    {
+        ((TaskControlBlock*)mOwner)->state = TaskState::TASK_READY;
+        mOwner = nullptr;
+    }
+}
+
+CRTOS::Result CRTOS::Semaphore::getOwner(void *&owner)
+{
+    if (mOwner == nullptr)
+    {
+        return CRTOS::Result::RESULT_SEMAPHORE_NO_OWNER;
+    }
+
+    owner = mOwner;
+
+    return CRTOS::Result::RESULT_SUCCESS;
+}
+
+CRTOS::Result CRTOS::Semaphore::getTimeout(uint32_t *&timeout)
+{
+    timeout = &mTimeout;
+    return CRTOS::Result::RESULT_SUCCESS;
 }
 
 CRTOS::Result CRTOS::Config::initMem(void *pool, uint32_t size)
@@ -522,6 +581,7 @@ void CRTOS::Task::ExitCriticalSection(void)
 
 void RestoreCtxOfTheFirstTask(void)
 {
+    sCurrentTCB->enterCycles = DWT->CYCCNT;
     __asm volatile (
         ".syntax unified                       \n"
         // Read top of the stack
@@ -579,17 +639,6 @@ extern "C" void PendSV_Handler(void)
         "ldr r2, currentTCB  \n"
         "ldr r1, [r2]        \n"
         "str r0, [r1]        \n"
-        // Update stack watermark
-        "ldr r4, [r1, #(4)]  \n"  // Load stack
-        "sub r5, r0, r4      \n"  // Calculate used stack
-        "lsr r5, r5, #2 \n"
-        "ldr r6, [r1, #(28)] \n"  // Load stackWatermark
-        "cmp r5, r6          \n"
-        "bls update_watermark\n"
-        "b skip_update_watermark \n"
-        "update_watermark:   \n"
-        "str r5, [r1, #(28)] \n"  // Update stackWatermark
-        "skip_update_watermark: \n"
         // Perform context switch
         "mov r0, %0          \n"
         "msr basepri, r0     \n"
@@ -613,8 +662,6 @@ extern "C" void PendSV_Handler(void)
         "currentTCB: .word sCurrentTCB \n" ::"i"(MAX_SYSCALL_INTERRUPT_PRIORITY)
     );
 }
-
-
 
 void startFirstTask(void)
 {
@@ -645,41 +692,61 @@ extern "C" char *currentTaskName(void)
     return (char*)(&(sCurrentTCB->name[0]));
 }
 
+void updateExitCycles(void)
+{
+    sCurrentTCB->exitCycles = DWT->CYCCNT;
+}
+
+void updateEnterCycles(void)
+{
+    sCurrentTCB->enterCycles = DWT->CYCCNT;
+}
+
 extern "C" void switchCtx(void)
 {
     Node<TaskControlBlock> *temp = readyTaskList;
     Node<TaskControlBlock> *highestPriorityTask = nullptr;
 
-    sCurrentTCB->exitCycles = DWT->CYCCNT;
+    updateExitCycles();
 
-    while (temp != nullptr)
+    if (sCurrentTCB != nullptr)
     {
-        if (temp->data == sCurrentTCB)
+        uint32_t elapsedCycles = sCurrentTCB->exitCycles - sCurrentTCB->enterCycles;
+        sCurrentTCB->executionTime = elapsedCycles;
+
+        uint32_t *stackStart = (uint32_t *)(sCurrentTCB->stack);
+        uint32_t *stackEnd = (uint32_t *)(sCurrentTCB->stack + sCurrentTCB->stackSize);
+
+        uint32_t usedStack = 0u;
+
+        for (uint32_t *ptr = stackStart; ptr < stackEnd; ++ptr)
         {
-            temp = temp->next;
-            break;
-        }
-        temp = temp->next;
-    }
-
-    if (temp == nullptr)
-    {
-        temp = readyTaskList;
-    }
-
-    // Find highest priority task
-    while (true)
-    {
-        if (temp->data->state == TaskState::TASK_DELAYED)
-        {
-            if (temp->data->delayUpTo == tickCount)
+            if (*ptr != 0xDEADBEEF)
             {
-                temp->data->state = TaskState::TASK_RUNNING;
+                usedStack = (uint32_t)(stackEnd - ptr);
+                break;
             }
         }
 
+        sCurrentTCB->stackWatermark = usedStack;
 
-        if (temp->data->state == TaskState::TASK_RUNNING)
+        if (sCurrentTCB->state == TaskState::TASK_RUNNING)
+        {
+            sCurrentTCB->state = TaskState::TASK_READY;
+        }
+    }
+
+    while (temp != nullptr)
+    {
+        if (temp->data->state == TaskState::TASK_DELAYED)
+        {
+            if (tickCount >= temp->data->delayUpTo)
+            {
+                temp->data->state = TaskState::TASK_READY;
+            }
+        }
+
+        if (temp->data->state == TaskState::TASK_READY)
         {
             if (highestPriorityTask == nullptr || temp->data->priority > highestPriorityTask->data->priority)
             {
@@ -688,35 +755,47 @@ extern "C" void switchCtx(void)
         }
 
         temp = temp->next;
-        if (temp == nullptr)
-        {
-            temp = readyTaskList;
-        }
-
-        if (highestPriorityTask != nullptr)
-        {
-            break;
-        }
     }
 
     if (highestPriorityTask != nullptr)
     {
         sCurrentTCB = highestPriorityTask->data;
+        sCurrentTCB->state = TaskState::TASK_RUNNING;
+    }
+    else
+    {
+        sCurrentTCB = (TaskControlBlock *)(idleTaskHandle);
+        sCurrentTCB->state = TaskState::TASK_RUNNING;
     }
 
-    sCurrentTCB->enterCycles = DWT->CYCCNT;
+    updateEnterCycles();
 }
 
 void SysTick_Handler(void)
 {
     uint32_t prevMask = getInterruptMask();
-
     tickCount++;
 
-    TmrSvc_Smphr.signal();
+    Node<CRTOS::Semaphore>* node = waitingSemaphoresList;
+    uint32_t nodePos = 0u;
+    while (node != nullptr)
+    {
+        uint32_t *smphrTimeout = nullptr;
+        void *smphrOwner = nullptr;
+        node->data->getTimeout(smphrTimeout);
+        node->data->getOwner(smphrOwner);
+
+        if (tickCount >= (*smphrTimeout))
+        {
+            ((TaskControlBlock*)smphrOwner)->state = TaskState::TASK_READY;
+            *smphrTimeout = 0u;
+            ListDeleteAtPosition(waitingSemaphoresList, nodePos);
+        }
+        node = node->next;
+        nodePos++;
+    }
 
     *ICSR_REG = NVIC_PENDSV_BIT;
-
     setInterruptMask(prevMask);
 }
 
@@ -738,19 +817,19 @@ uint32_t *initStack(volatile uint32_t *stackTop, volatile uint32_t *stackEnd, Ta
     *(--stackTop) = (uint32_t)0x01000000lu; // xPSR
     *(--stackTop) = (uint32_t)code;         // PC
     *(--stackTop) = (uint32_t)dummyTask;    // LR
-    *(--stackTop) = (uint32_t)0xDEADC0DEul; // R12
-    *(--stackTop) = (uint32_t)0xFACEFEEDul; // R3
-    *(--stackTop) = (uint32_t)0xF00DBABEul; // R2
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R12
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R3
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R2
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R1
     *(--stackTop) = (uint32_t)args;         // R0
-    *(--stackTop) = (uint32_t)0xCAFEBEEFul; // R11
-    *(--stackTop) = (uint32_t)0xDEADFEEDul; // R10
-    *(--stackTop) = (uint32_t)0xBADDCAFEul; // R09
-    *(--stackTop) = (uint32_t)0xCAFEBABEul; // R08
-    *(--stackTop) = (uint32_t)0xBAAAAAADul; // R07
-    *(--stackTop) = (uint32_t)0x00FACADEul; // R06
-    *(--stackTop) = (uint32_t)0xBEEFCACEul; // R05
-    *(--stackTop) = (uint32_t)0x00DEC0DEul; // R04
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R11
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R10
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R09
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R08
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R07
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R06
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R05
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R04
     *(--stackTop) = (uint32_t)0xFFFFFFFDul; // EXC_RETURN
     *(--stackTop) = (uint32_t)stackEnd;     // PSPLIM
 
@@ -783,7 +862,7 @@ void TimerISR(void *)
             }
             tmp = tmp->next;
         }
-        TmrSvc_Smphr.wait(10u);
+        CRTOS::Task::Delay(1u);
     }
 }
 
@@ -791,9 +870,7 @@ void idleTask(void *)
 {
     for(;;)
     {
-        uint32_t prevMask = getInterruptMask();
-        *ICSR_REG = NVIC_PENDSV_BIT;
-        setInterruptMask(prevMask);
+        __asm volatile("wfi");
     }
 }
 
@@ -827,7 +904,7 @@ CRTOS::Result CRTOS::Scheduler::Start(void)
             continue;
         }
 
-        result = CRTOS::Task::Create(idleTask, "IDLE", 64, nullptr, 0u, nullptr);
+        result = CRTOS::Task::Create(idleTask, "IDLE", 128, nullptr, 0u, &idleTaskHandle);
         if (result != CRTOS::Result::RESULT_SUCCESS)
         {
             continue;
@@ -867,14 +944,14 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
 
     do
     {
-        TaskControlBlock *tmpTCB = (TaskControlBlock *)(mem.allocate(sizeof(TaskControlBlock)));
+        TaskControlBlock *tmpTCB = reinterpret_cast<TaskControlBlock*>(mem.allocate(sizeof(TaskControlBlock)));
         if (tmpTCB == nullptr)
         {
             result = CRTOS::Result::RESULT_NO_MEMORY;
             continue;
         }
 
-        uint32_t *tmpStack = (uint32_t *)(mem.allocate(stackDepth * sizeof(uint32_t)));
+        uint32_t *tmpStack = reinterpret_cast<uint32_t*>(mem.allocate(stackDepth * sizeof(uint32_t)));
         if (tmpStack == nullptr)
         {
             mem.deallocate(tmpTCB);
@@ -882,13 +959,16 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
             continue;
         }
 
-        memset_optimized(&tmpStack[0u], 0u, sizeof(stackDepth * 4u));
+        for (uint32_t i = 0; i < stackDepth; i++)
+        {
+            tmpStack[i] = 0xDEADBEEF;
+        }
         memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
 
         tmpTCB->stack = &tmpStack[0u];
+        tmpTCB->stackSize = stackDepth;
         tmpTCB->function = function;
         tmpTCB->function_args = args;
-        tmpTCB->state = TaskState::TASK_RUNNING;
         tmpTCB->enterCycles = 0u;
         tmpTCB->exitCycles = 0u;
 
@@ -900,6 +980,9 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         {
             tmpTCB->priority = prio;
         }
+
+        // Ustawienie stanu zadania
+        tmpTCB->state = TaskState::TASK_READY;
 
         uint32_t nameLength = pStringLength(name);
         memcpy_optimized(tmpTCB->name, (void*)&name[0u], nameLength < 20u ? nameLength : 20u);
@@ -953,8 +1036,8 @@ CRTOS::Result CRTOS::Task::Delete(void)
             continue;
         }
 
-        mem.deallocate((void *)(sCurrentTCB->stack));
-        mem.deallocate((void *)(sCurrentTCB));
+        mem.deallocate((void*)sCurrentTCB->stack);
+        mem.deallocate((void*)sCurrentTCB);
     } while (0);
 
     *ICSR_REG = NVIC_PENDSV_BIT;
@@ -1007,8 +1090,8 @@ CRTOS::Result CRTOS::Task::Delete(TaskHandle *handle)
             continue;
         }
 
-        mem.deallocate((void *)(tmpHandle->stack));
-        mem.deallocate((void *)(tmpHandle));
+        mem.deallocate((void*)tmpHandle->stack);
+        mem.deallocate((void*)tmpHandle);
     } while (0);
 
     *ICSR_REG = NVIC_PENDSV_BIT;
@@ -1018,12 +1101,14 @@ CRTOS::Result CRTOS::Task::Delete(TaskHandle *handle)
     return result;
 }
 
-void CRTOS::Task::Delay(uint32_t ticks)
+CRTOS::Result CRTOS::Task::Delay(uint32_t ticks)
 {
-    uint32_t prevMask = getInterruptMask();
+    if (ticks == 0)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
 
-    __DSB();
-    __ISB();
+    uint32_t prevMask = getInterruptMask();
 
     sCurrentTCB->state = TaskState::TASK_DELAYED;
     sCurrentTCB->delayUpTo = tickCount + ticks;
@@ -1031,6 +1116,50 @@ void CRTOS::Task::Delay(uint32_t ticks)
     *ICSR_REG = NVIC_PENDSV_BIT;
 
     setInterruptMask(prevMask);
+
+    return CRTOS::Result::RESULT_SUCCESS;
+}
+
+CRTOS::Result CRTOS::Task::Pause(TaskHandle *handle)
+{
+    if (handle == nullptr || *handle == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    TaskControlBlock *task = (TaskControlBlock *)(*handle);
+
+    task->state = TaskState::TASK_BLOCKED;
+
+    if (task == sCurrentTCB)
+    {
+        *ICSR_REG = NVIC_PENDSV_BIT;
+    }
+
+    setInterruptMask(prevMask);
+
+    return CRTOS::Result::RESULT_SUCCESS;
+}
+
+CRTOS::Result CRTOS::Task::Resume(TaskHandle *handle)
+{
+    if (handle == nullptr || *handle == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    TaskControlBlock *task = (TaskControlBlock *)(*handle);
+
+    if (task->state == TaskState::TASK_BLOCKED)
+    {
+        task->state = TaskState::TASK_READY;
+    }
+
+    setInterruptMask(prevMask);
+
+    return CRTOS::Result::RESULT_SUCCESS;
 }
 
 char *CRTOS::Task::GetCurrentTaskName(void)
@@ -1040,20 +1169,19 @@ char *CRTOS::Task::GetCurrentTaskName(void)
 
 uint32_t CRTOS::Task::GetTaskCycles(void)
 {
-    return sCurrentTCB->enterCycles - sCurrentTCB->exitCycles;
+    return sCurrentTCB->executionTime;
 }
 
 uint32_t CRTOS::Task::GetFreeStack(void)
 {
     TaskControlBlock *tcb = (TaskControlBlock *)sCurrentTCB;
-    return tcb->stackWatermark;
+    return (tcb->stackSize - tcb->stackWatermark);
 }
-
 
 CRTOS::Queue::Queue(uint32_t maxsize, uint32_t element_size)
     : mFront(0u), mRear(0u), mSize(0u), mMaxSize(maxsize), mElementSize(element_size)
 {
-    mQueue = mem.allocate(maxsize * element_size);
+    mQueue = reinterpret_cast<uint8_t*>(mem.allocate(maxsize * element_size));
 }
 
 CRTOS::Queue::~Queue(void)
@@ -1094,7 +1222,7 @@ CRTOS::Result CRTOS::Queue::Send(void *item, uint32_t timeout)
         }
     }
 
-    memcpy_optimized(static_cast<char *>(mQueue) + mRear * mElementSize, item, mElementSize);
+    memcpy_optimized(mQueue + (mRear * mElementSize), item, mElementSize);
     mRear = (mRear + 1) % mMaxSize;
     mSize++;
 
@@ -1133,7 +1261,7 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
         }
     }
 
-    memcpy_optimized(item, static_cast<char *>(mQueue) + mFront * mElementSize, mElementSize);
+    memcpy_optimized(item, mQueue + (mFront * mElementSize), mElementSize);
     mFront = (mFront + 1) % mMaxSize;
     mSize--;
 
@@ -1151,7 +1279,7 @@ CRTOS::CircularBuffer::CircularBuffer(const CircularBuffer &old)
     mTail = old.mTail;
     mCurrentSize = old.mCurrentSize;
     mBufferSize = old.mBufferSize;
-    mBuffer = (uint8_t *)(mem.allocate(mBufferSize));
+    mBuffer = reinterpret_cast<uint8_t*>(mem.allocate(mBufferSize));
     memcpy_optimized(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
 }
 
@@ -1167,7 +1295,7 @@ CRTOS::Result CRTOS::CircularBuffer::init(void)
         return CRTOS::Result::RESULT_BAD_PARAMETER;
     }
 
-    mBuffer = (uint8_t *)(mem.allocate(mBufferSize));
+    mBuffer = reinterpret_cast<uint8_t*>(mem.allocate(mBufferSize));
 
     if (mBuffer == nullptr)
     {
