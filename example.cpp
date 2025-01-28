@@ -9,19 +9,15 @@ void f3(void *args);
 void f4(void *args);
 
 CRTOS::Semaphore sem1(0);
-CRTOS::Semaphore sem2(0);
-CRTOS::Semaphore sem3(0);
-CRTOS::Semaphore sem4(0);
 
 CRTOS::Task::TaskHandle th1 = nullptr;
 CRTOS::Task::TaskHandle th2 = nullptr;
 CRTOS::Task::TaskHandle th3 = nullptr;
-CRTOS::Task::TaskHandle th4 = nullptr;
 
 typedef struct
 {
-    char data[20];
-    uint32_t size = 20u;
+    char data[16];
+    uint32_t size = 16u;
 } msg;
 
 CRTOS::Queue* rt_queue;
@@ -30,15 +26,41 @@ CRTOS::CircularBuffer circ(100);
 void f1(void *args)
 {
     msg m;
+    CRTOS::IPC::IPCMessage* message = nullptr;
+
     while(1)
     {
-        printf("Task name: %s\r\n", CRTOS::Task::GetCurrentTaskName());
         m.size = snprintf(m.data, 16,"%s message: %u\r\n", CRTOS::Task::GetCurrentTaskName(), rand());
         rt_queue->Send(&m, 0);
-        sem1.wait(1600);
+        CRTOS::Task::Delay(400);
+
         m.size = snprintf(m.data, 16,"%s message: %u\r\n", CRTOS::Task::GetCurrentTaskName(), rand());
         rt_queue->Send(&m, 0);
-        sem1.wait(400);
+        CRTOS::Task::Delay(100);
+
+        printf("Task: %s || Free Stack: %lu\r\n",
+                CRTOS::Task::GetCurrentTaskName(),
+                CRTOS::Task::GetFreeStack());
+
+        CRTOS::Result res = CRTOS::IPC::ReceiveMessage(&th1, message, 500);
+        if (res == CRTOS::Result::RESULT_SUCCESS)
+        {
+            if (message->data != nullptr)
+            {
+                char* receivedData = reinterpret_cast<char*>(message->data);
+                CRTOS::Result res = CRTOS::IPC::SendMessage(&th1, &th3, 3, (void*)receivedData, message->dataSize);
+                if (res != CRTOS::Result::RESULT_SUCCESS)
+                {
+                    printf("Task A IPC Sending Error!\r\n");
+                }
+            }
+
+            CRTOS::IPC::ReleaseMessage(message);
+        }
+        else if (res == CRTOS::Result::RESULT_IPC_TIMEOUT)
+        {
+            printf("Task A IPC Receiving timeout!\r\n");
+        }
     }
 }
 
@@ -48,40 +70,82 @@ void f2(void *args)
     uint8_t buf[20];
     while(1)
     {
-        printf("Task name: %s\r\n", CRTOS::Task::GetCurrentTaskName());
         CRTOS::Result t = rt_queue->Receive(&m, 300);
         if(t == CRTOS::Result::RESULT_SUCCESS)
         {
+
             printf("Queue Received: %s\r\n", m.data);
         }
-        snprintf((char*)&buf[0], 30, "CircBuff: %u", rand() % 0xFFFF);
-        circ.put(&buf[0], 20, 0);
-        sem2.wait(2000);
-    }
-}
-
-void f3(void *args)
-{
-    CRTOS::Task::Create(f4, "D Task", 128, NULL, 1, &th4);
-    uint8_t buf[20];
-    while(1)
-    {
-        printf("Task name: %s\r\n", CRTOS::Task::GetCurrentTaskName());
-        if (circ.get(&buf[0], 20, 200) == CRTOS::Result::RESULT_SUCCESS)
+        else
         {
-            printf("Circ Buffer Received: %s\r\n", (char*)&buf[0]);
+            printf("Queue timeout!\r\n");
         }
-        sem3.wait(2000);
+
+        snprintf((char*)&buf[0], 20, "CircBuff: %u", rand() % 0xFFFF);
+        circ.put(&buf[0], 20, 0);
+        CRTOS::Task::Delay(1200);
+
+        printf("Task: %s || Free Stack: %lu\r\n",
+                CRTOS::Task::GetCurrentTaskName(),
+                CRTOS::Task::GetFreeStack());
+
+        const char messageData[] = "Hello, Receiver!\r\n";
+        uint32_t dataSize = sizeof(messageData);
+        CRTOS::Result res = CRTOS::IPC::SendMessage(&th2, &th1, 1, (void*)messageData, dataSize);
+        if (res != CRTOS::Result::RESULT_SUCCESS)
+        {
+            printf("Task B IPC Sending Error!\r\n");
+        }
     }
 }
 
-void f4(void *args)
+void f3(void *)
+{
+    uint8_t buf[20];
+    CRTOS::IPC::IPCMessage* message = nullptr;
+
+    while(1)
+    {
+        if (circ.get(&buf[0], 20, 500) != CRTOS::Result::RESULT_SUCCESS)
+        {
+            printf("Circ Buffer Receiving timeout!\r\n");
+        }
+
+        sem1.wait(500);
+
+        printf("Task: %s || Free Stack: %lu\r\n",
+                CRTOS::Task::GetCurrentTaskName(),
+                CRTOS::Task::GetFreeStack());
+
+        CRTOS::Result res = CRTOS::IPC::ReceiveMessage(&th3, message, 100);
+        if (res == CRTOS::Result::RESULT_SUCCESS)
+        {
+            if (message->data != nullptr)
+            {
+                char* receivedData = reinterpret_cast<char*>(message->data);
+                printf(receivedData);
+            }
+
+            CRTOS::IPC::ReleaseMessage(message);
+        }
+        else if (res == CRTOS::Result::RESULT_IPC_TIMEOUT)
+        {
+            printf("Task C IPC Receiving timeout!\r\n");
+        }
+    }
+}
+
+void f4(void *)
 {
     while(1)
     {
-        printf("Task name: %s\r\n", CRTOS::Task::GetCurrentTaskName());
-        sem4.wait(1500);
-        CRTOS::Task::Delete(&th4);
+        uint32_t exponent, mantissa;
+        CRTOS::Task::GetCoreLoad(exponent, mantissa);
+        printf("Core load: %lu.%lu\r\n", exponent, mantissa);
+        printf("Task: %s || Free Stack: %lu\r\n",
+        CRTOS::Task::GetCurrentTaskName(),
+        CRTOS::Task::GetFreeStack());
+        CRTOS::Task::Delay(5000);
     }
 }
 
@@ -92,13 +156,11 @@ void myTimerCallback(void *args)
     printf("Allocated Memory: %u bytes\r\n", CRTOS::Config::getAllocatedMemory());
 }
 
-/*
- * @brief   Application entry point.
- */
 int main(void)
 {
-    uint8_t* mp = new uint8_t[16384];
-    CRTOS::Config::initMem(mp, 16384);
+    CRTOS::Result res;
+    uint32_t* mp = new uint32_t[2048];
+    CRTOS::Config::initMem(mp, 8192);
 
     CRTOS::Config::SetCoreClock(150000000u);
     CRTOS::Config::SetTickRate(1000u);
@@ -106,13 +168,45 @@ int main(void)
     rt_queue = new CRTOS::Queue(20, sizeof(msg));
     circ.init();
 
-    CRTOS::Task::Create(f1, "A Task", 128, NULL, 2, &th1);
-    CRTOS::Task::Create(f2, "B Task", 128, NULL, 3, &th2);
-    CRTOS::Task::Create(f3, "C Task", 280, NULL, 1, &th3);
+    res = CRTOS::Task::Create(f1, "A Task", 128, NULL, 6, &th1);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Task1 create error!\r\n");
+        while(1);
+    }
+    res = CRTOS::Task::Create(f2, "B Task", 135, NULL, 8, &th2);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Task2 create error!\r\n");
+        while(1);
+    }
+    res = CRTOS::Task::Create(f3, "C Task", 100, NULL, 4, &th3);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Task3 create error!\r\n");
+        while(1);
+    }
+
+    res = CRTOS::Task::Create(f4, "Load_Monitor", 100, NULL, 2, NULL);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Task4 create error!\r\n");
+        while(1);
+    }
 
     CRTOS::Timer::SoftwareTimer myTimer;
-    CRTOS::Timer::Init(&myTimer, 1000, myTimerCallback, nullptr, true);
-    CRTOS::Timer::Start(&myTimer);
+    res = CRTOS::Timer::Init(&myTimer, 1000, myTimerCallback, nullptr, true);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("SW Timer init error!\r\n");
+        while(1);
+    }
+    res = CRTOS::Timer::Start(&myTimer);
+    if (res != CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Timer start error!\r\n");
+        while(1);
+    }
 
     CRTOS::Scheduler::Start();
 
