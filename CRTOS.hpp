@@ -18,6 +18,9 @@
 #include <cstdint>
 #include <atomic>
 
+#include <cstring>
+#include <unordered_map>
+
 namespace CRTOS
 {
     enum class Result : uint8_t
@@ -33,7 +36,8 @@ namespace CRTOS
         RESULT_TIMER_ALREADY_STOPPED,
         RESULT_QUEUE_TIMEOUT,
         RESULT_CIRCULAR_BUFFER_TIMEOUT,
-        RESULT_TASK_NOT_FOUND
+        RESULT_TASK_NOT_FOUND,
+        RESULT_IPC_TIMEOUT
     };
 
     namespace Config
@@ -75,6 +79,49 @@ namespace CRTOS
             std::atomic_flag flag;
     };
 
+    namespace Task
+    {
+        typedef void* TaskHandle;
+        void SetMaximumTaskPrio(uint32_t maxPriority);
+        Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
+        Result Delete(void);
+        Result Delete(TaskHandle *handle);
+        CRTOS::Result Delay(uint32_t ticks);
+        CRTOS::Result Pause(TaskHandle *handle);
+        CRTOS::Result Resume(TaskHandle *handle);
+
+        uint32_t GetTaskCycles(void);
+        uint32_t GetFreeStack(void);
+        void GetCoreLoad(uint32_t &load, uint32_t &mantissa);
+
+        void EnterCriticalSection(void);
+        void ExitCriticalSection(void);
+
+        char* GetCurrentTaskName(void);
+    };
+
+    namespace Scheduler
+    {
+        Result Start(void);
+    };
+
+    namespace Timer
+    {
+        typedef struct
+        {
+            uint32_t timeoutTicks;
+            uint32_t elapsedTicks;
+            bool isActive;
+            void (*callback)(void*);
+            void *callbackArgs;
+            bool autoReload;
+        } SoftwareTimer;
+
+        Result Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload);
+        Result Start(SoftwareTimer *timer);
+        Result Stop(SoftwareTimer *timer);
+    };
+
     class Queue
     {
         private:
@@ -113,47 +160,29 @@ namespace CRTOS
             Result get(uint8_t* data, uint32_t size, uint32_t timeout_ms);
     };
 
-    namespace Task
+    namespace IPC
     {
-        typedef void* TaskHandle;
-        void SetMaximumTaskPrio(uint32_t maxPriority);
-        Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
-        Result Delete(void);
-        Result Delete(TaskHandle *handle);
-        CRTOS::Result Delay(uint32_t ticks);
-        CRTOS::Result Pause(TaskHandle *handle);
-        CRTOS::Result Resume(TaskHandle *handle);
-
-        uint32_t GetTaskCycles(void);
-        uint32_t GetFreeStack(void);
-
-        void EnterCriticalSection(void);
-        void ExitCriticalSection(void);
-
-        char* GetCurrentTaskName(void);
-    };
-
-    namespace Scheduler
-    {
-        Result Start(void);
-    };
-
-    namespace Timer
-    {
-        typedef struct
+        typedef struct IPCMessage
         {
-            uint32_t timeoutTicks;
-            uint32_t elapsedTicks;
-            bool isActive;
-            void (*callback)(void*);
-            void *callbackArgs;
-            bool autoReload;
-        } SoftwareTimer;
+            CRTOS::Task::TaskHandle sender;
+            CRTOS::Task::TaskHandle receiver;
+            uint32_t messageId;
+            void* data;
+            uint32_t dataSize;
+            IPCMessage* next;
+        } IPCMessage;
 
-        Result Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload);
-        Result Start(SoftwareTimer *timer);
-        Result Stop(SoftwareTimer *timer);
-    };
+        typedef struct TaskMessageQueue
+        {
+            CRTOS::Task::TaskHandle task;
+            IPCMessage* messageHead;
+            TaskMessageQueue* next;
+        } TaskMessageQueue;
+
+        CRTOS::Result SendMessage(CRTOS::Task::TaskHandle *sender, CRTOS::Task::TaskHandle *receiver, uint32_t messageId, void* data, uint32_t dataSize);
+        CRTOS::Result ReceiveMessage(CRTOS::Task::TaskHandle *receiver, IPCMessage*& outMessage, uint32_t timeoutTicks);
+        void ReleaseMessage(IPCMessage* message);
+    }
 };
 
 #endif /* RTOS_HPP */
