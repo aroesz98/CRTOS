@@ -338,7 +338,7 @@ uint32_t pStringLength(const char *buffer)
         tmp++;
     }
 
-    return (tmp - buffer);
+    return (tmp - buffer) + 1;
 }
 
 
@@ -819,8 +819,6 @@ void SysTick_Handler(void)
             temp->data->exitCycles = 0;
             temp = temp->next;
         }
-
-//        sCurrentTCB->enterCycles = 0;
     }
     else
     {
@@ -1040,7 +1038,7 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         tmpTCB->state = TaskState::TASK_READY;
 
         uint32_t nameLength = pStringLength(name);
-        memcpy_optimized(&tmpTCB->name[0], (void*)&name[0u], nameLength < 20u ? nameLength : 20u);
+        memcpy_optimized(&tmpTCB->name[0], (char*)&name[0u], nameLength < 20u ? nameLength : 20u);
 
         volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - 1u]);
         stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7u);
@@ -1219,7 +1217,7 @@ CRTOS::Result CRTOS::Task::Resume(TaskHandle *handle)
 
 char *CRTOS::Task::GetCurrentTaskName(void)
 {
-    return ((char *)(sCurrentTCB->name));
+    return ((char *)(&sCurrentTCB->name[0]));
 }
 
 uint32_t CRTOS::Task::GetTaskCycles(void)
