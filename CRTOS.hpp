@@ -18,9 +18,6 @@
 #include <cstdint>
 #include <atomic>
 
-#include <cstring>
-#include <unordered_map>
-
 namespace CRTOS
 {
     enum class Result : uint8_t
@@ -37,16 +34,18 @@ namespace CRTOS
         RESULT_QUEUE_TIMEOUT,
         RESULT_CIRCULAR_BUFFER_TIMEOUT,
         RESULT_TASK_NOT_FOUND,
-        RESULT_IPC_TIMEOUT
+        RESULT_IPC_TIMEOUT,
+        RESULT_CRC_NOT_INITIALIZED,
+        RESULT_CRC_ALREADY_INITIALIZED
     };
 
     namespace Config
     {
         void SetCoreClock(uint32_t ClockInMHz);
         void SetTickRate(uint32_t TicksPerSecond);
-        Result initMem(void *pool, uint32_t size);
-        uint32_t getFreeMemory(void);
-        uint32_t getAllocatedMemory(void);
+        Result InitMem(void *pool, uint32_t size);
+        uint32_t GetFreeMemory(void);
+        uint32_t GetAllocatedMemory(void);
     }
 
     class Semaphore
@@ -55,11 +54,11 @@ namespace CRTOS
             Semaphore(uint32_t initialValue);
             ~Semaphore(void) {};
 
-            Result wait(uint32_t timeoutTicks);
-            void signal(void);
+            Result Wait(uint32_t timeoutTicks);
+            void Signal(void);
 
-            Result getOwner(void *&owner);
-            Result getTimeout(uint32_t *&timeout);
+            Result GetOwner(void *&owner);
+            Result GetTimeout(uint32_t *&timeout);
 
         private:
             std::atomic<uint32_t> value;
@@ -72,8 +71,8 @@ namespace CRTOS
         public:
             Mutex(void);
             ~Mutex(void);
-            void lock(void);
-            void unlock(void);
+            void Lock(void);
+            void Unlock(void);
 
         private:
             std::atomic_flag flag;
@@ -86,6 +85,7 @@ namespace CRTOS
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
         Result Delete(void);
         Result Delete(TaskHandle *handle);
+
         CRTOS::Result Delay(uint32_t ticks);
         CRTOS::Result Pause(TaskHandle *handle);
         CRTOS::Result Resume(TaskHandle *handle);
@@ -154,10 +154,10 @@ namespace CRTOS
             CircularBuffer(const CircularBuffer& old);
             ~CircularBuffer(void);
 
-            Result init(void);
+            Result Init(void);
 
-            Result put(const uint8_t* data, uint32_t size, uint32_t timeout_ms);
-            Result get(uint8_t* data, uint32_t size, uint32_t timeout_ms);
+            Result Send(const uint8_t* data, uint32_t size, uint32_t timeout_ms);
+            Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms);
     };
 
     namespace IPC
@@ -182,6 +182,20 @@ namespace CRTOS
         CRTOS::Result SendMessage(CRTOS::Task::TaskHandle *sender, CRTOS::Task::TaskHandle *receiver, uint32_t messageId, void* data, uint32_t dataSize);
         CRTOS::Result ReceiveMessage(CRTOS::Task::TaskHandle *receiver, IPCMessage*& outMessage, uint32_t timeoutTicks);
         void ReleaseMessage(IPCMessage* message);
+    }
+
+    namespace CRC32
+    {
+        namespace
+        {
+            static const uint32_t sCrcTableSize = 256u;
+            __attribute__((used)) static uint32_t *sCrcTable = nullptr;
+            static const uint32_t sPolynomial = 0xEDB88320u;
+        }
+
+        CRTOS::Result Init(void);
+        CRTOS::Result Calculate(const uint8_t* data, uint32_t length, uint32_t &output, uint32_t previousCrc = 0xFFFFFFFFu);
+        CRTOS::Result Denit(void);
     }
 };
 

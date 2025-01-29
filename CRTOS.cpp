@@ -11,7 +11,7 @@
 
 #include <CRTOS.hpp>
 #include <HeapAllocator.hpp>
-#include <cstdio>
+
 typedef void (*TaskFunction)(void *);
 
 enum class TaskState : uint32_t
@@ -81,7 +81,7 @@ extern "C" void SysTick_Handler(void);
 
 extern "C" void RestoreCtxOfTheFirstTask(void) __attribute__((naked));
 extern "C" uint32_t getInterruptMask(void) __attribute__((naked));
-extern "C" void setInterruptMask(uint32_t ulMask) __attribute__((naked));
+extern "C" void setInterruptMask(uint32_t ulMask = 0u) __attribute__((naked));
 extern "C" void startFirstTask(void) __attribute__((naked));
 
 extern "C" void memcpy_optimized(void *d, void *s, uint32_t len);
@@ -341,13 +341,34 @@ uint32_t pStringLength(const char *buffer)
     return (tmp - buffer) + 1;
 }
 
+CRTOS::Mutex::Mutex(void) : flag(ATOMIC_FLAG_INIT)
+{
+}
+
+CRTOS::Mutex::~Mutex(void)
+{
+}
+
+void CRTOS::Mutex::Lock(void)
+{
+    getInterruptMask();
+
+    while (flag.test_and_set(std::memory_order_acquire));
+}
+
+void CRTOS::Mutex::Unlock(void)
+{
+    flag.clear(std::memory_order_release);
+
+    setInterruptMask();
+}
 
 CRTOS::Semaphore::Semaphore(uint32_t initialValue) :
     value(initialValue)
 {
 }
 
-CRTOS::Result CRTOS::Semaphore::wait(uint32_t timeoutTicks)
+CRTOS::Result CRTOS::Semaphore::Wait(uint32_t timeoutTicks)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t startTick = tickCount;
@@ -419,7 +440,7 @@ CRTOS::Result CRTOS::Semaphore::wait(uint32_t timeoutTicks)
     return result;
 }
 
-void CRTOS::Semaphore::signal(void)
+void CRTOS::Semaphore::Signal(void)
 {
     value++;
 
@@ -430,7 +451,7 @@ void CRTOS::Semaphore::signal(void)
     }
 }
 
-CRTOS::Result CRTOS::Semaphore::getOwner(void *&owner)
+CRTOS::Result CRTOS::Semaphore::GetOwner(void *&owner)
 {
     if (mOwner == nullptr)
     {
@@ -442,13 +463,13 @@ CRTOS::Result CRTOS::Semaphore::getOwner(void *&owner)
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
-CRTOS::Result CRTOS::Semaphore::getTimeout(uint32_t *&timeout)
+CRTOS::Result CRTOS::Semaphore::GetTimeout(uint32_t *&timeout)
 {
     timeout = &mTimeout;
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
-CRTOS::Result CRTOS::Config::initMem(void *pool, uint32_t size)
+CRTOS::Result CRTOS::Config::InitMem(void *pool, uint32_t size)
 {
     if (pool == nullptr || size == 0u)
     {
@@ -461,12 +482,12 @@ CRTOS::Result CRTOS::Config::initMem(void *pool, uint32_t size)
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
-uint32_t CRTOS::Config::getAllocatedMemory(void)
+uint32_t CRTOS::Config::GetAllocatedMemory(void)
 {
     return mem.getAllocatedMemory();
 }
 
-uint32_t CRTOS::Config::getFreeMemory(void)
+uint32_t CRTOS::Config::GetFreeMemory(void)
 {
     return mem.getFreeMemory();
 }
@@ -540,28 +561,6 @@ void CRTOS::Config::SetTickRate(uint32_t ticks)
     }
 }
 
-CRTOS::Mutex::Mutex(void) : flag(ATOMIC_FLAG_INIT)
-{
-}
-
-CRTOS::Mutex::~Mutex(void)
-{
-}
-
-void CRTOS::Mutex::lock(void)
-{
-    CRTOS::Task::EnterCriticalSection();
-
-    while (flag.test_and_set(std::memory_order_acquire));
-}
-
-void CRTOS::Mutex::unlock(void)
-{
-    flag.clear(std::memory_order_release);
-
-    CRTOS::Task::ExitCriticalSection();
-}
-
 uint32_t getInterruptMask(void)
 {
     __asm volatile(
@@ -575,7 +574,7 @@ uint32_t getInterruptMask(void)
         ".align 4        \n" ::"i"(MAX_SYSCALL_INTERRUPT_PRIORITY) : "memory");
 }
 
-void setInterruptMask(uint32_t mask = 0u)
+void setInterruptMask(uint32_t mask)
 {
     __asm volatile(
         ".syntax unified \n"
@@ -590,12 +589,23 @@ void CRTOS::Task::EnterCriticalSection(void)
 {
     getInterruptMask();
 
+    __asm volatile (
+        "cpsid i \n"
+        "cpsid f \n");
+
     __asm volatile ( "dsb" ::: "memory" );
     __asm volatile ( "isb" );
 }
 
 void CRTOS::Task::ExitCriticalSection(void)
 {
+    __asm volatile (
+        "cpsie i \n"
+        "cpsie f \n");
+
+    __asm volatile ( "dsb" ::: "memory" );
+    __asm volatile ( "isb" );
+
     setInterruptMask();
 }
 
@@ -835,8 +845,8 @@ void SysTick_Handler(void)
     {
         uint32_t *smphrTimeout = nullptr;
         void *smphrOwner = nullptr;
-        node->data->getTimeout(smphrTimeout);
-        node->data->getOwner(smphrOwner);
+        node->data->GetTimeout(smphrTimeout);
+        node->data->GetOwner(smphrOwner);
 
         if (tickCount >= (*smphrTimeout))
         {
@@ -1354,7 +1364,7 @@ CRTOS::CircularBuffer::~CircularBuffer(void)
     mem.deallocate(mBuffer);
 }
 
-CRTOS::Result CRTOS::CircularBuffer::init(void)
+CRTOS::Result CRTOS::CircularBuffer::Init(void)
 {
     if (mBufferSize == 0)
     {
@@ -1371,7 +1381,7 @@ CRTOS::Result CRTOS::CircularBuffer::init(void)
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
-CRTOS::Result CRTOS::CircularBuffer::put(const uint8_t *data, uint32_t size, uint32_t timeout_ms)
+CRTOS::Result CRTOS::CircularBuffer::Send(const uint8_t *data, uint32_t size, uint32_t timeout_ms)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t start_time = tickCount;
@@ -1406,7 +1416,7 @@ CRTOS::Result CRTOS::CircularBuffer::put(const uint8_t *data, uint32_t size, uin
     return result;
 }
 
-CRTOS::Result CRTOS::CircularBuffer::get(uint8_t *data, uint32_t size, uint32_t timeout_ms)
+CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint32_t timeout_ms)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t start_time = tickCount;
@@ -1576,3 +1586,89 @@ void CRTOS::IPC::ReleaseMessage(IPCMessage* message)
         message = nullptr;
     }
 }
+
+CRTOS::Result CRTOS::CRC32::Init(void)
+{
+    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+
+    if (sCrcTable == nullptr)
+    {
+        sCrcTable = reinterpret_cast<uint32_t*>(mem.allocate(sCrcTableSize * sizeof(uint32_t)));
+    }
+    else
+    {
+        result = CRTOS::Result::RESULT_CRC_ALREADY_INITIALIZED;
+        return result;
+    }
+
+    if (sCrcTable == nullptr)
+    {
+        result = CRTOS::Result::RESULT_NO_MEMORY;
+    }
+    else
+    {
+        for (uint32_t i = 0; i < 256; i++)
+        {
+            uint32_t crc = i;
+            for (uint32_t j = 0; j < 8; j++)
+            {
+                if (crc & 1)
+                {
+                    crc = (crc >> 1) ^ sPolynomial;
+                }
+                else
+                {
+                    crc >>= 1;
+                }
+            }
+            sCrcTable[i] = crc;
+        }
+    }
+
+    return result;
+}
+
+CRTOS::Result CRTOS::CRC32::Calculate(const uint8_t* data, uint32_t length, uint32_t &output, uint32_t crc)
+{
+    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+
+    if (data == nullptr)
+    {
+        result = CRTOS::Result::RESULT_BAD_PARAMETER;
+        return result;
+    }
+
+    if (sCrcTable == nullptr)
+    {
+        result = CRTOS::Result::RESULT_CRC_NOT_INITIALIZED;
+        return result;
+    }
+
+    for (uint32_t i = 0; i < length; i++)
+    {
+        crc = (crc >> 8) ^ sCrcTable[(crc ^ data[i]) & 0xFF];
+    }
+
+    output = crc;
+    output = output ^ 0xFFFFFFFF;
+
+    return result;
+}
+
+CRTOS::Result CRTOS::CRC32::Denit(void)
+{
+    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+
+    if (sCrcTable == nullptr)
+    {
+        result = CRTOS::Result::RESULT_CRC_NOT_INITIALIZED;
+    }
+    else
+    {
+        mem.deallocate(sCrcTable);
+        sCrcTable = nullptr;
+    }
+
+    return result;
+}
+
