@@ -1655,7 +1655,7 @@ CRTOS::Result CRTOS::CRC32::Calculate(const uint8_t* data, uint32_t length, uint
     return result;
 }
 
-CRTOS::Result CRTOS::CRC32::Denit(void)
+CRTOS::Result CRTOS::CRC32::Deinit(void)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
 

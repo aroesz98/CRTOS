@@ -195,7 +195,7 @@ namespace CRTOS
 
         CRTOS::Result Init(void);
         CRTOS::Result Calculate(const uint8_t* data, uint32_t length, uint32_t &output, uint32_t previousCrc = 0xFFFFFFFFu);
-        CRTOS::Result Denit(void);
+        CRTOS::Result Deinit(void);
     }
 };
 
