@@ -1,153 +1,188 @@
 # CRTOS
 Custom Real-Time Operating System for ARM Cortex-M
 
-# Technical Documentation of CRTOS Implementation
+# CRTOS: Technical Documentation
 
 ## Table of Contents
-1. **Functional Overview**
-2. **Task Scheduler Functionality**
-3. **Algorithms Used**
-4. **Usage Examples**
+1. [Overview](#overview)
+2. [Functional Description](#functional-description)
+3. [Algorithm Description](#algorithm-description)
+4. [Usage Examples](#usage-examples)
 
----
+## Overview
+CRTOS is a real-time operating system designed for embedded systems. This documentation covers the core functionalities, algorithms, and usage examples of CRTOS. The system provides features such as task management, mutexes, semaphores, timers, circular buffers, queues, and CRC32 calculation. 
 
-### 1. Functional Overview
+## Functional Description
 
-This CRTOS implementation provides several core functionalities:
+### Namespaces and Enums
+- **Namespace `CRTOS`:** Contains the core functionalities of CRTOS.
+- **Namespace `Config`:** Configuration settings such as core clock and tick rate.
+- **Namespace `Task`:** Task management features.
+- **Namespace `Scheduler`:** Scheduler control.
+- **Namespace `Timer`:** Software timer functionalities.
+- **Namespace `CRC32`:** CRC32 calculation.
+- **Enum `Result`:** Standard result codes for CRTOS operations.
+- **Enum `TaskState`:** Represents the state of a task.
 
-- **CRTOS Configuration:**
-  - `SetCoreClock(uint32_t clock)`: Sets the core clock frequency.
-  - `SetTickRate(uint32_t ticks)`: Sets the system tick rate.
-  - `initMem(void *pool, uint32_t size)`: Initializes the memory pool for RTOS.
-  - `getFreeMemory(void)`: Returns the amount of free memory.
-  - `getAllocatedMemory(void)`: Returns the amount of allocated memory.
+### Classes
+- **Class `Semaphore`:** Binary semaphore for synchronization.
+- **Class `Mutex`:** Mutual exclusion mechanism.
+- **Class `Queue`:** Implements a fixed-size queue.
+- **Class `CircularBuffer`:** Implements a circular buffer.
 
-- **Semaphores:**
-  - `Semaphore(uint32_t initialValue)`: Constructor initializing a semaphore with a specified initial value.
-  - `wait(uint32_t timeoutTicks)`: Waits for a semaphore with a specified timeout.
-  - `signal(void)`: Signals a semaphore.
+## Algorithm Description
 
-- **Mutexes:**
-  - `Mutex(void)`: Constructor initializing a mutex.
-  - `lock(void)`: Locks the mutex.
-  - `unlock(void)`: Unlocks the mutex.
+### Task Management
+Tasks are represented by the `TaskControlBlock` structure. Task switching relies on saving and restoring the context of tasks using assembly code. Tasks can be created, deleted, delayed, paused, and resumed.
 
-- **Queues:**
-  - `Queue(uint32_t maxsize, uint32_t element_size)`: Constructor initializing a queue with a specified max size and element size.
-  - `Send(void* item, uint32_t timeout)`: Sends an item to the queue.
-  - `Receive(void* item, uint32_t timeout)`: Receives an item from the queue.
+#### Task Switching
+1. **Context Saving:** The current task context is saved by pushing its registers onto its stack.
+2. **Context Loading:** The next task's context is restored by popping its registers from its stack.
+3. **PendSV_Handler:** This handler performs the context switch and updates the system tick.
 
-- **Circular Buffers:**
-  - `CircularBuffer(uint32_t buffer_size)`: Constructor initializing a circular buffer with a specified size.
-  - `init(void)`: Initializes the circular buffer.
-  - `put(const uint8_t* data, uint32_t size, uint32_t timeout_ms)`: Puts data into the circular buffer.
-  - `get(uint8_t* data, uint32_t size, uint32_t timeout_ms)`: Gets data from the circular buffer.
+### Mutex
+Mutexes are used to ensure mutual exclusion. The `Mutex` class uses atomic operations for locking and unlocking.
 
-- **Tasks:**
-  - `Create(void (*function)(void *), const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle)`: Creates a new task.
-  - `Delete(void)`: Deletes the currently executing task.
-  - `Delete(TaskHandle *handle)`: Deletes a task specified by the handle.
-  - `GetCurrentTaskName(void)`: Returns the name of the currently executing task.
+#### Locking Algorithm
+1. **Interrupt Masking:** Disables interrupts to protect the critical section.
+2. **Spin-lock:** Uses a loop to wait until the lock is available.
+3. **Memory Barriers:** Ensures proper ordering of operations.
 
-- **Timer Management:**
-  - `Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload)`: Initializes a software timer.
-  - `Start(SoftwareTimer *timer)`: Starts a software timer.
-  - `Stop(SoftwareTimer *timer)`: Stops a software timer.
+### Semaphore
+Semaphores provide signaling mechanisms. The `Semaphore` class supports wait and signal operations.
 
----
+#### Wait Algorithm
+1. **Critical Section:** Disables interrupts and checks the semaphore value.
+2. **Timeout Management:** If the semaphore is not available, it enters a blocked state and waits for the timeout.
+3. **Signal Handling:** Signals the semaphore and releases the waiting task if the semaphore value becomes positive.
 
-### 2. Task Scheduler Functionality
+### Queue
+Queues provide a fixed-size first-in, first-out (FIFO) buffer. The `Queue` class supports sending and receiving items.
 
-The CRTOS Scheduler is responsible for managing the execution of tasks based on their priorities. Key elements of the scheduler's operation are:
+#### Send Algorithm
+1. **Critical Section:** Disables interrupts and checks if the queue is full.
+2. **Insertion:** Inserts the item at the rear of the queue and updates the rear index.
+3. **Semaphore Signal:** Signals the semaphore to unblock waiting tasks.
 
-- **Initialization**: The scheduler is initialized by setting the clock frequency and memory allocation.
-- **Context Switching**: The implementation provides context switching between tasks using the PendSV interrupt.
-- **Task Management**: The scheduler manages task execution order based on their priorities.
-- **System Interrupt Handling**: The scheduler responds to system interrupts such as SysTick and PendSV for context switching.
+### Circular Buffer
+Circular buffers provide a fixed-size buffer with wrap-around behavior. The `CircularBuffer` class supports sending and receiving data.
 
-The context switching algorithm involves:
-1. Saving the context of the currently executing task.
-2. Selecting the next task with the highest priority.
-3. Restoring the context of the selected task.
+#### Send Algorithm
+1. **Critical Section:** Disables interrupts and checks if there is enough space in the buffer.
+2. **Wrap-around:** Copies data to the buffer, handling wrap-around if necessary.
+3. **Semaphore Signal:** Signals the semaphore to unblock waiting tasks.
 
----
+### CRC32 Calculation
+The `CRC32` class provides methods to initialize, calculate, and deinitialize the CRC32 table.
 
-### 3. Algorithms Used
+#### Calculation Algorithm
+1. **Table Initialization:** Generates a lookup table for CRC32 calculation using a polynomial.
+2. **CRC Update:** Updates the CRC value for each byte of data using the lookup table.
+3. **Final XOR:** Performs a final XOR operation on the CRC value.
 
-#### a. Bubble Sort in SortListByPriority
-The bubble sort algorithm is used to sort the task list by priority:
-- **Description**: Neighboring list elements are compared and swapped if they are in the wrong order.
-- **Complexity**: O(n^2) in the worst case.
+## Usage Examples
 
-#### b. FIFO in Queue Operations
-The algorithms used in the queue operations are based on the FIFO (First In, First Out) principle:
-- **Send**: Adds a new item to the end of the queue.
-- **Receive**: Retrieves an item from the beginning of the queue.
-- **Complexity**: O(1) for both operations due to the circular buffer implementation.
-
-#### c. Circular Buffer Algorithm
-The circular buffer algorithm allows efficient data management in a limited buffer:
-- **put**: Adds data to the buffer by updating the head pointer.
-- **get**: Retrieves data from the buffer by updating the tail pointer.
-- **Complexity**: O(1) for both operations.
-
----
-
-### 4. Usage Examples
-
-#### Semaphore Example
+### Creating and Running Tasks
 ```cpp
-CRTOS::Semaphore mySemaphore(1);
+void MyTaskFunction(void *params) {
+    while (true) {
+        // Task code
+    }
+}
 
-void exampleTask(void *) {
-    if (mySemaphore.wait(1000) == CRTOS::Result::RESULT_SUCCESS) {
-        // Critical section
-        mySemaphore.signal();
+int main(void) {
+    CRTOS::Config::SetCoreClock(150000000); // Set core clock to 150 MHz
+    CRTOS::Config::SetTickRate(1000); // Set tick rate to 1000 ticks/second
+    
+    void* memoryPool = malloc(1024 * 1024); // Allocate memory pool
+    CRTOS::Config::InitMem(memoryPool, 1024 * 1024); // Initialize memory pool
+    
+    CRTOS::Task::TaskHandle taskHandle;
+    CRTOS::Task::Create(MyTaskFunction, "MyTask", 256, nullptr, 1, &taskHandle); // Create task
+    
+    CRTOS::Scheduler::Start(); // Start scheduler
+    
+    return 0;
+}
+```
+
+### Using Mutex
+```cpp
+void Task1(void *params) {
+    CRTOS::Mutex myMutex;
+    myMutex.Lock();
+    // Critical section
+    myMutex.Unlock();
+}
+
+void Task2(void *params) {
+    CRTOS::Mutex myMutex;
+    myMutex.Lock();
+    // Critical section
+    myMutex.Unlock();
+}
+```
+
+### Using Semaphore
+```cpp
+void TaskProducer(void *params) {
+    CRTOS::Semaphore mySemaphore;
+    while (true) {
+        // Produce item
+        mySemaphore.Signal();
+    }
+}
+
+void TaskConsumer(void *params) {
+    CRTOS::Semaphore mySemaphore;
+    while (true) {
+        mySemaphore.Wait(100); // Wait for item
+        // Consume item
     }
 }
 ```
 
-#### Queue Example
+### Using Queue
 ```cpp
-CRTOS::Queue myQueue(10, sizeof(int));
-
-void producerTask(void *) {
+void TaskProducer(void *params) {
+    CRTOS::Queue myQueue(10, sizeof(int));
     int item = 42;
-    myQueue.Send(&item, 1000);
+    myQueue.Send(&item);
 }
 
-void consumerTask(void *) {
+void TaskConsumer(void *params) {
+    CRTOS::Queue myQueue(10, sizeof(int));
     int item;
-    myQueue.Receive(&item, 1000);
+    myQueue.Receive(&item, 100);
 }
 ```
 
-#### Circular Buffer Example
+### Using Circular Buffer
 ```cpp
-CRTOS::CircularBuffer myBuffer(128);
-
-void bufferTask(void *) {
+void TaskProducer(void *params) {
+    CRTOS::CircularBuffer myBuffer(10);
+    myBuffer.Init();
     uint8_t data[] = {1, 2, 3, 4, 5};
-    myBuffer.put(data, sizeof(data), 1000);
+    myBuffer.Send(data, 5);
+}
 
-    uint8_t retrievedData[5];
-    myBuffer.get(retrievedData, sizeof(retrievedData), 1000);
+void TaskConsumer(void *params) {
+    CRTOS::CircularBuffer myBuffer(10);
+    uint8_t data[5];
+    myBuffer.Receive(data, 5, 100);
 }
 ```
 
-#### Task Creation and Deletion Example
+### Calculating CRC32
 ```cpp
-void myTask(void *) {
-    // Task code here
-}
-
-void main() {
-    CRTOS::TaskHandle taskHandle;
-    CRTOS::Task::Create(myTask, "MyTask", 1024, nullptr, 5, &taskHandle);
-
-    // Delete the task later
-    CRTOS::Task::Delete(&taskHandle);
+void CalculateCRC(void) {
+    uint8_t data[] = {1, 2, 3, 4, 5};
+    uint32_t crc;
+    CRTOS::CRC32::Init();
+    CRTOS::CRC32::Calculate(data, sizeof(data), crc);
+    CRTOS::CRC32::Deinit();
 }
 ```
 
 ---
+
