@@ -32,9 +32,13 @@ namespace CRTOS
         RESULT_TIMER_ALREADY_ACTIVE,
         RESULT_TIMER_ALREADY_STOPPED,
         RESULT_QUEUE_TIMEOUT,
+        RESULT_QUEUE_FULL,
+        RESULT_QUEUE_EMPTY,
         RESULT_CIRCULAR_BUFFER_TIMEOUT,
+        RESULT_CIRCULAR_BUFFER_FULL,
         RESULT_TASK_NOT_FOUND,
         RESULT_IPC_TIMEOUT,
+        RESULT_IPC_EMPTY,
         RESULT_CRC_NOT_INITIALIZED,
         RESULT_CRC_ALREADY_INITIALIZED
     };
@@ -51,7 +55,7 @@ namespace CRTOS
     class Semaphore
     {
         public:
-            Semaphore(uint32_t initialValue);
+            Semaphore(uint32_t initialValue = 0u);
             ~Semaphore(void) {};
 
             Result Wait(uint32_t timeoutTicks);
@@ -80,6 +84,7 @@ namespace CRTOS
 
     namespace Task
     {
+        typedef void (*TaskFunction)(void *);
         typedef void* TaskHandle;
         void SetMaximumTaskPrio(uint32_t maxPriority);
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
@@ -98,6 +103,11 @@ namespace CRTOS
         void ExitCriticalSection(void);
 
         char* GetCurrentTaskName(void);
+
+        namespace LPC55S69_Features
+        {
+            Result CreateTaskForExecutable(uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
+        };
     };
 
     namespace Scheduler
@@ -131,13 +141,14 @@ namespace CRTOS
             uint32_t mSize;
             uint32_t mMaxSize;
             uint32_t mElementSize;
+            CRTOS::Semaphore mSem;
 
         public:
             Queue(uint32_t maxsize, uint32_t element_size);
             ~Queue(void);
 
-            Result Send(void* item, uint32_t timeout);
-            Result Receive(void* item, uint32_t timeout);
+            Result Send(void* item);
+            Result Receive(void* item, uint32_t timeout = 0u);
     };
 
     class CircularBuffer
@@ -148,6 +159,7 @@ namespace CRTOS
             uint32_t mTail;
             uint32_t mCurrentSize;
             uint32_t mBufferSize;
+            CRTOS::Semaphore mSem;
 
         public:
             CircularBuffer(uint32_t mBuffer_size);
@@ -156,33 +168,9 @@ namespace CRTOS
 
             Result Init(void);
 
-            Result Send(const uint8_t* data, uint32_t size, uint32_t timeout_ms);
-            Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms);
+            Result Send(const uint8_t* data, uint32_t size);
+            Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms = 0u);
     };
-
-    namespace IPC
-    {
-        typedef struct IPCMessage
-        {
-            CRTOS::Task::TaskHandle sender;
-            CRTOS::Task::TaskHandle receiver;
-            uint32_t messageId;
-            void* data;
-            uint32_t dataSize;
-            IPCMessage* next;
-        } IPCMessage;
-
-        typedef struct TaskMessageQueue
-        {
-            CRTOS::Task::TaskHandle task;
-            IPCMessage* messageHead;
-            TaskMessageQueue* next;
-        } TaskMessageQueue;
-
-        CRTOS::Result SendMessage(CRTOS::Task::TaskHandle *sender, CRTOS::Task::TaskHandle *receiver, uint32_t messageId, void* data, uint32_t dataSize);
-        CRTOS::Result ReceiveMessage(CRTOS::Task::TaskHandle *receiver, IPCMessage*& outMessage, uint32_t timeoutTicks);
-        void ReleaseMessage(IPCMessage* message);
-    }
 
     namespace CRC32
     {
