@@ -25,7 +25,7 @@ CRTOS is a real-time operating system designed for embedded systems. This docume
 - **Enum `TaskState`:** Represents the state of a task.
 
 ### Classes
-- **Class `Semaphore`:** Binary semaphore for synchronization.
+- **Class `BinarySemaphore`:** Binary semaphore for synchronization.
 - **Class `Mutex`:** Mutual exclusion mechanism.
 - **Class `Queue`:** Implements a fixed-size queue.
 - **Class `CircularBuffer`:** Implements a circular buffer.
@@ -48,8 +48,8 @@ Mutexes are used to ensure mutual exclusion. The `Mutex` class uses atomic opera
 2. **Spin-lock:** Uses a loop to wait until the lock is available.
 3. **Memory Barriers:** Ensures proper ordering of operations.
 
-### Semaphore
-Semaphores provide signaling mechanisms. The `Semaphore` class supports wait and signal operations.
+### BinarySemaphore
+BinarySemaphores provide signaling mechanisms. The `BinarySemaphore` class supports wait and signal operations.
 
 #### Wait Algorithm
 1. **Critical Section:** Disables interrupts and checks the semaphore value.
@@ -62,7 +62,7 @@ Queues provide a fixed-size first-in, first-out (FIFO) buffer. The `Queue` class
 #### Send Algorithm
 1. **Critical Section:** Disables interrupts and checks if the queue is full.
 2. **Insertion:** Inserts the item at the rear of the queue and updates the rear index.
-3. **Semaphore Signal:** Signals the semaphore to unblock waiting tasks.
+3. **BinarySemaphore Signal:** Signals the semaphore to unblock waiting tasks.
 
 ### Circular Buffer
 Circular buffers provide a fixed-size buffer with wrap-around behavior. The `CircularBuffer` class supports sending and receiving data.
@@ -70,7 +70,7 @@ Circular buffers provide a fixed-size buffer with wrap-around behavior. The `Cir
 #### Send Algorithm
 1. **Critical Section:** Disables interrupts and checks if there is enough space in the buffer.
 2. **Wrap-around:** Copies data to the buffer, handling wrap-around if necessary.
-3. **Semaphore Signal:** Signals the semaphore to unblock waiting tasks.
+3. **BinarySemaphore Signal:** Signals the semaphore to unblock waiting tasks.
 
 ### CRC32 Calculation
 The `CRC32` class provides methods to initialize, calculate, and deinitialize the CRC32 table.
@@ -123,20 +123,20 @@ void Task2(void *params) {
 }
 ```
 
-### Using Semaphore
+### Using BinarySemaphore
 ```cpp
 void TaskProducer(void *params) {
-    CRTOS::Semaphore mySemaphore;
+    CRTOS::BinarySemaphore myBinarySemaphore;
     while (true) {
         // Produce item
-        mySemaphore.Signal();
+        myBinarySemaphore.Signal();
     }
 }
 
 void TaskConsumer(void *params) {
-    CRTOS::Semaphore mySemaphore;
+    CRTOS::BinarySemaphore myBinarySemaphore;
     while (true) {
-        mySemaphore.Wait(100); // Wait for item
+        myBinarySemaphore.Wait(100); // Wait for item
         // Consume item
     }
 }
