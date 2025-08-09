@@ -18,6 +18,9 @@
 #include <cstdint>
 #include <atomic>
 
+template <typename T>
+class Node;
+
 namespace CRTOS
 {
     enum class Result : uint8_t
@@ -36,6 +39,7 @@ namespace CRTOS
         RESULT_QUEUE_EMPTY,
         RESULT_CIRCULAR_BUFFER_TIMEOUT,
         RESULT_CIRCULAR_BUFFER_FULL,
+		RESULT_CIRCULAR_BUFFER_EMPTY,
         RESULT_TASK_NOT_FOUND,
         RESULT_IPC_TIMEOUT,
         RESULT_IPC_EMPTY,
@@ -52,24 +56,6 @@ namespace CRTOS
         uint32_t GetAllocatedMemory(void);
     }
 
-    class Semaphore
-    {
-        public:
-            Semaphore(uint32_t initialValue = 0u);
-            ~Semaphore(void) {};
-
-            Result Wait(uint32_t timeoutTicks);
-            void Signal(void);
-
-            Result GetOwner(void *&owner);
-            Result GetTimeout(uint32_t *&timeout);
-
-        private:
-            std::atomic<uint32_t> value;
-            uint32_t mTimeout;
-            void *mOwner;
-    };
-
     class Mutex
     {
         public:
@@ -80,13 +66,28 @@ namespace CRTOS
 
         private:
             std::atomic_flag flag;
+            uint32_t irqMask;
+    };
+
+    class BinarySemaphore
+    {
+		public:
+    		BinarySemaphore() = default;
+			~BinarySemaphore() = default;
+
+			Result wait(uint32_t ticks);
+			Result signal();
+
+		private:
+			Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
+			uint32_t _val;
     };
 
     namespace Task
     {
         typedef void (*TaskFunction)(void *);
         typedef void* TaskHandle;
-        void SetMaximumTaskPrio(uint32_t maxPriority);
+
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
         Result Delete(void);
         Result Delete(TaskHandle *handle);
@@ -94,15 +95,19 @@ namespace CRTOS
         CRTOS::Result Delay(uint32_t ticks);
         CRTOS::Result Pause(TaskHandle *handle);
         CRTOS::Result Resume(TaskHandle *handle);
+        void Yield(void);
 
         uint32_t GetTaskCycles(void);
         uint32_t GetFreeStack(void);
         void GetCoreLoad(uint32_t &load, uint32_t &mantissa);
+        uint32_t GetLastTaskSwitchTime(void);  // Get the last task switch latency in cycles
 
-        void EnterCriticalSection(void);
-        void ExitCriticalSection(void);
+        uint32_t EnterCriticalSection(void);
+        void ExitCriticalSection(uint32_t mask);
 
         char* GetCurrentTaskName(void);
+        char* GetTaskName(TaskHandle *handle);
+        TaskHandle GetCurrentTaskHandle(void);
 
         namespace LPC55S69_Features
         {
@@ -141,7 +146,7 @@ namespace CRTOS
             uint32_t mSize;
             uint32_t mMaxSize;
             uint32_t mElementSize;
-            CRTOS::Semaphore mSem;
+            Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
 
         public:
             Queue(uint32_t maxsize, uint32_t element_size);
@@ -151,26 +156,26 @@ namespace CRTOS
             Result Receive(void* item, uint32_t timeout = 0u);
     };
 
-    class CircularBuffer
-    {
-        private:
-            uint8_t* mBuffer;
-            uint32_t mHead;
-            uint32_t mTail;
-            uint32_t mCurrentSize;
-            uint32_t mBufferSize;
-            CRTOS::Semaphore mSem;
+   class CircularBuffer
+   {
+       private:
+           uint8_t* mBuffer;
+           uint32_t mHead;
+           uint32_t mTail;
+           uint32_t mCurrentSize;
+           uint32_t mBufferSize;
+           Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
 
-        public:
-            CircularBuffer(uint32_t mBuffer_size);
-            CircularBuffer(const CircularBuffer& old);
-            ~CircularBuffer(void);
+       public:
+           CircularBuffer(uint32_t mBuffer_size);
+           CircularBuffer(const CircularBuffer& old);
+           ~CircularBuffer(void);
 
-            Result Init(void);
+           Result Init(void);
 
-            Result Send(const uint8_t* data, uint32_t size);
-            Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms = 0u);
-    };
+           Result Send(const uint8_t* data, uint32_t size);
+           Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms = 0u);
+   };
 
     namespace CRC32
     {

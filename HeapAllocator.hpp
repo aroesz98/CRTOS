@@ -33,11 +33,11 @@ class HeapAllocator
     private:
         struct Block
         {
+        	uint32_t startMarker;
             uint32_t size;
             bool free;
             Block *prev;
             Block *next;
-            uint32_t startMarker;
             uint32_t endMarker;
         };
 
