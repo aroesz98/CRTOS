@@ -111,7 +111,10 @@ namespace CRTOS
 
         namespace LPC55S69_Features
         {
-            Result CreateTaskForExecutable(uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
+            Result CreateTaskForExecutable(const uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
+            // Create task from a raw BIN module produced by this module template
+			// The BIN layout begins with ProgramInfo followed by code/rodata.
+			Result CreateTaskForBinModule(uint8_t *bin, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
         };
     };
 

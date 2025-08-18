@@ -79,6 +79,8 @@ int ElfFile::parse(const uint8_t *elf, uint32_t **stack, uint32_t *stackSize, ui
 
     parse_elf();
 
+    binary = nullptr;
+
     // We parsed the file so we can allocate required memory and copy file to RAM
     binary = (uint8_t*)malloc(phdr->p_offset + phdr->p_memsz);
     memcpy(&binary[0], &elf[0], phdr->p_offset + phdr->p_memsz);
