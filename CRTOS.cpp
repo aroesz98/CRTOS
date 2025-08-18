@@ -9,9 +9,11 @@
  *
  */
 
-#include <CRTOS.hpp>
+#include "CRTOS.hpp"
+
 #include <HeapAllocator.hpp>
-#include <ELFParser.hpp>
+
+#include "ELFParser.hpp"
 #include "kernel.h"
 
 typedef void (*TaskFunction)(void *);
@@ -21,10 +23,10 @@ enum class TaskState : uint32_t
     TASK_RUNNING,
     TASK_READY,
     TASK_DELAYED,
-	TASK_PAUSED,
+    TASK_PAUSED,
     TASK_BLOCKED_BY_SEMAPHORE,
     TASK_BLOCKED_BY_QUEUE,
-	TASK_BLOCKED_BY_CIRC_BUFFER
+    TASK_BLOCKED_BY_CIRC_BUFFER
 };
 
 struct TaskControlBlock
@@ -47,6 +49,39 @@ struct TaskControlBlock
 
 typedef struct TaskControlBlock TaskControlBlock;
 
+// Must match module ProgramInfo
+typedef struct ProgramInfoBin
+{
+    uint32_t stackPointer;
+    uint32_t entryPoint; // offset from image base; code is Thumb PIE
+    uint32_t vectors[74];
+    uint32_t section_data_start_addr; // offset in image of .data load
+    uint32_t section_data_dest_addr;
+    uint32_t section_data_size;
+    uint32_t section_bss_start_addr;
+    uint32_t section_bss_size;
+    uint32_t reserved[22];
+    uint32_t vtor_offset;
+    uint32_t msp_limit;
+} ProgramInfoBin;
+
+// Optional descriptor directly following ProgramInfo in our module format
+typedef struct __attribute__((packed)) ModuleDescriptorBin
+{
+    uint32_t magic; // 'MODU' 0x4D4F4455
+    uint16_t desc_version;
+    uint16_t _r0;
+    uint32_t api_version;
+    uint8_t name[32];
+    uint8_t semver_major;
+    uint8_t semver_minor;
+    uint16_t semver_patch;
+    uint32_t build_timestamp;
+    uint32_t image_size; // total size of BIN
+    uint32_t entry;      // address; ignore for BIN loader
+    uint32_t reserved[6];
+} ModuleDescriptorBin;
+
 typedef struct
 {
     volatile uint32_t CTRL;
@@ -63,23 +98,23 @@ typedef struct
 __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = nullptr;
 CRTOS::Task::TaskHandle idleTaskHandle = nullptr;
 
-constexpr uint32_t NVIC_MIN_PRIO        = 0xFFul;
-constexpr uint32_t NVIC_PENDSV_PRIO     = NVIC_MIN_PRIO << 16u;
-constexpr uint32_t NVIC_SYSTICK_PRIO    = NVIC_MIN_PRIO << 24u;
+constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
+constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
+constexpr uint32_t NVIC_SYSTICK_PRIO = NVIC_MIN_PRIO << 24u;
 constexpr uint32_t MAX_SYSCALL_IRQ_PRIO = 1ul << 5u;
-constexpr uint32_t NVIC_PENDSV_BIT      = 1ul << 28u;
+constexpr uint32_t NVIC_PENDSV_BIT = 1ul << 28u;
 
-#define DWT_REG         ((volatile uint32_t *)0xE0001000ul)
-#define ICSR_REG        ((volatile uint32_t *)0xE000ED04ul)
-#define SYSTICK_REG     ((volatile uint32_t *)0xE000E010ul)
-#define NVIC_SHPR3_REG  ((volatile uint32_t *)0xE000ED20ul)
+#define DWT_REG ((volatile uint32_t *)0xE0001000ul)
+#define ICSR_REG ((volatile uint32_t *)0xE000ED04ul)
+#define SYSTICK_REG ((volatile uint32_t *)0xE000E010ul)
+#define NVIC_SHPR3_REG ((volatile uint32_t *)0xE000ED20ul)
 
-#define DWT             ((DWT_Type *)DWT_REG)
-#define SysTick         ((SysTick_Type *)SYSTICK_REG)
+#define DWT ((DWT_Type *)DWT_REG)
+#define SysTick ((SysTick_Type *)SYSTICK_REG)
 
-#define SysTick_CTRL_CLKSOURCE  (1ul << 2u)
-#define SysTick_CTRL_TICKINT    (1ul << 1u)
-#define SysTick_CTRL_ENABLE     (1ul)
+#define SysTick_CTRL_CLKSOURCE (1ul << 2u)
+#define SysTick_CTRL_TICKINT (1ul << 1u)
+#define SysTick_CTRL_ENABLE (1ul)
 
 extern "C" void SVC_Handler(void) __attribute__((naked));
 extern "C" void PendSV_Handler(void) __attribute__((naked));
@@ -96,11 +131,15 @@ static inline void __ISB(void);
 extern "C" void memcpy_optimized(void *d, void *s, uint32_t len);
 extern "C" void memset_optimized(void *d, uint32_t val, uint32_t len);
 
-static volatile uint32_t tickCount = 0u;
+static volatile uint32_t tickCount  = 0u;
 
-static uint32_t MAX_TASK_PRIORITY = 10u;
-static uint32_t sTickRate = 1000u;
-static uint32_t sCoreClock = 150000000u;
+static uint32_t MAX_TASK_PRIORITY   = 10u;
+static uint32_t sTickRate           = 1000u;
+static uint32_t sCoreClock          = 150000000u;
+
+static constexpr uint32_t MODULE_MAGIC          = 0x4D4F4455u; // 'MODU'
+static constexpr uint32_t DEFAULT_MODULE_LEN    = 4096u;
+static constexpr uint32_t DEFAULT_STACK_SIZE    = 1024u;
 
 static HeapAllocator mem;
 
@@ -111,20 +150,20 @@ volatile uint32_t switchStartTime = 0u;
 
 static void switchedIn(void)
 {
-	uint32_t currentTime = DWT->CYCCNT;
-	if (switchStartTime != 0u)
+    uint32_t currentTime = DWT->CYCCNT;
+    if (switchStartTime != 0u)
     {
-		switchTime = currentTime - switchStartTime;
-		switchStartTime = 0u;
-	}
+        switchTime = currentTime - switchStartTime;
+        switchStartTime = 0u;
+    }
 }
 
 static void switchedOut(void)
 {
-	switchStartTime = DWT->CYCCNT;
+    switchStartTime = DWT->CYCCNT;
 }
 
-#define TASK_SWITCHED_IN()  switchedIn()
+#define TASK_SWITCHED_IN() switchedIn()
 #define TASK_SWITCHED_OUT() switchedOut()
 
 uint32_t GetSystemTime(void)
@@ -150,128 +189,159 @@ public:
     Node *next;
     Node *prev;
 
-    Node(T *data)
+    // Static tail pointer for O(1) insertions at end
+    static Node<T> *tail;
+
+    // Optimized constructor with inline hint
+    inline Node(T *data) : data(data), next(nullptr), prev(nullptr) {}
+    inline Node() : data(nullptr), next(nullptr), prev(nullptr) {}
+    inline void init(T *d)
     {
-        this->data = data;
-        this->next = nullptr;
-        this->prev = nullptr;
+        data = d;
+        next = nullptr;
+        prev = nullptr;
     }
 };
 
+// Fast insert at beginning - O(1)
 template <typename T>
-void ListInsertAtBeginning(Node<T> *&head, T *data)
+inline void ListInsertAtBeginning(Node<T> *&head, T *data)
 {
     Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
-    if (newNode == nullptr)
-    {
+    if (__builtin_expect(newNode == nullptr, 0))
         return;
-    }
-    
+
+    // Initialize node inline for performance
     newNode->data = data;
-    newNode->next = nullptr;
+    newNode->next = head;
     newNode->prev = nullptr;
-    
-    if (head == nullptr)
+
+    if (__builtin_expect(head == nullptr, 0))
     {
         head = newNode;
+        Node<T>::tail = newNode;
         return;
     }
 
-    newNode->next = head;
     head->prev = newNode;
     head = newNode;
 }
 
+// Fast insert at end using tail pointer - O(1)
 template <typename T>
-void ListInsertAtEnd(Node<T> *&head, T *data)
+inline void ListInsertAtEnd(Node<T> *&head, T *data)
 {
     Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
-    if (newNode == nullptr)
-    {
+    if (__builtin_expect(newNode == nullptr, 0))
         return;
-    }
-    
+
+    // Initialize node inline for performance
     newNode->data = data;
     newNode->next = nullptr;
     newNode->prev = nullptr;
 
-    if (head == nullptr)
+    if (__builtin_expect(head == nullptr, 0))
     {
         head = newNode;
+        Node<T>::tail = newNode;
         return;
     }
 
-    Node<T> *temp = head;
-    while (temp->next != nullptr)
+    if (__builtin_expect(Node<T>::tail != nullptr, 1))
     {
-        temp = temp->next;
+        // Fast O(1) insertion at the end
+        Node<T>::tail->next = newNode;
+        newNode->prev = Node<T>::tail;
+        Node<T>::tail = newNode;
+        return;
     }
 
-    temp->next = newNode;
-    newNode->prev = temp;
+    Node<T>::tail = head;
+    while (Node<T>::tail->next != nullptr)
+    {
+        Node<T>::tail = Node<T>::tail->next;
+    }
+
+    Node<T>::tail->next = newNode;
+    newNode->prev = Node<T>::tail;
+    Node<T>::tail = newNode;
 }
 
+// Optimized insert at position
 template <typename T>
-void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
+inline void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
 {
-    if (position == 0)
+    if (__builtin_expect(position == 0, 0))
     {
         ListInsertAtBeginning(head, data);
         return;
     }
 
     Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
-    if (newNode == nullptr)
-    {
+    if (__builtin_expect(newNode == nullptr, 0))
         return;
-    }
-    
+
     newNode->data = data;
     newNode->next = nullptr;
     newNode->prev = nullptr;
 
-    Node<T> *temp = head;
-    for (uint32_t i = 0; temp != nullptr && i < position; i++)
+    Node<T> *current = head;
+    for (uint32_t i = 0; current != nullptr && i < position - 1; i++)
     {
-        temp = temp->next;
+        current = current->next;
     }
 
-    if (temp == nullptr)
+    if (__builtin_expect(current == nullptr, 0))
     {
         mem.deallocate(newNode);
         return;
     }
 
-    newNode->next = temp->next;
-    newNode->prev = temp;
-    if (temp->next != nullptr)
+    if (__builtin_expect(current->next == nullptr, 0))
     {
-        temp->next->prev = newNode;
-    }
-    temp->next = newNode;
-}
-
-template <typename T>
-void ListDeleteAtBeginning(Node<T> *&head)
-{
-    if (head == nullptr)
-    {
+        Node<T>::tail = current;
+        Node<T>::tail->next = newNode;
+        newNode->prev = Node<T>::tail;
+        Node<T>::tail = newNode;
         return;
     }
 
-    Node<T> *temp = head;
+    newNode->next = current->next;
+    newNode->prev = current;
+    current->next->prev = newNode;
+    current->next = newNode;
+}
+
+// Fast delete at beginning - O(1)
+template <typename T>
+inline void ListDeleteAtBeginning(Node<T> *&head)
+{
+    if (__builtin_expect(head == nullptr, 0))
+        return;
+
+    Node<T> *nodeToDelete = head;
     head = head->next;
-    
-    if (head != nullptr)
+
+    if (__builtin_expect(head != nullptr, 1))
     {
         head->prev = nullptr;
     }
-    
-    mem.deallocate(temp);
+    else
+    {
+        Node<T>::tail = nullptr;
+    }
+
+    if (__builtin_expect(nodeToDelete == Node<T>::tail, 0))
+    {
+        Node<T>::tail = head;
+    }
+
+    mem.deallocate(nodeToDelete);
 }
 
+// O(1) delete at end using tail pointer
 template <typename T>
-void ListDeleteAtEnd(Node<T> *&head)
+inline void ListDeleteAtEnd(Node<T> *&head)
 {
     if (head == nullptr)
     {
@@ -282,21 +352,36 @@ void ListDeleteAtEnd(Node<T> *&head)
     {
         mem.deallocate(head);
         head = nullptr;
+        Node<T>::tail = nullptr;
         return;
     }
 
-    Node<T> *temp = head;
-    while (temp->next != nullptr)
+    // If tail is not set, find it once
+    if (Node<T>::tail == nullptr)
     {
-        temp = temp->next;
+        Node<T>::tail = head;
+        while (Node<T>::tail->next != nullptr)
+        {
+            Node<T>::tail = Node<T>::tail->next;
+        }
     }
 
-    temp->prev->next = nullptr;
-    mem.deallocate(temp);
+    Node<T> *nodeToDelete = Node<T>::tail;
+    if (Node<T>::tail != nullptr)
+    {
+        Node<T>::tail = Node<T>::tail->prev;
+    }
+    if (Node<T>::tail != nullptr)
+    {
+        Node<T>::tail->next = nullptr;
+    }
+
+    mem.deallocate(nodeToDelete);
 }
 
+// Optimized delete at position
 template <typename T>
-void ListDeleteAtPosition(Node<T> *&head, uint32_t position)
+inline void ListDeleteAtPosition(Node<T> *&head, uint32_t position)
 {
     if (head == nullptr)
     {
@@ -309,28 +394,52 @@ void ListDeleteAtPosition(Node<T> *&head, uint32_t position)
         return;
     }
 
-    Node<T> *temp = head;
-    for (uint32_t i = 0; temp != nullptr && i < position; i++)
+    Node<T> *current = head;
+    for (uint32_t i = 0; current != nullptr && i < position; i++)
     {
-        temp = temp->next;
+        current = current->next;
     }
 
-    if (temp == nullptr)
+    if (current == nullptr)
     {
         return;
     }
 
-    if (temp->prev != nullptr)
+    // Special case: deleting tail
+    if (current == Node<T>::tail)
     {
-        temp->prev->next = temp->next;
-    }
-    if (temp->next != nullptr)
-    {
-        temp->next->prev = temp->prev;
+        ListDeleteAtEnd(head);
+        return;
     }
 
-    mem.deallocate(temp);
+    current->prev->next = current->next;
+    current->next->prev = current->prev;
+    mem.deallocate(current);
 }
+
+// Fast search function - no allocation needed
+template <typename T>
+inline Node<T> *ListSearchByData(Node<T> *head, T *target)
+{
+    Node<T> *current = head;
+    while (current != nullptr)
+    {
+        if (current->data == target)
+        {
+            return current;
+        }
+        current = current->next;
+    }
+    return nullptr;
+}
+
+// Explicit template instantiations for static tail members
+template <>
+Node<TaskControlBlock> *Node<TaskControlBlock>::tail = nullptr;
+template <>
+Node<CRTOS::Timer::SoftwareTimer> *Node<CRTOS::Timer::SoftwareTimer>::tail = nullptr;
+template <>
+Node<unsigned long *> *Node<unsigned long *>::tail = nullptr;
 
 static Node<TaskControlBlock> *readyTaskList = nullptr;
 static Node<CRTOS::Timer::SoftwareTimer> *sTimerList = nullptr;
@@ -357,7 +466,7 @@ CRTOS::Mutex::~Mutex(void)
 
 void CRTOS::Mutex::Lock(void)
 {
-	irqMask = getInterruptMask();
+    irqMask = getInterruptMask();
 
     while (flag.test_and_set(std::memory_order_acquire));
 }
@@ -464,15 +573,13 @@ inline __attribute__((always_inline)) uint32_t getInterruptMask(void)
 {
     uint32_t basepri, newBasepri;
 
-    __asm volatile
-    (
+    __asm volatile(
         "mrs %0, basepri    \n"
         "mov %1, %2         \n"
         "msr basepri, %1    \n"
         "isb                \n"
         "dsb                \n"
-        : "=r" ( basepri ), "=r" ( newBasepri ) : "i" ( MAX_SYSCALL_IRQ_PRIO ) : "memory"
-    );
+        : "=r"(basepri), "=r"(newBasepri) : "i"(MAX_SYSCALL_IRQ_PRIO) : "memory");
 
     return basepri;
 }
@@ -596,7 +703,7 @@ CRTOS::Result CRTOS::BinarySemaphore::wait(uint32_t ticks)
                 result = CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
                 return result;
             }
-            
+
             if (isBlocked == false)
             {
                 sCurrentTCB->timeout = timeout;
@@ -613,7 +720,7 @@ CRTOS::Result CRTOS::BinarySemaphore::wait(uint32_t ticks)
         {
             if (_val > 0u)
             {
-            	mask = getInterruptMask();
+                mask = getInterruptMask();
                 if (listOfTasksWaitingToRecv != nullptr)
                 {
                     TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
@@ -640,7 +747,7 @@ CRTOS::Result CRTOS::BinarySemaphore::wait(uint32_t ticks)
             mask = getInterruptMask();
 
             // Find and remove current task from waiting list
-            Node<uint32_t*> *temp = listOfTasksWaitingToRecv;
+            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
             if (temp != nullptr)
             {
                 ListDeleteAtBeginning(listOfTasksWaitingToRecv);
@@ -686,7 +793,7 @@ void RestoreCtxOfTheFirstTask(void)
 
 extern "C" void SVC_Handle_Subprocess(uint32_t *command)
 {
-    uint32_t command_id = (uint32_t)(((char *)command[6u])[-2u]);
+    uint32_t command_id = (uint32_t)(((uint8_t *)command[6u])[-2u]);
     uint32_t *callerStack = command;
 
     switch (command_id)
@@ -723,9 +830,9 @@ extern "C" void PendSV_Handler(void)
         ".syntax unified     \n"
         // Load PSP to R0, PSPLIM to R2, LR to r3
         "mrs r0, psp         \n"
-		"tst lr, #0x10       \n"
-		"it eq               \n"
-		"vstmdbeq r0!, {s16-s31} \n"
+        "tst lr, #0x10       \n"
+        "it eq               \n"
+        "vstmdbeq r0!, {s16-s31} \n"
         "mrs r2, psplim      \n"
         "mov r3, lr          \n"
         // Save r2-r11 under PSP location
@@ -748,9 +855,9 @@ extern "C" void PendSV_Handler(void)
         "ldr r0, [r1]        \n"
         // Restore context of next task
         "ldmia r0!, {r2-r11} \n"
-		"tst r3, #0x10       \n"
-		"it eq               \n"
-		"vldmiaeq r0!, {s16-s31} \n"
+        "tst r3, #0x10       \n"
+        "it eq               \n"
+        "vldmiaeq r0!, {s16-s31} \n"
         // Restore PSPLIM and set new PSP
         "msr psplim, r2      \n"
         "msr psp, r0         \n"
@@ -827,38 +934,38 @@ extern "C" void switchCtx(void)
 
     while (temp != nullptr)
     {
-        switch(temp->data->state)
+        switch (temp->data->state)
         {
-        	case TaskState::TASK_DELAYED:
-        		if (tickCount >= temp->data->delayUpTo)
-				{
-					temp->data->state = TaskState::TASK_READY;
-				}
-        		break;
-        	case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
-				if (tickCount >= temp->data->timeout)
-				{
-					temp->data->state = TaskState::TASK_READY;
-				}
-				break;
-        	case TaskState::TASK_BLOCKED_BY_QUEUE:
-				if (tickCount >= temp->data->timeout)
-				{
-					temp->data->state = TaskState::TASK_READY;
-				}
-				break;
-        	case TaskState::TASK_BLOCKED_BY_CIRC_BUFFER:
-				if (tickCount >= temp->data->timeout)
-				{
-					temp->data->state = TaskState::TASK_READY;
-				}
-				break;
-        	case TaskState::TASK_RUNNING:
-        		sCurrentTCB->state = TaskState::TASK_READY;
-				break;
-        	default:
-        		break;
-		}
+            case TaskState::TASK_DELAYED:
+                if (tickCount >= temp->data->delayUpTo)
+                {
+                    temp->data->state = TaskState::TASK_READY;
+                }
+                break;
+            case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
+                if (tickCount >= temp->data->timeout)
+                {
+                    temp->data->state = TaskState::TASK_READY;
+                }
+                break;
+            case TaskState::TASK_BLOCKED_BY_QUEUE:
+                if (tickCount >= temp->data->timeout)
+                {
+                    temp->data->state = TaskState::TASK_READY;
+                }
+                break;
+            case TaskState::TASK_BLOCKED_BY_CIRC_BUFFER:
+                if (tickCount >= temp->data->timeout)
+                {
+                    temp->data->state = TaskState::TASK_READY;
+                }
+                break;
+            case TaskState::TASK_RUNNING:
+                sCurrentTCB->state = TaskState::TASK_READY;
+                break;
+            default:
+                break;
+        }
 
         if (temp->data->state == TaskState::TASK_READY)
         {
@@ -1130,7 +1237,7 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
     return result;
 }
 
-CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle)
+CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(const uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
     uint32_t prevMask = getInterruptMask();
@@ -1201,6 +1308,161 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(uint8_t *e
 
     setInterruptMask(prevMask);
 
+    return result;
+}
+
+// Binary module loader for modules (PIE BIN with ProgramInfo header)
+CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bin, const char *const name, void *args, uint32_t prio, TaskHandle *handle)
+{
+    if (bin == nullptr || name == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+    uint32_t prevMask = getInterruptMask();
+    void *pool = nullptr;
+    uint32_t poolSize = 0u;
+
+    __DSB();
+    __ISB();
+
+    mem.getMemoryPool(&pool, poolSize);
+    if ((pool == nullptr) || (poolSize == 0u))
+    {
+        return CRTOS::Result::RESULT_MEMORY_NOT_INITIALIZED;
+    }
+
+    do
+    {
+        TaskControlBlock *tmpTCB = reinterpret_cast<TaskControlBlock *>(mem.allocate(sizeof(TaskControlBlock)));
+        if (tmpTCB == nullptr)
+        {
+            result = CRTOS::Result::RESULT_NO_MEMORY;
+            continue;
+        }
+
+        memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
+        tmpTCB->function_args = args;
+        tmpTCB->enterCycles = 0u;
+        tmpTCB->exitCycles = 0u;
+
+        // Determine image size using descriptor if present; otherwise fallback to data offset + data size
+        ProgramInfoBin *pinfo_src = reinterpret_cast<ProgramInfoBin *>(bin);
+        uint32_t imgSize = 0u;
+        ModuleDescriptorBin *md = reinterpret_cast<ModuleDescriptorBin *>(bin + sizeof(ProgramInfoBin));
+        if (md->magic == MODULE_MAGIC)
+        {
+            imgSize = md->image_size;
+        }
+        else
+        {
+            // Fallback: include code/rodata up to data image
+            imgSize = pinfo_src->section_data_start_addr + pinfo_src->section_data_size;
+        }
+        if (imgSize == 0u)
+        {
+            // As a last resort, assume 4KB
+            imgSize = DEFAULT_MODULE_LEN;
+        }
+
+        // Allocate and copy the BIN image into heap (like Elf loader does)
+        uint8_t *binary = reinterpret_cast<uint8_t *>(mem.allocate(imgSize));
+        if (binary == nullptr)
+        {
+            mem.deallocate(tmpTCB);
+            result = CRTOS::Result::RESULT_NO_MEMORY;
+            continue;
+        }
+
+        memcpy_optimized(binary, bin, imgSize);
+
+        // Work on the copied image
+        ProgramInfoBin *pinfo = reinterpret_cast<ProgramInfoBin *>(binary);
+
+        // Compute RAM allocation for .data + .bss + stack
+        uint32_t ramDataBytes = pinfo->section_data_size;
+        uint32_t ramBssBytes = pinfo->section_bss_size;
+        uint32_t stackSize = (pinfo->stackPointer > pinfo->msp_limit) ? (pinfo->stackPointer - pinfo->msp_limit) : 0u;
+        uint32_t ramSize = ramDataBytes + ramBssBytes + stackSize;
+        if (stackSize == 0u)
+        {
+            stackSize = DEFAULT_STACK_SIZE;
+        }
+        if (ramSize == 0u)
+        {
+            ramSize = stackSize;
+        }
+
+        uint8_t *stk = reinterpret_cast<uint8_t *>(mem.allocate(ramSize));
+        if (stk == nullptr)
+        {
+            mem.deallocate(binary);
+            mem.deallocate(tmpTCB);
+            result = CRTOS::Result::RESULT_NO_MEMORY;
+            continue;
+        }
+        memset_optimized(stk, 0u, ramSize);
+
+        // Copy .data image from BIN into the new RAM area; locate source inside copied image
+        if (ramDataBytes)
+        {
+            void *src = (void *)(binary + pinfo->section_data_start_addr);
+            memcpy_optimized(stk, src, ramDataBytes);
+        }
+        uint32_t new_data_ram_addr = (uint32_t)stk;
+        uint32_t new_bss_addr = new_data_ram_addr + ramDataBytes;
+        uint32_t new_msp = (uint32_t)(stk + ramSize);
+        uint32_t new_msplim = new_msp - stackSize;
+
+        // Relocate entry: binary image base is at 'binary', entry is offset from base; set Thumb bit
+        uint32_t new_entry = (uint32_t)(binary + pinfo->entryPoint);
+        new_entry |= 1u;
+
+        // Update ProgramInfo inside the copied image (mirroring ELF parser behavior)
+        pinfo->section_data_dest_addr = new_data_ram_addr;
+        pinfo->section_data_start_addr = (uint32_t)(binary + pinfo->section_data_start_addr);
+        pinfo->section_bss_start_addr = new_bss_addr;
+        pinfo->stackPointer = new_msp;
+        pinfo->msp_limit = new_msplim;
+        pinfo->entryPoint = new_entry;
+        pinfo->vtor_offset = (uint32_t)(binary + 0); // segment base for this BIN
+
+        // Fill TCB using relocated values
+        tmpTCB->stack = (uint32_t *)new_msplim;
+        tmpTCB->stackSize = (stackSize / sizeof(uint32_t));
+        tmpTCB->function = (void (*)(void *))new_entry;
+        tmpTCB->vtor_addr = 0u; // pinfo->vtor_offset;
+        tmpTCB->state = TaskState::TASK_READY;
+        tmpTCB->timeout = 0u;
+        tmpTCB->delayUpTo = 0u;
+
+        if (prio >= MAX_TASK_PRIORITY)
+        {
+            tmpTCB->priority = MAX_TASK_PRIORITY - 1u;
+        }
+        else
+        {
+            tmpTCB->priority = prio;
+        }
+
+        // Initialize stack frame
+        volatile uint32_t *alignedTop = (uint32_t *)(((uint32_t)new_msp) & ~7u);
+        tmpTCB->stackTop = initStack(alignedTop, tmpTCB->stack, tmpTCB->function, args);
+
+        // Task name
+        uint32_t nameLength = pStringLength(name);
+        memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 20u ? nameLength : 20u);
+
+        // Insert to ready list
+        ListInsertAtEnd(readyTaskList, tmpTCB);
+        if (handle != nullptr)
+        {
+            *handle = (TaskHandle)tmpTCB;
+        }
+    } while (0);
+
+    setInterruptMask(prevMask);
     return result;
 }
 
@@ -1390,19 +1652,19 @@ uint32_t CRTOS::Task::GetFreeStack(void)
 {
     TaskControlBlock *tcb = (TaskControlBlock *)sCurrentTCB;
 
-	uint32_t *stackStart = (uint32_t *)(sCurrentTCB->stack);
-	uint32_t *stackEnd = (uint32_t *)(sCurrentTCB->stack + sCurrentTCB->stackSize);
+    uint32_t *stackStart = (uint32_t *)(sCurrentTCB->stack);
+    uint32_t *stackEnd = (uint32_t *)(sCurrentTCB->stack + sCurrentTCB->stackSize);
 
-	uint32_t usedStack = 0u;
+    uint32_t usedStack = 0u;
 
-	for (uint32_t *ptr = stackStart; ptr < stackEnd; ++ptr)
-	{
-		if (*ptr != 0xDEADBEEF)
-		{
-			usedStack = (uint32_t)(stackEnd - ptr);
-			break;
-		}
-	}
+    for (uint32_t *ptr = stackStart; ptr < stackEnd; ++ptr)
+    {
+        if (*ptr != 0xDEADBEEF)
+        {
+            usedStack = (uint32_t)(stackEnd - ptr);
+            break;
+        }
+    }
 
     return (tcb->stackSize - usedStack);
 }
@@ -1416,9 +1678,9 @@ void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
     static uint32_t lastMantissa = 0u;
     static bool firstRun = true;
     static const uint32_t UPDATE_INTERVAL_TICKS = 1000u; // Update every 1 second at 1kHz
-    
+
     uint32_t currentTime = GetSystemTime();
-    
+
     // Only calculate load periodically to get meaningful averages
     if (currentTime - lastCheckTime < UPDATE_INTERVAL_TICKS)
     {
@@ -1427,7 +1689,7 @@ void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
         mantissa = lastMantissa;
         return;
     }
-    
+
     // Get current execution times
     uint64_t currentIdle = GetIdleTaskTime();
     uint64_t currentTotal = 0u;
@@ -1448,7 +1710,7 @@ void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
         lastTotalTime = currentTotal;
         lastCheckTime = currentTime;
         firstRun = false;
-        
+
         load = 0u;
         mantissa = 0u;
         lastLoad = load;
@@ -1459,7 +1721,7 @@ void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
     // Calculate delta since last measurement
     uint64_t deltaIdle = currentIdle - lastIdleTime;
     uint64_t deltaTotal = currentTotal - lastTotalTime;
-    
+
     // Store current values for next calculation
     lastIdleTime = currentIdle;
     lastTotalTime = currentTotal;
@@ -1477,19 +1739,19 @@ void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
 
     // Calculate CPU load as percentage with better precision
     uint64_t idle_percentage_scaled = (deltaIdle * 10000u) / deltaTotal;
-    
+
     // Clamp to maximum 100%
     if (idle_percentage_scaled > 10000u)
     {
         idle_percentage_scaled = 10000u;
     }
-    
+
     // CPU load = 100% - idle%
     uint64_t cpu_load_scaled = 10000u - idle_percentage_scaled;
-    
+
     load = (uint32_t)(cpu_load_scaled / 100u);
     mantissa = (uint32_t)(cpu_load_scaled % 100u);
-    
+
     // Store for returning between updates
     lastLoad = load;
     lastMantissa = mantissa;
@@ -1620,7 +1882,7 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
         {
             if (mSize > 0u)
             {
-            	mask = getInterruptMask();
+                mask = getInterruptMask();
                 if (listOfTasksWaitingToRecv != nullptr)
                 {
                     TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
@@ -1645,14 +1907,14 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
         {
             // Timeout occurred - remove ourselves from waiting list
             mask = getInterruptMask();
-            
+
             // Find and remove current task from waiting list
-            Node<uint32_t*> *temp = listOfTasksWaitingToRecv;
+            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
             if (temp != nullptr)
             {
                 ListDeleteAtBeginning(listOfTasksWaitingToRecv);
             }
-            
+
             sCurrentTCB->state = TaskState::TASK_READY;
             setInterruptMask(mask);
 
@@ -1663,63 +1925,63 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
 }
 
 CRTOS::CircularBuffer::CircularBuffer(uint32_t mBuffer_size)
-   : mBuffer(nullptr),
-     mHead(0u),
-     mTail(0u),
-     mCurrentSize(0u),
-     mBufferSize(mBuffer_size)
+    : mBuffer(nullptr),
+      mHead(0u),
+      mTail(0u),
+      mCurrentSize(0u),
+      mBufferSize(mBuffer_size)
 {
 }
 
 CRTOS::CircularBuffer::CircularBuffer(const CircularBuffer &old)
 {
-   uint32_t mask = getInterruptMask();
+    uint32_t mask = getInterruptMask();
 
-   mHead = old.mHead;
-   mTail = old.mTail;
-   mCurrentSize = old.mCurrentSize;
-   mBufferSize = old.mBufferSize;
-   mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
-   memcpy_optimized(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
+    mHead = old.mHead;
+    mTail = old.mTail;
+    mCurrentSize = old.mCurrentSize;
+    mBufferSize = old.mBufferSize;
+    mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
+    memcpy_optimized(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
 
-   setInterruptMask(mask);
+    setInterruptMask(mask);
 }
 
 CRTOS::CircularBuffer::~CircularBuffer(void)
 {
-   mem.deallocate(mBuffer);
+    mem.deallocate(mBuffer);
 }
 
 CRTOS::Result CRTOS::CircularBuffer::Init(void)
 {
-   CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
 
-   uint32_t mask = getInterruptMask();
+    uint32_t mask = getInterruptMask();
 
-   do
-   {
-       if (mBufferSize == 0)
-       {
-           setInterruptMask(mask);
+    do
+    {
+        if (mBufferSize == 0)
+        {
+            setInterruptMask(mask);
 
-           result = CRTOS::Result::RESULT_BAD_PARAMETER;
-           continue;
-       }
+            result = CRTOS::Result::RESULT_BAD_PARAMETER;
+            continue;
+        }
 
-       mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
+        mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
 
-       if (mBuffer == nullptr)
-       {
-           setInterruptMask(mask);
+        if (mBuffer == nullptr)
+        {
+            setInterruptMask(mask);
 
-           result = CRTOS::Result::RESULT_NO_MEMORY;
-           continue;
-       }
+            result = CRTOS::Result::RESULT_NO_MEMORY;
+            continue;
+        }
 
-       setInterruptMask(mask);
-   } while (0u);
+        setInterruptMask(mask);
+    } while (0u);
 
-   return result;
+    return result;
 }
 
 CRTOS::Result CRTOS::CircularBuffer::Send(const uint8_t *data, uint32_t size)
@@ -1854,7 +2116,7 @@ CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint3
         {
             if (mCurrentSize >= size)
             {
-            	mask = getInterruptMask();
+                mask = getInterruptMask();
                 if (listOfTasksWaitingToRecv != nullptr)
                 {
                     TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
@@ -1879,17 +2141,17 @@ CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint3
         {
             // Timeout occurred - remove ourselves from waiting list
             mask = getInterruptMask();
-            
+
             // Find and remove current task from waiting list
-            Node<uint32_t*> *temp = listOfTasksWaitingToRecv;
+            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
             if (temp != nullptr)
             {
                 ListDeleteAtBeginning(listOfTasksWaitingToRecv);
             }
-            
+
             sCurrentTCB->state = TaskState::TASK_READY;
             setInterruptMask(mask);
-            
+
             result = CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
             return result;
         }
