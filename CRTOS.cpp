@@ -15,6 +15,7 @@
 
 #include "ELFParser.hpp"
 #include "kernel.h"
+#include "stdio.h"
 
 typedef void (*TaskFunction)(void *);
 
@@ -82,6 +83,27 @@ typedef struct __attribute__((packed)) ModuleDescriptorBin
     uint32_t reserved[6];
 } ModuleDescriptorBin;
 
+// Module tracking structure
+struct LoadedModuleInfo
+{
+    char name[20];
+    uint32_t baseAddress;
+    uint32_t entryPoint;
+    uint32_t textAddr;
+    uint32_t textSize;
+    uint32_t dataAddr;
+    uint32_t dataSize;
+    uint32_t bssAddr;
+    uint32_t bssSize;
+    uint32_t stackAddr;
+    uint32_t stackSize;
+    uint32_t totalSize;
+    TaskControlBlock *tcb;
+    CRTOS::ModuleState state;
+    uint32_t loadTime;
+    ModuleSharedMemory *sharedMemory; // Shared memory for data exchange
+};
+
 typedef struct
 {
     volatile uint32_t CTRL;
@@ -97,6 +119,11 @@ typedef struct
 
 __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = nullptr;
 CRTOS::Task::TaskHandle idleTaskHandle = nullptr;
+
+// Module tracking
+static LoadedModuleInfo *loadedModules = nullptr;
+static uint32_t loadedModulesCount = 0;
+static const uint32_t MAX_LOADED_MODULES = 16;
 
 constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
 constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
@@ -131,15 +158,15 @@ static inline void __ISB(void);
 extern "C" void memcpy_optimized(void *d, void *s, uint32_t len);
 extern "C" void memset_optimized(void *d, uint32_t val, uint32_t len);
 
-static volatile uint32_t tickCount  = 0u;
+static volatile uint32_t tickCount = 0u;
 
-static uint32_t MAX_TASK_PRIORITY   = 10u;
-static uint32_t sTickRate           = 1000u;
-static uint32_t sCoreClock          = 150000000u;
+static uint32_t MAX_TASK_PRIORITY = 10u;
+static uint32_t sTickRate = 1000u;
+static uint32_t sCoreClock = 150000000u;
 
-static constexpr uint32_t MODULE_MAGIC          = 0x4D4F4455u; // 'MODU'
-static constexpr uint32_t DEFAULT_MODULE_LEN    = 4096u;
-static constexpr uint32_t DEFAULT_STACK_SIZE    = 1024u;
+static constexpr uint32_t MODULE_MAGIC = 0x4D4F4455u; // 'MODU'
+static constexpr uint32_t DEFAULT_MODULE_LEN = 4096u;
+static constexpr uint32_t DEFAULT_STACK_SIZE = 1024u;
 
 static HeapAllocator mem;
 
@@ -444,6 +471,8 @@ Node<unsigned long *> *Node<unsigned long *>::tail = nullptr;
 static Node<TaskControlBlock> *readyTaskList = nullptr;
 static Node<CRTOS::Timer::SoftwareTimer> *sTimerList = nullptr;
 
+static CRTOS::Task::StackOverflowHook sStackOverflowHook = nullptr;
+
 uint32_t pStringLength(const char *buffer)
 {
     const char *tmp = buffer;
@@ -468,7 +497,8 @@ void CRTOS::Mutex::Lock(void)
 {
     irqMask = getInterruptMask();
 
-    while (flag.test_and_set(std::memory_order_acquire));
+    while (flag.test_and_set(std::memory_order_acquire))
+        ;
 }
 
 void CRTOS::Mutex::Unlock(void)
@@ -490,6 +520,16 @@ CRTOS::Result CRTOS::Config::InitMem(void *pool, uint32_t size)
     return CRTOS::Result::RESULT_SUCCESS;
 }
 
+void *CRTOS::Config::Allocate(uint32_t size)
+{
+    return mem.allocate(size);
+}
+
+void CRTOS::Config::Deallocate(void *ptr)
+{
+    mem.deallocate(ptr);
+}
+
 uint32_t CRTOS::Config::GetAllocatedMemory(void)
 {
     return mem.getAllocatedMemory();
@@ -498,6 +538,41 @@ uint32_t CRTOS::Config::GetAllocatedMemory(void)
 uint32_t CRTOS::Config::GetFreeMemory(void)
 {
     return mem.getFreeMemory();
+}
+
+uint32_t CRTOS::Config::GetTotalHeapSize(void)
+{
+    void *pool = nullptr;
+    uint32_t size = 0;
+    mem.getMemoryPool(&pool, size);
+    return size;
+}
+
+void CRTOS::Config::GetHeapInfo(CRTOS::HeapInfo &info)
+{
+    void *pool = nullptr;
+    uint32_t totalSize = 0;
+
+    mem.getMemoryPool(&pool, totalSize);
+
+    info.totalSize = totalSize;
+    info.freeMemory = mem.getFreeMemory();
+    info.allocatedMemory = mem.getAllocatedMemory();
+
+    // Calculate utilization percentage
+    if (totalSize > 0)
+    {
+        info.utilizationPercent = (info.allocatedMemory * 100) / totalSize;
+    }
+    else
+    {
+        info.utilizationPercent = 0;
+    }
+}
+
+void CRTOS::Config::DefragmentHeap(void)
+{
+    mem.defragment();
 }
 
 CRTOS::Result CRTOS::Timer::Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void *), void *callbackArgs, bool autoReload)
@@ -708,8 +783,7 @@ CRTOS::Result CRTOS::BinarySemaphore::wait(uint32_t ticks)
             {
                 sCurrentTCB->timeout = timeout;
                 sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_SEMAPHORE;
-                uint32_t *tmp = (uint32_t *)sCurrentTCB;
-                ListInsertAtEnd(listOfTasksWaitingToRecv, &tmp);
+                ListInsertAtEnd(listOfTasksWaitingToRecv, (uint32_t **)&sCurrentTCB);
                 isBlocked = true;
             }
         }
@@ -771,22 +845,15 @@ void RestoreCtxOfTheFirstTask(void)
         "ldr  r2, currentCtxTCB                \n"
         "ldr  r1, [r2]                         \n"
         "ldr  r0, [r1]                         \n"
-        // R1 = PSPLIM || R2 = EXC_RETURN
-        "ldm  r0!, {r1-r2}                     \n"
-        // Set current task PSPLIM
-        "msr  psplim, r1                       \n"
-        // Switch to PSP - thread mode
-        "movs r1, #2                           \n"
-        "msr  CONTROL, r1                      \n"
-        // Discard R4-R11
-        "ldm   r0!, {r4-r11}                   \n"
+        // R2 = EXC_RETURN
+        "ldm  r0!, {r4-r11, lr}                \n"
         // Update current PSP
         "msr  psp, r0                          \n"
         "isb                                   \n"
         "mov  r0, #0                           \n"
         // Enable interrupts and exit
         "msr  basepri, r0                      \n"
-        "bx   r2                               \n"
+        "bx   lr                               \n"
         ".align 4                              \n"
         "currentCtxTCB: .word sCurrentTCB      \n");
 }
@@ -796,16 +863,226 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
     uint32_t command_id = (uint32_t)(((uint8_t *)command[6u])[-2u]);
     uint32_t *callerStack = command;
 
+    // DEBUG: Print all SVC calls from modules
+    if (command_id >= 4)
+    {
+        printf("DEBUG SVC: command=%lu, caller=0x%08lX, R0=0x%08lX\r\n",
+               command_id, command[6u], callerStack[0u]);
+    }
+
     switch (command_id)
     {
-        case SVC_Commands::COMMAND_TASK_DELAY:
-            CRTOS::Task::Delay(callerStack[0u]);
-            break;
-        case SVC_Commands::COMMAND_START_SCHEDULER:
-            RestoreCtxOfTheFirstTask();
-            break;
-        default:
-            break;
+    case SVC_Commands::COMMAND_TASK_DELAY:
+        CRTOS::Task::Delay(callerStack[0u]);
+        break;
+    case SVC_Commands::COMMAND_START_SCHEDULER:
+        RestoreCtxOfTheFirstTask();
+        break;
+    case SVC_Commands::COMMAND_MODULE_GET_SHARED_MEM:
+    {
+        // Find the module associated with the current task
+        ModuleSharedMemory *sharedMem = nullptr;
+        if (loadedModules != nullptr && sCurrentTCB != nullptr && loadedModulesCount > 0)
+        {
+            for (uint32_t i = 0; i < loadedModulesCount; i++)
+            {
+                if (loadedModules[i].tcb == sCurrentTCB && loadedModules[i].sharedMemory != nullptr)
+                {
+                    sharedMem = loadedModules[i].sharedMemory;
+                    printf("DEBUG SVC: Found shared memory for task at 0x%08lX\n", (uint32_t)sharedMem);
+                    break;
+                }
+            }
+            if (sharedMem == nullptr)
+            {
+                printf("DEBUG SVC: Shared memory NOT found. Current TCB=0x%08lX, Modules=%lu\n",
+                       (uint32_t)sCurrentTCB, loadedModulesCount);
+            }
+        }
+        else
+        {
+            printf("DEBUG SVC: Invalid state - modules=0x%08lX, TCB=0x%08lX, count=%lu\n",
+                   (uint32_t)loadedModules, (uint32_t)sCurrentTCB, loadedModulesCount);
+        }
+        // Return pointer in R0 (will be null if not found or invalid)
+        callerStack[0u] = (uint32_t)sharedMem;
+        break;
+    }
+    case SVC_Commands::COMMAND_MODULE_LOG:
+    {
+        // Print log message from module directly to console
+        const char *message = (const char *)callerStack[0u];
+        if (message != nullptr)
+        {
+            printf("%s", message);
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_TIMER_INIT:
+    {
+        // Timer init: R0 = timer ptr, R1 = timeout, R2 = callback, R3 = args, [SP+0] = autoReload
+        CRTOS::Timer::SoftwareTimer *timer = (CRTOS::Timer::SoftwareTimer *)callerStack[0u];
+        uint32_t timeout = callerStack[1u];
+        void (*callback)(void *) = (void (*)(void *))callerStack[2u];
+        void *args = (void *)callerStack[3u];
+        uint32_t autoReload = callerStack[4u]; // From stack frame
+
+        CRTOS::Result result = CRTOS::Timer::Init(timer, timeout, callback, args, autoReload != 0);
+        callerStack[0u] = (uint32_t)result;
+        break;
+    }
+    case SVC_Commands::COMMAND_TIMER_START:
+    {
+        // Timer start: R0 = timer ptr
+        CRTOS::Timer::SoftwareTimer *timer = (CRTOS::Timer::SoftwareTimer *)callerStack[0u];
+        CRTOS::Result result = CRTOS::Timer::Start(timer);
+        callerStack[0u] = (uint32_t)result;
+        break;
+    }
+    case SVC_Commands::COMMAND_TIMER_STOP:
+    {
+        // Timer stop: R0 = timer ptr
+        CRTOS::Timer::SoftwareTimer *timer = (CRTOS::Timer::SoftwareTimer *)callerStack[0u];
+        CRTOS::Result result = CRTOS::Timer::Stop(timer);
+        callerStack[0u] = (uint32_t)result;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+extern "C" void MemManage_Handler(void)
+{
+    // Determine which stack pointer to use and call the print info function
+    __asm volatile(
+        "MOV R1, LR\n" // Save exception return LR value
+        "TST R1, #4\n" // Test bit 2 to determine stack
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"          // If using MSP
+        "MRSNE R0, PSP\n"          // If using PSP
+        "PUSH {R1, LR}\n"          // Save exception LR and current LR
+        "BL MemManage_PrintInfo\n" // Call function (it may return or hang)
+        "POP {R1, LR}\n"           // Restore exception LR
+        "BX R1\n"                  // Exception return using saved EXC_RETURN value
+    );
+}
+
+extern "C" void MemManage_PrintInfo(uint32_t *stack_frame)
+{
+    // Stack frame: R0, R1, R2, R3, R12, LR, PC, xPSR
+    uint32_t r0 = stack_frame[0];
+    uint32_t r1 = stack_frame[1];
+    uint32_t r2 = stack_frame[2];
+    uint32_t r3 = stack_frame[3];
+    uint32_t r12 = stack_frame[4];
+    uint32_t lr = stack_frame[5];
+    uint32_t pc = stack_frame[6];
+    uint32_t psr = stack_frame[7];
+
+    volatile uint32_t *CFSR = (uint32_t *)0xE000ED28;
+    volatile uint32_t *MMFAR = (uint32_t *)0xE000ED34;
+    uint32_t mmfsr = (*CFSR) & 0xFF;
+    uint32_t mmfar = *MMFAR;
+
+    // Print fault information
+    printf("\r\n\r\n=== MEMMANAGE FAULT ===\r\n");
+    printf("MMFSR: 0x%02X\r\n", (unsigned int)mmfsr);
+
+    // Decode fault type
+    printf("Fault Type: ");
+    if (mmfsr & 0x01)
+        printf("IACCVIOL (Instruction access violation) ");
+    if (mmfsr & 0x02)
+        printf("DACCVIOL (Data access violation) ");
+    if (mmfsr & 0x08)
+        printf("MUNSTKERR (Unstacking error) ");
+    if (mmfsr & 0x10)
+        printf("MSTKERR (Stacking error) ");
+    if (mmfsr & 0x20)
+        printf("MLSPERR (FP lazy state error) ");
+    printf("\r\n");
+
+    // Print MMFAR only if valid
+    if (mmfsr & 0x80)
+    {
+        printf("MMFAR (Fault Address): 0x%08X (VALID)\r\n", (unsigned int)mmfar);
+    }
+    else
+    {
+        printf("MMFAR (Fault Address): 0x%08X (INVALID - not set for this fault type)\r\n", (unsigned int)mmfar);
+        if (mmfsr & 0x01)
+        {
+            printf("  Note: For IACCVIOL, check PC or register values for the target address\r\n");
+        }
+    }
+
+    printf("\r\nStack Frame:\r\n");
+    printf("  R0:  0x%08X\r\n", (unsigned int)r0);
+    printf("  R1:  0x%08X\r\n", (unsigned int)r1);
+    printf("  R2:  0x%08X\r\n", (unsigned int)r2);
+    printf("  R3:  0x%08X\r\n", (unsigned int)r3);
+    printf("  R12: 0x%08X (Jump to this address caused the issue)\r\n", (unsigned int)r12);
+    printf("  LR:  0x%08X\r\n", (unsigned int)lr);
+    printf("  PC:  0x%08X (Fault occurred here)\r\n", (unsigned int)pc);
+    printf("  PSR: 0x%08X\r\n", (unsigned int)psr);
+
+    // Attempt recovery
+    printf("\r\nAttempting to recover from fault...\r\n");
+
+    // Check stack boundaries first - MIMXRT1052 RAM typically 0x20000000-0x20020000
+    uint32_t stack_ptr = (uint32_t)stack_frame;
+    uint32_t stack_after_return = stack_ptr + 32; // Exception frame is 32 bytes
+
+    // If stack would be at/beyond RAM limit after return, cannot safely recover
+    if (stack_after_return >= 0x20020000)
+    {
+        printf("ERROR: Stack at 0x%08X, would overflow after exception return!\r\n", (unsigned int)stack_ptr);
+        printf("Stack overflow detected - cannot recover.\r\n");
+        printf("===================\r\n\r\n");
+        while (1)
+        {
+        }
+    }
+
+    // Clear the MemManage fault status bits by writing 1s to them
+    *CFSR = mmfsr;
+
+    // Get current task information
+    CRTOS::Task::TaskHandle currentTask = CRTOS::Task::GetCurrentTaskHandle();
+    char *taskName = CRTOS::Task::GetCurrentTaskName();
+
+    printf("Faulting Task: %s (handle: 0x%08X)\r\n",
+           taskName ? taskName : "Unknown", (unsigned int)currentTask);
+
+    // Kill the faulting task
+    printf("Terminating faulting task...\r\n");
+    CRTOS::Result result = CRTOS::Task::Delete(&currentTask);
+
+    if (result == CRTOS::Result::RESULT_SUCCESS)
+    {
+        printf("Task terminated successfully. System will continue with other tasks.\r\n");
+        printf("===================\r\n\r\n");
+
+        // Clear fault flags again
+        *CFSR = mmfsr;
+
+        // Force a context switch to another task
+        // Trigger PendSV to schedule next task
+        volatile uint32_t *ICSR = (uint32_t *)0xE000ED04;
+        *ICSR = (1 << 28); // Set PENDSVSET bit
+
+        // The exception return will now switch to a different task
+        return;
+    }
+    else
+    {
+        printf("ERROR: Failed to terminate task (error %d)\r\n", (int)result);
+        printf("System cannot recover.\r\n");
+        printf("===================\r\n\r\n");
+        while (1)
+        {
+        }
     }
 }
 
@@ -828,18 +1105,21 @@ extern "C" void PendSV_Handler(void)
 {
     __asm volatile(
         ".syntax unified     \n"
-        // Load PSP to R0, PSPLIM to R2, LR to r3
+        // Load PSP to R0
         "mrs r0, psp         \n"
-        "tst lr, #0x10       \n"
-        "it eq               \n"
+        // Save FPU context if needed
+        "tst r14, #0x10          \n"
+        "it eq                   \n"
         "vstmdbeq r0!, {s16-s31} \n"
-        "mrs r2, psplim      \n"
-        "mov r3, lr          \n"
-        // Save r2-r11 under PSP location
-        "stmdb r0!, {r2-r11} \n"
-        // Save new PSP
+        // Save r4-r11 and LR under PSP location
+        "stmdb r0!, {r4-r11, lr} \n"
+        // NOW check for stack overflow after all registers are pushed
         "ldr r2, currentTCB  \n"
         "ldr r1, [r2]        \n"
+        "ldr r3, [r1, #4]    \n" // Load stack bottom address (TCB->stack)
+        "cmp r0, r3          \n" // Compare PSP with stack bottom
+        "blo stackOverflow   \n" // Branch if PSP < stack bottom (overflow!)
+        // Save new PSP
         "str r0, [r1]        \n"
         // Perform context switch
         "mov r0, %0          \n"
@@ -854,19 +1134,17 @@ extern "C" void PendSV_Handler(void)
         "ldr r1, [r2]        \n"
         "ldr r0, [r1]        \n"
         // Restore context of next task
-        "ldmia r0!, {r2-r11} \n"
-        "tst r3, #0x10       \n"
-        "it eq               \n"
+        "ldmia r0!, {r4-r11, lr} \n"
+        "tst r14, #0x10          \n"
+        "it eq                   \n"
         "vldmiaeq r0!, {s16-s31} \n"
-        // Restore PSPLIM and set new PSP
-        "msr psplim, r2      \n"
+        // set new PSP
         "msr psp, r0         \n"
-
-        "ldr r0, [r1, #20]   \n"
-        "ldr r1, =0xE000ED08 \n"
-        "str r0, [r1]        \n"
         // Leave interrupt
-        "bx r3               \n"
+        "bx lr               \n"
+        "stackOverflow:      \n"
+        "bl stackOverflowDetected \n"
+        "b stackOverflow     \n" // Infinite loop after overflow
         ".align 4            \n"
         "currentTCB: .word sCurrentTCB \n" ::"i"(MAX_SYSCALL_IRQ_PRIO));
 }
@@ -875,6 +1153,8 @@ void startFirstTask(void)
 {
     __asm volatile(
         ".syntax unified \n"
+        "mov r0, #0      \n"
+        "msr control, r0 \n"
         "cpsie i         \n"
         "cpsie f         \n"
         "dsb             \n"
@@ -897,6 +1177,24 @@ __attribute__((always_inline)) static inline void __DSB(void)
 extern "C" char *currentTaskName(void)
 {
     return (char *)(&(sCurrentTCB->name[0]));
+}
+
+extern "C" void stackOverflowDetected(void)
+{
+    (void)getInterruptMask();
+    __DSB();
+    __ISB();
+
+    if (sStackOverflowHook != nullptr && sCurrentTCB != nullptr)
+    {
+        sStackOverflowHook((const char *)(&(sCurrentTCB->name[0])), (void *)sCurrentTCB);
+    }
+
+    // Infinite loop if no hook or after hook returns
+    while (1)
+    {
+        __asm volatile("nop");
+    }
 }
 
 void updateExitCycles(void)
@@ -936,35 +1234,35 @@ extern "C" void switchCtx(void)
     {
         switch (temp->data->state)
         {
-            case TaskState::TASK_DELAYED:
-                if (tickCount >= temp->data->delayUpTo)
-                {
-                    temp->data->state = TaskState::TASK_READY;
-                }
-                break;
-            case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
-                if (tickCount >= temp->data->timeout)
-                {
-                    temp->data->state = TaskState::TASK_READY;
-                }
-                break;
-            case TaskState::TASK_BLOCKED_BY_QUEUE:
-                if (tickCount >= temp->data->timeout)
-                {
-                    temp->data->state = TaskState::TASK_READY;
-                }
-                break;
-            case TaskState::TASK_BLOCKED_BY_CIRC_BUFFER:
-                if (tickCount >= temp->data->timeout)
-                {
-                    temp->data->state = TaskState::TASK_READY;
-                }
-                break;
-            case TaskState::TASK_RUNNING:
-                sCurrentTCB->state = TaskState::TASK_READY;
-                break;
-            default:
-                break;
+        case TaskState::TASK_DELAYED:
+            if (tickCount >= temp->data->delayUpTo)
+            {
+                temp->data->state = TaskState::TASK_READY;
+            }
+            break;
+        case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
+            if (tickCount >= temp->data->timeout)
+            {
+                temp->data->state = TaskState::TASK_READY;
+            }
+            break;
+        case TaskState::TASK_BLOCKED_BY_QUEUE:
+            if (tickCount >= temp->data->timeout)
+            {
+                temp->data->state = TaskState::TASK_READY;
+            }
+            break;
+        case TaskState::TASK_BLOCKED_BY_CIRC_BUFFER:
+            if (tickCount >= temp->data->timeout)
+            {
+                temp->data->state = TaskState::TASK_READY;
+            }
+            break;
+        case TaskState::TASK_RUNNING:
+            sCurrentTCB->state = TaskState::TASK_READY;
+            break;
+        default:
+            break;
         }
 
         if (temp->data->state == TaskState::TASK_READY)
@@ -1032,6 +1330,7 @@ uint32_t *initStack(volatile uint32_t *stackTop, volatile uint32_t *stackEnd, Ta
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R2
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R1
     *(--stackTop) = (uint32_t)args;         // R0
+    *(--stackTop) = (uint32_t)0xFFFFFFFDul; // EXC_RETURN
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R11
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R10
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R09
@@ -1040,8 +1339,6 @@ uint32_t *initStack(volatile uint32_t *stackTop, volatile uint32_t *stackEnd, Ta
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R06
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R05
     *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R04
-    *(--stackTop) = (uint32_t)0xFFFFFFFDul; // EXC_RETURN
-    *(--stackTop) = (uint32_t)stackEnd;     // PSPLIM
 
     return ((uint32_t *)stackTop);
 }
@@ -1153,6 +1450,11 @@ void CRTOS::Task::Yield(void)
         __DSB();
         __ISB();
     }
+}
+
+void CRTOS::Task::SetStackOverflowHook(CRTOS::Task::StackOverflowHook hook)
+{
+    sStackOverflowHook = hook;
 }
 
 CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle)
@@ -1353,12 +1655,12 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         ModuleDescriptorBin *md = reinterpret_cast<ModuleDescriptorBin *>(bin + sizeof(ProgramInfoBin));
         if (md->magic == MODULE_MAGIC)
         {
-            imgSize = md->image_size;
+            imgSize = md->image_size; // This already includes .bss with new linker script
         }
         else
         {
-            // Fallback: include code/rodata up to data image
-            imgSize = pinfo_src->section_data_start_addr + pinfo_src->section_data_size;
+            // Fallback: include code/rodata/data and add .bss
+            imgSize = pinfo_src->section_data_start_addr + pinfo_src->section_data_size + pinfo_src->section_bss_size;
         }
         if (imgSize == 0u)
         {
@@ -1366,7 +1668,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
             imgSize = DEFAULT_MODULE_LEN;
         }
 
-        // Allocate and copy the BIN image into heap (like Elf loader does)
+        // Allocate space for the entire module image (code + data + bss)
         uint8_t *binary = reinterpret_cast<uint8_t *>(mem.allocate(imgSize));
         if (binary == nullptr)
         {
@@ -1375,26 +1677,28 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
             continue;
         }
 
-        memcpy_optimized(binary, bin, imgSize);
+        // Copy the binary file content (which does NOT include .bss since it's uninitialized)
+        // The .bss space is allocated but not in the binary file
+        uint32_t binarySizeWithoutBss = imgSize - pinfo_src->section_bss_size;
+        memcpy_optimized(binary, bin, binarySizeWithoutBss);
 
         // Work on the copied image
         ProgramInfoBin *pinfo = reinterpret_cast<ProgramInfoBin *>(binary);
 
-        // Compute RAM allocation for .data + .bss + stack
-        uint32_t ramDataBytes = pinfo->section_data_size;
-        uint32_t ramBssBytes = pinfo->section_bss_size;
-        uint32_t stackSize = (pinfo->stackPointer > pinfo->msp_limit) ? (pinfo->stackPointer - pinfo->msp_limit) : 0u;
-        uint32_t ramSize = ramDataBytes + ramBssBytes + stackSize;
-        if (stackSize == 0u)
-        {
-            stackSize = DEFAULT_STACK_SIZE;
-        }
-        if (ramSize == 0u)
-        {
-            ramSize = stackSize;
-        }
+        // DEBUG: Print ProgramInfo values
+        printf("DEBUG ProgramInfo:\n");
+        printf("  entryPoint:           0x%08lX\r\n", pinfo->entryPoint);
+        printf("  section_data_start:   0x%08lX\r\n", pinfo->section_data_start_addr);
+        printf("  section_data_size:    %lu\r\n", pinfo->section_data_size);
+        printf("  section_bss_start:    0x%08lX\r\n", pinfo->section_bss_start_addr);
+        printf("  section_bss_size:     %lu\r\n", pinfo->section_bss_size);
+        printf("  binary base:          0x%08lX\r\n", (uint32_t)binary);
+        printf("  imgSize:              %lu\r\n", imgSize);
 
-        uint8_t *stk = reinterpret_cast<uint8_t *>(mem.allocate(ramSize));
+        // Kernel manages stack size - use a reasonable default
+        uint32_t stackSize = DEFAULT_STACK_SIZE; // Use kernel's default stack size
+
+        uint8_t *stk = reinterpret_cast<uint8_t *>(mem.allocate(stackSize));
         if (stk == nullptr)
         {
             mem.deallocate(binary);
@@ -1402,26 +1706,39 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
             result = CRTOS::Result::RESULT_NO_MEMORY;
             continue;
         }
-        memset_optimized(stk, 0u, ramSize);
 
-        // Copy .data image from BIN into the new RAM area; locate source inside copied image
-        if (ramDataBytes)
+        // Initialize stack with watermark pattern for stack usage tracking
+        uint32_t *stackPtr = (uint32_t *)stk;
+        uint32_t stackWords = stackSize / sizeof(uint32_t);
+        for (uint32_t i = 0; i < stackWords; i++)
         {
-            void *src = (void *)(binary + pinfo->section_data_start_addr);
-            memcpy_optimized(stk, src, ramDataBytes);
+            stackPtr[i] = 0xDEADBEEF;
         }
-        uint32_t new_data_ram_addr = (uint32_t)stk;
-        uint32_t new_bss_addr = new_data_ram_addr + ramDataBytes;
-        uint32_t new_msp = (uint32_t)(stk + ramSize);
-        uint32_t new_msplim = new_msp - stackSize;
+
+        // Calculate addresses within the binary image
+        // .data and .bss are now part of the binary image, so they're at their offsets from 'binary'
+        // These addresses from ProgramInfo are offsets from image base (ORIGIN(FLASH) = 0)
+        uint32_t new_data_addr = (uint32_t)(binary + pinfo->section_data_start_addr);
+        uint32_t new_bss_addr = (uint32_t)(binary + pinfo->section_bss_start_addr);
+        uint32_t new_msp = (uint32_t)(stk + stackSize);
+        uint32_t new_msplim = (uint32_t)stk;
+
+        // CRITICAL: Zero out the .bss section (uninitialized data)
+        // The .bss space was allocated but not copied from the binary file
+        if (pinfo->section_bss_size > 0)
+        {
+            uint8_t *bss_location = (uint8_t *)new_bss_addr;
+            memset_optimized(bss_location, 0, pinfo->section_bss_size);
+        }
 
         // Relocate entry: binary image base is at 'binary', entry is offset from base; set Thumb bit
         uint32_t new_entry = (uint32_t)(binary + pinfo->entryPoint);
         new_entry |= 1u;
 
-        // Update ProgramInfo inside the copied image (mirroring ELF parser behavior)
-        pinfo->section_data_dest_addr = new_data_ram_addr;
-        pinfo->section_data_start_addr = (uint32_t)(binary + pinfo->section_data_start_addr);
+        // Update ProgramInfo inside the copied image
+        // .data and .bss are in the binary image, just update their addresses
+        pinfo->section_data_dest_addr = new_data_addr;
+        pinfo->section_data_start_addr = new_data_addr; // Same location (not copied to RAM)
         pinfo->section_bss_start_addr = new_bss_addr;
         pinfo->stackPointer = new_msp;
         pinfo->msp_limit = new_msplim;
@@ -1454,7 +1771,85 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         uint32_t nameLength = pStringLength(name);
         memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 20u ? nameLength : 20u);
 
-        // Insert to ready list
+        // IMPORTANT: Track the loaded module BEFORE adding to ready list
+        // This prevents race condition where module starts before tracking is set up
+        if (loadedModules == nullptr)
+        {
+            // First module - allocate tracking array
+            loadedModules = reinterpret_cast<LoadedModuleInfo *>(mem.allocate(sizeof(LoadedModuleInfo) * MAX_LOADED_MODULES));
+            if (loadedModules != nullptr)
+            {
+                memset_optimized(loadedModules, 0, sizeof(LoadedModuleInfo) * MAX_LOADED_MODULES);
+            }
+        }
+
+        if (loadedModules != nullptr && loadedModulesCount < MAX_LOADED_MODULES)
+        {
+            LoadedModuleInfo *modInfo = &loadedModules[loadedModulesCount];
+            memcpy_optimized(modInfo->name, tmpTCB->name, 20);
+            modInfo->baseAddress = (uint32_t)binary;
+            modInfo->entryPoint = new_entry & ~1u; // Clear Thumb bit for address display
+
+            // .text section starts after ProgramInfo and optional ModuleDescriptor
+            uint32_t textOffset = sizeof(ProgramInfoBin);
+            ModuleDescriptorBin *md_check = reinterpret_cast<ModuleDescriptorBin *>(binary + sizeof(ProgramInfoBin));
+            if (md_check->magic == MODULE_MAGIC)
+            {
+                textOffset += sizeof(ModuleDescriptorBin);
+            }
+            modInfo->textAddr = (uint32_t)binary + textOffset;
+            modInfo->textSize = imgSize - textOffset;
+
+            // .data section (now in binary image, not separate RAM)
+            modInfo->dataAddr = new_data_addr;
+            modInfo->dataSize = pinfo->section_data_size;
+
+            // .bss section (also in binary image)
+            modInfo->bssAddr = new_bss_addr;
+            modInfo->bssSize = pinfo->section_bss_size;
+
+            // Stack section (separate allocation)
+            modInfo->stackAddr = new_msplim;
+            modInfo->stackSize = stackSize;
+
+            // Allocate shared memory for module-host communication
+            modInfo->sharedMemory = reinterpret_cast<ModuleSharedMemory *>(mem.allocate(sizeof(ModuleSharedMemory)));
+            if (modInfo->sharedMemory == nullptr)
+            {
+                // Critical error - shared memory allocation failed
+                mem.deallocate(stk);
+                mem.deallocate(binary);
+                mem.deallocate(tmpTCB);
+                result = CRTOS::Result::RESULT_NO_MEMORY;
+                setInterruptMask(prevMask);
+                return result;
+            }
+
+            // Zero the shared memory structure
+            memset_optimized(modInfo->sharedMemory, 0, sizeof(ModuleSharedMemory));
+
+            // Clean cache to ensure zeros are written to RAM
+            __DSB();
+            __ISB();
+
+            modInfo->totalSize = imgSize + stackSize; // Binary image + stack
+            modInfo->tcb = tmpTCB;
+            modInfo->state = CRTOS::ModuleState::MODULE_RUNNING;
+            modInfo->loadTime = GetSystemTime();
+            loadedModulesCount++;
+        }
+        else
+        {
+            // Failed to allocate module tracking - critical error
+            mem.deallocate(stk);
+            mem.deallocate(binary);
+            mem.deallocate(tmpTCB);
+            result = CRTOS::Result::RESULT_NO_MEMORY;
+            setInterruptMask(prevMask);
+            return result;
+        }
+
+        // NOW add to ready list after module tracking is complete
         ListInsertAtEnd(readyTaskList, tmpTCB);
         if (handle != nullptr)
         {
@@ -1669,6 +2064,92 @@ uint32_t CRTOS::Task::GetFreeStack(void)
     return (tcb->stackSize - usedStack);
 }
 
+uint32_t CRTOS::Task::GetFreeStack(TaskHandle *handle)
+{
+    if (handle == nullptr || *handle == nullptr)
+    {
+        return 0u;
+    }
+
+    TaskControlBlock *tcb = (TaskControlBlock *)(*handle);
+
+    uint32_t *stackStart = (uint32_t *)(tcb->stack);
+    uint32_t *stackEnd = (uint32_t *)(tcb->stack + tcb->stackSize);
+
+    uint32_t usedStack = 0u;
+
+    for (uint32_t *ptr = stackStart; ptr < stackEnd; ++ptr)
+    {
+        if (*ptr != 0xDEADBEEF)
+        {
+            usedStack = (uint32_t)(stackEnd - ptr);
+            break;
+        }
+    }
+
+    return (tcb->stackSize - usedStack);
+}
+
+uint32_t CRTOS::Task::GetAllTasksStackInfo(CRTOS::TaskStackInfo *infoArray, uint32_t maxTasks)
+{
+    if (infoArray == nullptr || maxTasks == 0u)
+    {
+        return 0u;
+    }
+
+    uint32_t mask = getInterruptMask();
+    uint32_t taskCount = 0u;
+
+    Node<TaskControlBlock> *tmp = readyTaskList;
+    while (tmp != nullptr && taskCount < maxTasks)
+    {
+        TaskControlBlock *tcb = tmp->data;
+
+        // Calculate stack usage
+        uint32_t *stackStart = (uint32_t *)(tcb->stack);
+        uint32_t *stackEnd = (uint32_t *)(tcb->stack + tcb->stackSize);
+        uint32_t usedStack = 0u;
+
+        for (uint32_t *ptr = stackStart; ptr < stackEnd; ++ptr)
+        {
+            if (*ptr != 0xDEADBEEF)
+            {
+                usedStack = (uint32_t)(stackEnd - ptr);
+                break;
+            }
+        }
+
+        uint32_t freeStack = tcb->stackSize - usedStack;
+        uint32_t totalStackBytes = tcb->stackSize * sizeof(uint32_t);
+        uint32_t usedStackBytes = usedStack * sizeof(uint32_t);
+        uint32_t freeStackBytes = freeStack * sizeof(uint32_t);
+
+        // Fill in the info structure
+        memcpy_optimized(&infoArray[taskCount].name[0], &tcb->name[0], 20u);
+        infoArray[taskCount].stackSize = totalStackBytes;
+        infoArray[taskCount].stackUsed = usedStackBytes;
+        infoArray[taskCount].stackFree = freeStackBytes;
+        infoArray[taskCount].taskHandle = (void *)tcb;
+
+        // Calculate utilization percentage
+        if (totalStackBytes > 0u)
+        {
+            infoArray[taskCount].utilizationPercent = (usedStackBytes * 100u) / totalStackBytes;
+        }
+        else
+        {
+            infoArray[taskCount].utilizationPercent = 0u;
+        }
+
+        taskCount++;
+        tmp = tmp->next;
+    }
+
+    setInterruptMask(mask);
+
+    return taskCount;
+}
+
 void CRTOS::Task::GetCoreLoad(uint32_t &load, uint32_t &mantissa)
 {
     static uint32_t lastCheckTime = 0u;
@@ -1870,8 +2351,7 @@ CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
             {
                 sCurrentTCB->timeout = stimeout;
                 sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_QUEUE;
-                uint32_t *tmp = (uint32_t *)sCurrentTCB;
-                ListInsertAtEnd(listOfTasksWaitingToRecv, &tmp);
+                ListInsertAtEnd(listOfTasksWaitingToRecv, (uint32_t **)&sCurrentTCB);
                 isBlocked = true;
             }
         }
@@ -1986,92 +2466,91 @@ CRTOS::Result CRTOS::CircularBuffer::Init(void)
 
 CRTOS::Result CRTOS::CircularBuffer::Send(const uint8_t *data, uint32_t size)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
+    if ((data == nullptr) || (size == 0u))
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    if (mBuffer == nullptr)
+    {
+        return CRTOS::Result::RESULT_NO_MEMORY;
+    }
 
     uint32_t mask = getInterruptMask();
-    do
+
+    if (mCurrentSize + size > mBufferSize)
     {
-        if ((data == nullptr) || (size == 0u))
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_BAD_PARAMETER;
-            continue;
-        }
-
-        if (mBuffer == nullptr)
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_NO_MEMORY;
-            continue;
-        }
-
-        if (mCurrentSize + size > mBufferSize)
-        {
-            setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_CIRCULAR_BUFFER_FULL;
-            continue;
-        }
-
-        if (mHead + size <= mBufferSize)
-        {
-            memcpy_optimized(&mBuffer[mHead], (void *)data, size);
-        }
-        else
-        {
-            uint32_t firstPartSize = mBufferSize - mHead;
-            memcpy_optimized(&mBuffer[mHead], (void *)data, firstPartSize);
-            memcpy_optimized(mBuffer, (void *)(&data[firstPartSize]), size - firstPartSize);
-        }
-
-        mHead = (mHead + size) % mBufferSize;
-        mCurrentSize += size;
-
-        if (listOfTasksWaitingToRecv != nullptr)
-        {
-            TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
-            if (tmp->state == TaskState::TASK_BLOCKED_BY_CIRC_BUFFER)
-            {
-                tmp->state = TaskState::TASK_READY;
-            }
-            ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-        }
-
         setInterruptMask(mask);
-    } while (0u);
+        return CRTOS::Result::RESULT_CIRCULAR_BUFFER_FULL;
+    }
 
-    return result;
+    // Copy data to buffer
+    if (mHead + size <= mBufferSize)
+    {
+        memcpy_optimized(&mBuffer[mHead], (void *)data, size);
+    }
+    else
+    {
+        uint32_t firstPartSize = mBufferSize - mHead;
+        memcpy_optimized(&mBuffer[mHead], (void *)data, firstPartSize);
+        memcpy_optimized(mBuffer, (void *)(&data[firstPartSize]), size - firstPartSize);
+    }
+
+    mHead = (mHead + size) % mBufferSize;
+    mCurrentSize += size;
+
+    // Wake up waiting receiver if any
+    bool shouldSwitch = false;
+    if (listOfTasksWaitingToRecv != nullptr)
+    {
+        TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
+        if (tmp->state == TaskState::TASK_BLOCKED_BY_CIRC_BUFFER)
+        {
+            tmp->state = TaskState::TASK_READY;
+            // Check if woken task has higher priority
+            if (tmp->priority > sCurrentTCB->priority)
+            {
+                shouldSwitch = true;
+            }
+        }
+        ListDeleteAtBeginning(listOfTasksWaitingToRecv);
+    }
+
+    setInterruptMask(mask);
+
+    // Trigger context switch if higher priority task was woken
+    if (shouldSwitch)
+    {
+        *ICSR_REG = NVIC_PENDSV_BIT;
+        __DSB();
+        __ISB();
+    }
+
+    return CRTOS::Result::RESULT_SUCCESS;
 }
 
 CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint32_t timeout)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-    uint32_t time = GetSystemTime();
-    uint32_t stimeout = time + timeout;
-    bool isBlocked = false;
+    if ((data == nullptr) || (size == 0u))
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
 
-    for (;;)
+    if (mBuffer == nullptr)
+    {
+        return CRTOS::Result::RESULT_NO_MEMORY;
+    }
+
+    uint32_t stimeout = GetSystemTime() + timeout;
+
+    while (1)
     {
         uint32_t mask = getInterruptMask();
 
-        time = GetSystemTime();
-
-        if ((data == nullptr) || (size == 0u))
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_BAD_PARAMETER;
-            return result;
-        }
-
-        if (mBuffer == nullptr)
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_NO_MEMORY;
-            return result;
-        }
-
+        // Check if data is available
         if (mCurrentSize >= size)
         {
+            // Data available - copy it out
             if (mTail + size <= mBufferSize)
             {
                 memcpy_optimized(&data[0], &mBuffer[mTail], size);
@@ -2087,74 +2566,31 @@ CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint3
             mCurrentSize -= size;
 
             setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_SUCCESS;
-            return result;
+            return CRTOS::Result::RESULT_SUCCESS;
         }
-        else
+
+        // No data available - check timeout first before blocking
+        if (timeout == 0u || GetSystemTime() >= stimeout)
         {
-            if (timeout == 0u)
-            {
-                setInterruptMask(mask);
-
-                result = CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
-                return result;
-            }
-            if (isBlocked == false)
-            {
-                sCurrentTCB->timeout = stimeout;
-                sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_CIRC_BUFFER;
-                uint32_t *tmp = (uint32_t *)sCurrentTCB;
-                ListInsertAtEnd(listOfTasksWaitingToRecv, &tmp);
-                isBlocked = true;
-            }
+            setInterruptMask(mask);
+            return CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
         }
+
+        // Block this task and add to waiting list
+        sCurrentTCB->timeout = stimeout;
+        sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_CIRC_BUFFER;
+        ListInsertAtEnd(listOfTasksWaitingToRecv, (uint32_t **)&sCurrentTCB);
 
         setInterruptMask(mask);
 
-        if (time < stimeout)
-        {
-            if (mCurrentSize >= size)
-            {
-                mask = getInterruptMask();
-                if (listOfTasksWaitingToRecv != nullptr)
-                {
-                    TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
-                    if (tmp->state == TaskState::TASK_BLOCKED_BY_CIRC_BUFFER)
-                    {
-                        tmp->state = TaskState::TASK_READY;
-                    }
-                    ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-                }
-                setInterruptMask(mask);
+        // Trigger context switch - when we resume, sender has either:
+        // 1. Sent data and woken us up, OR
+        // 2. Timeout occurred and scheduler woke us
+        *ICSR_REG = NVIC_PENDSV_BIT;
+        __DSB();
+        __ISB();
 
-                if (isHigherPrioTaskPending() == true)
-                {
-                    *ICSR_REG = NVIC_PENDSV_BIT;
-
-                    __DSB();
-                    __ISB();
-                }
-            }
-        }
-        else
-        {
-            // Timeout occurred - remove ourselves from waiting list
-            mask = getInterruptMask();
-
-            // Find and remove current task from waiting list
-            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
-            if (temp != nullptr)
-            {
-                ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-            }
-
-            sCurrentTCB->state = TaskState::TASK_READY;
-            setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
-            return result;
-        }
+        // When we get here, we've been woken up - loop back to check data/timeout
     }
 }
 
@@ -2239,5 +2675,234 @@ CRTOS::Result CRTOS::CRC32::Deinit(void)
         mem.deallocate(sCrcTable);
     }
 
+    return result;
+}
+
+// ========================================
+// Module Management Functions
+// ========================================
+
+uint32_t CRTOS::Task::LPC55S69_Features::GetLoadedModulesCount(void)
+{
+    return loadedModulesCount;
+}
+
+uint32_t CRTOS::Task::LPC55S69_Features::GetAllModulesInfo(CRTOS::ModuleInfo *infoArray, uint32_t maxModules)
+{
+    if (infoArray == nullptr || maxModules == 0 || loadedModules == nullptr)
+    {
+        return 0;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    uint32_t count = 0;
+
+    for (uint32_t i = 0; i < loadedModulesCount && count < maxModules; i++)
+    {
+        LoadedModuleInfo *src = &loadedModules[i];
+        CRTOS::ModuleInfo *dest = &infoArray[count];
+
+        // Copy module information
+        memcpy_optimized(dest->name, src->name, 20);
+        dest->baseAddress = src->baseAddress;
+        dest->entryPoint = src->entryPoint;
+        dest->textAddr = src->textAddr;
+        dest->textSize = src->textSize;
+        dest->dataAddr = src->dataAddr;
+        dest->dataSize = src->dataSize;
+        dest->bssAddr = src->bssAddr;
+        dest->bssSize = src->bssSize;
+        dest->stackAddr = src->stackAddr;
+        dest->stackSize = src->stackSize;
+        dest->totalSize = src->totalSize;
+        dest->taskHandle = (void *)src->tcb;
+        dest->state = src->state;
+        dest->loadTime = src->loadTime;
+        dest->sharedMemory = (void *)src->sharedMemory;
+
+        count++;
+    }
+
+    setInterruptMask(prevMask);
+    return count;
+}
+
+CRTOS::Result CRTOS::Task::LPC55S69_Features::GetModuleInfo(TaskHandle *handle, CRTOS::ModuleInfo &info)
+{
+    if (handle == nullptr || loadedModules == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    CRTOS::Result result = CRTOS::Result::RESULT_TASK_NOT_FOUND;
+
+    TaskControlBlock *targetTCB = reinterpret_cast<TaskControlBlock *>(*handle);
+
+    for (uint32_t i = 0; i < loadedModulesCount; i++)
+    {
+        if (loadedModules[i].tcb == targetTCB)
+        {
+            LoadedModuleInfo *src = &loadedModules[i];
+
+            memcpy_optimized(info.name, src->name, 20);
+            info.baseAddress = src->baseAddress;
+            info.entryPoint = src->entryPoint;
+            info.textAddr = src->textAddr;
+            info.textSize = src->textSize;
+            info.dataAddr = src->dataAddr;
+            info.dataSize = src->dataSize;
+            info.bssAddr = src->bssAddr;
+            info.bssSize = src->bssSize;
+            info.stackAddr = src->stackAddr;
+            info.stackSize = src->stackSize;
+            info.totalSize = src->totalSize;
+            info.taskHandle = (void *)src->tcb;
+            info.state = src->state;
+            info.loadTime = src->loadTime;
+            info.sharedMemory = (void *)src->sharedMemory;
+
+            result = CRTOS::Result::RESULT_SUCCESS;
+            break;
+        }
+    }
+
+    setInterruptMask(prevMask);
+    return result;
+}
+
+CRTOS::Result CRTOS::Task::LPC55S69_Features::SetModuleState(TaskHandle *handle, CRTOS::ModuleState newState)
+{
+    if (handle == nullptr || loadedModules == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    CRTOS::Result result = CRTOS::Result::RESULT_TASK_NOT_FOUND;
+
+    TaskControlBlock *targetTCB = reinterpret_cast<TaskControlBlock *>(*handle);
+
+    for (uint32_t i = 0; i < loadedModulesCount; i++)
+    {
+        if (loadedModules[i].tcb == targetTCB)
+        {
+            loadedModules[i].state = newState;
+
+            // Also update task state based on module state
+            switch (newState)
+            {
+            case CRTOS::ModuleState::MODULE_RUNNING:
+                targetTCB->state = TaskState::TASK_READY;
+                result = CRTOS::Result::RESULT_SUCCESS;
+                break;
+
+            case CRTOS::ModuleState::MODULE_PAUSED:
+                targetTCB->state = TaskState::TASK_PAUSED;
+                result = CRTOS::Result::RESULT_SUCCESS;
+                break;
+
+            case CRTOS::ModuleState::MODULE_STOPPED:
+            case CRTOS::ModuleState::MODULE_FAILED:
+                // Don't change task state for these
+                result = CRTOS::Result::RESULT_SUCCESS;
+                break;
+
+            default:
+                result = CRTOS::Result::RESULT_BAD_PARAMETER;
+                break;
+            }
+            break;
+        }
+    }
+
+    setInterruptMask(prevMask);
+    return result;
+}
+
+// Module data exchange functions
+CRTOS::Result CRTOS::Task::LPC55S69_Features::WriteToModule(TaskHandle *handle, uint32_t value)
+{
+    if (handle == nullptr || loadedModules == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    CRTOS::Result result = CRTOS::Result::RESULT_TASK_NOT_FOUND;
+
+    TaskControlBlock *targetTCB = reinterpret_cast<TaskControlBlock *>(*handle);
+
+    for (uint32_t i = 0; i < loadedModulesCount; i++)
+    {
+        if (loadedModules[i].tcb == targetTCB && loadedModules[i].sharedMemory != nullptr)
+        {
+            ModuleSharedMemory *mem = loadedModules[i].sharedMemory;
+            mem->hostToModule = value;
+            mem->flags |= MODULE_FLAG_HOST_HAS_DATA;
+            mem->flags &= ~MODULE_FLAG_MODULE_ACK;
+
+            result = CRTOS::Result::RESULT_SUCCESS;
+            break;
+        }
+    }
+
+    setInterruptMask(prevMask);
+    return result;
+}
+
+CRTOS::Result CRTOS::Task::LPC55S69_Features::ReadFromModule(TaskHandle *handle, uint32_t &value)
+{
+    if (handle == nullptr || loadedModules == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    CRTOS::Result result = CRTOS::Result::RESULT_TASK_NOT_FOUND;
+
+    TaskControlBlock *targetTCB = reinterpret_cast<TaskControlBlock *>(*handle);
+
+    for (uint32_t i = 0; i < loadedModulesCount; i++)
+    {
+        if (loadedModules[i].tcb == targetTCB && loadedModules[i].sharedMemory != nullptr)
+        {
+            ModuleSharedMemory *mem = loadedModules[i].sharedMemory;
+            value = mem->moduleToHost;
+            mem->flags &= ~MODULE_FLAG_DATA_READY;
+            mem->flags |= MODULE_FLAG_HOST_ACK;
+
+            result = CRTOS::Result::RESULT_SUCCESS;
+            break;
+        }
+    }
+
+    setInterruptMask(prevMask);
+    return result;
+}
+
+CRTOS::Result CRTOS::Task::LPC55S69_Features::GetModuleSharedMemory(TaskHandle *handle, void **sharedMemPtr)
+{
+    if (handle == nullptr || sharedMemPtr == nullptr || loadedModules == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    uint32_t prevMask = getInterruptMask();
+    CRTOS::Result result = CRTOS::Result::RESULT_TASK_NOT_FOUND;
+
+    TaskControlBlock *targetTCB = reinterpret_cast<TaskControlBlock *>(*handle);
+
+    for (uint32_t i = 0; i < loadedModulesCount; i++)
+    {
+        if (loadedModules[i].tcb == targetTCB)
+        {
+            *sharedMemPtr = (void *)loadedModules[i].sharedMemory;
+            result = CRTOS::Result::RESULT_SUCCESS;
+            break;
+        }
+    }
+
+    setInterruptMask(prevMask);
     return result;
 }

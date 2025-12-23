@@ -29,6 +29,8 @@ class HeapAllocator
 
         uint32_t getFreeMemory() const;
         uint32_t getAllocatedMemory() const;
+        void printMemoryGraph() const;
+        void defragment();
 
     private:
         struct Block

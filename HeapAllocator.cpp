@@ -233,3 +233,84 @@ void HeapAllocator::join(Block *block)
     }
 }
 
+void HeapAllocator::defragment()
+{
+    uint32_t blocksBefore = 0;
+    uint32_t fragmentsBefore = 0;
+    bool lastWasFree = false;
+    
+    Block *current = head;
+    while (current != nullptr)
+    {
+        blocksBefore++;
+        if (current->free)
+        {
+            if (!lastWasFree && blocksBefore > 1)
+            {
+                fragmentsBefore++;
+            }
+            lastWasFree = true;
+        }
+        else
+        {
+            lastWasFree = false;
+        }
+        current = current->next;
+    }
+    
+    // Perform defragmentation - coalesce all adjacent free blocks
+    uint32_t mergeCount = 0;
+    current = head;
+    
+    while (current != nullptr)
+    {
+        if (current->free && current->next != nullptr && current->next->free)
+        {
+            // Merge current with next free block
+            current->size += current->next->size + sizeof(Block) + 2 * sizeof(uint32_t);
+            current->next = current->next->next;
+            
+            if (current->next != nullptr)
+            {
+                current->next->prev = current;
+            }
+            else
+            {
+                tail = current;
+            }
+            
+            current->endMarker = MARKER;
+            mergeCount++;
+            
+            // Don't advance - check if we can merge with the new next block
+            continue;
+        }
+        
+        current = current->next;
+    }
+    
+    // Gather statistics after defragmentation
+    uint32_t blocksAfter = 0;
+    uint32_t fragmentsAfter = 0;
+    lastWasFree = false;
+    
+    current = head;
+    while (current != nullptr)
+    {
+        blocksAfter++;
+        if (current->free)
+        {
+            if (!lastWasFree && blocksAfter > 1)
+            {
+                fragmentsAfter++;
+            }
+            lastWasFree = true;
+        }
+        else
+        {
+            lastWasFree = false;
+        }
+        current = current->next;
+    }
+}
+

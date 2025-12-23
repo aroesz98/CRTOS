@@ -47,13 +47,67 @@ namespace CRTOS
         RESULT_CRC_ALREADY_INITIALIZED
     };
 
+    struct HeapInfo
+    {
+        uint32_t totalSize;          // Total heap size in bytes
+        uint32_t freeMemory;          // Available free memory in bytes
+        uint32_t allocatedMemory;     // Currently allocated memory in bytes
+        uint32_t utilizationPercent;  // Heap utilization percentage (0-100)
+    };
+
+    struct TaskStackInfo
+    {
+        char name[20];               // Task name
+        uint32_t stackSize;          // Total stack size in bytes
+        uint32_t stackUsed;          // Used stack in bytes
+        uint32_t stackFree;          // Free stack in bytes
+        uint32_t utilizationPercent; // Stack utilization percentage (0-100)
+        void* taskHandle;            // Task handle
+    };
+
+    enum class ModuleState : uint8_t
+    {
+        MODULE_RUNNING = 0,
+        MODULE_PAUSED,
+        MODULE_STOPPED,
+        MODULE_FAILED
+    };
+
+    struct ModuleInfo
+    {
+        char name[20];               // Module/Task name
+        uint32_t baseAddress;        // Module base address in memory (start of binary image)
+        uint32_t entryPoint;         // Entry point address (with Thumb bit)
+        
+        // Section addresses and sizes
+        uint32_t textAddr;           // .text section address (code)
+        uint32_t textSize;           // .text section size
+        uint32_t dataAddr;           // .data section address (initialized data in RAM)
+        uint32_t dataSize;           // .data section size
+        uint32_t bssAddr;            // .bss section address (uninitialized data in RAM)
+        uint32_t bssSize;            // .bss section size
+        uint32_t stackAddr;          // Stack base address
+        uint32_t stackSize;          // Stack size
+        
+        uint32_t totalSize;          // Total module size (binary + RAM)
+        void* taskHandle;            // Associated task handle
+        ModuleState state;           // Current module state
+        uint32_t loadTime;           // Time when module was loaded (system ticks)
+        void* sharedMemory;          // Pointer to shared memory region
+    };
+
     namespace Config
     {
         void SetCoreClock(uint32_t ClockInMHz);
         void SetTickRate(uint32_t TicksPerSecond);
         Result InitMem(void *pool, uint32_t size);
+        void* Allocate(uint32_t size);
+        void Deallocate(void *ptr);
         uint32_t GetFreeMemory(void);
         uint32_t GetAllocatedMemory(void);
+        uint32_t GetTotalHeapSize(void);
+        void GetHeapInfo(HeapInfo &info);
+        void DefragmentHeap(void);
     }
 
     class Mutex
@@ -87,6 +141,7 @@ namespace CRTOS
     {
         typedef void (*TaskFunction)(void *);
         typedef void* TaskHandle;
+        typedef void (*StackOverflowHook)(const char *taskName, void *taskHandle);
 
         Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
         Result Delete(void);
@@ -96,9 +151,13 @@ namespace CRTOS
         CRTOS::Result Pause(TaskHandle *handle);
         CRTOS::Result Resume(TaskHandle *handle);
         void Yield(void);
+        
+        void SetStackOverflowHook(StackOverflowHook hook);
 
         uint32_t GetTaskCycles(void);
         uint32_t GetFreeStack(void);
+        uint32_t GetFreeStack(TaskHandle *handle);
+        uint32_t GetAllTasksStackInfo(TaskStackInfo *infoArray, uint32_t maxTasks);
         void GetCoreLoad(uint32_t &load, uint32_t &mantissa);
         uint32_t GetLastTaskSwitchTime(void);  // Get the last task switch latency in cycles
 
@@ -115,6 +174,17 @@ namespace CRTOS
             // Create task from a raw BIN module produced by this module template
 			// The BIN layout begins with ProgramInfo followed by code/rodata.
 			Result CreateTaskForBinModule(uint8_t *bin, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
+			
+			// Module management functions
+			uint32_t GetLoadedModulesCount(void);
+			uint32_t GetAllModulesInfo(ModuleInfo *infoArray, uint32_t maxModules);
+			Result GetModuleInfo(TaskHandle *handle, ModuleInfo &info);
+			Result SetModuleState(TaskHandle *handle, ModuleState newState);
+			
+			// Module data exchange functions
+			Result WriteToModule(TaskHandle *handle, uint32_t value);
+			Result ReadFromModule(TaskHandle *handle, uint32_t &value);
+			Result GetModuleSharedMemory(TaskHandle *handle, void **sharedMemPtr);
         };
     };
 
