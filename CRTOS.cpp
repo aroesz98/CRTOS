@@ -16,6 +16,7 @@
 #include "ELFParser.hpp"
 #include "kernel.h"
 #include "stdio.h"
+#include <cstring>
 
 typedef void (*TaskFunction)(void *);
 
@@ -863,13 +864,6 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
     uint32_t command_id = (uint32_t)(((uint8_t *)command[6u])[-2u]);
     uint32_t *callerStack = command;
 
-    // DEBUG: Print all SVC calls from modules
-    if (command_id >= 4)
-    {
-        printf("DEBUG SVC: command=%lu, caller=0x%08lX, R0=0x%08lX\r\n",
-               command_id, command[6u], callerStack[0u]);
-    }
-
     switch (command_id)
     {
     case SVC_Commands::COMMAND_TASK_DELAY:
@@ -945,6 +939,80 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
         CRTOS::Timer::SoftwareTimer *timer = (CRTOS::Timer::SoftwareTimer *)callerStack[0u];
         CRTOS::Result result = CRTOS::Timer::Stop(timer);
         callerStack[0u] = (uint32_t)result;
+        break;
+    }
+    case SVC_Commands::COMMAND_GET_TASK_COUNT:
+    {
+        // Get total number of tasks in the system
+        CRTOS::TaskStackInfo stackInfo[20];
+        uint32_t count = CRTOS::Task::GetAllTasksStackInfo(stackInfo, 20);
+        callerStack[0u] = count;
+        break;
+    }
+    case SVC_Commands::COMMAND_GET_TASK_INFO:
+    {
+        // Get task info by index: R0 = task_index, R1 = ModuleTaskInfo* output
+        uint32_t task_index = callerStack[0u];
+        ModuleTaskInfo *info = (ModuleTaskInfo *)callerStack[1u];
+        
+        if (info != nullptr)
+        {
+            CRTOS::TaskStackInfo stackInfo[20];
+            uint32_t count = CRTOS::Task::GetAllTasksStackInfo(stackInfo, 20);
+            
+            if (task_index < count)
+            {
+                // Copy task information
+                strncpy(info->name, stackInfo[task_index].name, 23);
+                info->name[23] = '\0';
+                info->stackSize = stackInfo[task_index].stackSize;
+                info->stackUsed = stackInfo[task_index].stackUsed;
+                info->stackFree = stackInfo[task_index].stackFree;
+                info->stackPercent = stackInfo[task_index].utilizationPercent;
+                
+                // Get priority, state, and runtime cycles from TCB
+                TaskControlBlock *tcb = (TaskControlBlock *)stackInfo[task_index].taskHandle;
+                if (tcb != nullptr)
+                {
+                    info->priority = tcb->priority;
+                    info->state = (uint32_t)tcb->state;
+                    info->runtimeCycles = tcb->executionTime;
+                }
+                else
+                {
+                    info->priority = 0;
+                    info->state = 0;
+                    info->runtimeCycles = 0;
+                }
+                
+                callerStack[0u] = 0;  // Success
+            }
+            else
+            {
+                callerStack[0u] = (uint32_t)-1;  // Error: index out of range
+            }
+        }
+        else
+        {
+            callerStack[0u] = (uint32_t)-1;  // Error: null pointer
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_GET_HEAP_INFO:
+    {
+        // Get heap info: R0 = ModuleHeapInfo* output
+        ModuleHeapInfo *info = (ModuleHeapInfo *)callerStack[0u];
+        
+        if (info != nullptr)
+        {
+            CRTOS::HeapInfo heapInfo;
+            CRTOS::Config::GetHeapInfo(heapInfo);
+            
+            info->totalSize = heapInfo.totalSize;
+            info->freeMemory = heapInfo.freeMemory;
+            info->allocatedMemory = heapInfo.allocatedMemory;
+            info->utilizationPercent = heapInfo.utilizationPercent;
+        }
         break;
     }
     default:
@@ -1227,7 +1295,7 @@ extern "C" void switchCtx(void)
             elapsedCycles = sCurrentTCB->exitCycles - sCurrentTCB->enterCycles;
         }
 
-        sCurrentTCB->executionTime = elapsedCycles;
+        sCurrentTCB->executionTime += elapsedCycles;
     }
 
     while (temp != nullptr)
@@ -1652,17 +1720,49 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         // Determine image size using descriptor if present; otherwise fallback to data offset + data size
         ProgramInfoBin *pinfo_src = reinterpret_cast<ProgramInfoBin *>(bin);
         uint32_t imgSize = 0u;
-        ModuleDescriptorBin *md = reinterpret_cast<ModuleDescriptorBin *>(bin + sizeof(ProgramInfoBin));
-        if (md->magic == MODULE_MAGIC)
+        // ModuleDescriptor is at aligned offset after ProgramInfoBin
+        // Use 8-byte alignment to match linker script requirement and ensure universal compatibility
+        constexpr size_t alignment = 8u;
+        constexpr uint32_t MODULE_DESC_OFFSET = ((sizeof(ProgramInfoBin) + alignment - 1u) & ~(alignment - 1u));
+        ModuleDescriptorBin *md = reinterpret_cast<ModuleDescriptorBin *>(bin + MODULE_DESC_OFFSET);
+        printf("DEBUG ModuleDescriptor: magic=0x%08lX (expected 0x%08lX), image_size=%lu, offset=%lu\r\n", 
+                         md->magic, MODULE_MAGIC, md->image_size, MODULE_DESC_OFFSET);
+        if (md->magic == MODULE_MAGIC && md->image_size > 0)
         {
-            imgSize = md->image_size; // This already includes .bss with new linker script
+            // image_size is the binary file size (without .bss), add .bss size for total runtime memory
+            imgSize = md->image_size + pinfo_src->section_bss_size;
+            printf("  Using ModuleDescriptor image_size: %lu + bss: %lu = total: %lu\r\n", 
+                   md->image_size, pinfo_src->section_bss_size, imgSize);
         }
         else
         {
             // Fallback: include code/rodata/data and add .bss
-            imgSize = pinfo_src->section_data_start_addr + pinfo_src->section_data_size + pinfo_src->section_bss_size;
+            // Add validation to detect corrupted headers
+            uint32_t data_start = pinfo_src->section_data_start_addr;
+            uint32_t data_size = pinfo_src->section_data_size;
+            uint32_t bss_size = pinfo_src->section_bss_size;
+            
+            // Sanity check: these values should be reasonable (< 1MB each for embedded systems)
+            if (data_start > 0x100000 || data_size > 0x100000 || bss_size > 0x100000)
+            {
+                // Header appears corrupted, use default size
+                imgSize = 0u;
+            }
+            else
+            {
+                // Check for overflow before calculating
+                uint64_t total = (uint64_t)data_start + (uint64_t)data_size + (uint64_t)bss_size;
+                if (total > 0xFFFFFFFF || total > poolSize)
+                {
+                    imgSize = 0u;
+                }
+                else
+                {
+                    imgSize = (uint32_t)total;
+                }
+            }
         }
-        if (imgSize == 0u)
+        if (imgSize == 0u || imgSize > poolSize)
         {
             // As a last resort, assume 4KB
             imgSize = DEFAULT_MODULE_LEN;
@@ -1680,6 +1780,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         // Copy the binary file content (which does NOT include .bss since it's uninitialized)
         // The .bss space is allocated but not in the binary file
         uint32_t binarySizeWithoutBss = imgSize - pinfo_src->section_bss_size;
+        printf("  Allocated %lu bytes, copying %lu bytes from binary file\r\n", imgSize, binarySizeWithoutBss);
         memcpy_optimized(binary, bin, binarySizeWithoutBss);
 
         // Work on the copied image

@@ -4,7 +4,7 @@
 
 MEMORY
 {
-  FLASH (rwx) : ORIGIN = 0x00000000, LENGTH = 4K
+  FLASH (rwx) : ORIGIN = 0x00000000, LENGTH = 16K
 }
 
 ENTRY(module_entry)
@@ -45,7 +45,10 @@ SECTIONS
   } > FLASH
   _sidata = LOADADDR(.data);  /* Offset of .data in the binary image */
 
-  /* Uninitialized data */
+  /* Image size = actual binary file size (code + rodata + data, NO bss) */
+  PROVIDE(__image_size__ = . - ORIGIN(FLASH));
+
+  /* Uninitialized data - NOT part of binary file */
   .bss : ALIGN(8)
   {
     _sbss = .;
@@ -56,7 +59,6 @@ SECTIONS
   } > FLASH
 
   /* Calculate sizes */
-  PROVIDE(__image_size__ = . - ORIGIN(FLASH));
   PROVIDE(__data_size__ = SIZEOF(.data));
   PROVIDE(__bss_size__ = SIZEOF(.bss));
   
