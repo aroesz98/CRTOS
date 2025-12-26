@@ -107,7 +107,8 @@ function(add_module MODULE_SRC MODULE_TARGET)
   install(FILES ${CMAKE_BINARY_DIR}/${MODULE_TARGET}.bin DESTINATION .)
 endfunction()
 
-# Build all three modules
+# Build all modules
 add_module(src/htop_module.c htop_module)
 add_module(src/copy_module.c copy_module)
 add_module(src/shm_module.c shm_module)
+add_module(src/dpc_test_module.c dpc_test_module)

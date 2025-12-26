@@ -241,3 +241,119 @@ void module_free(void* ptr)
         : "r0", "memory"
     );
 }
+
+// IRQ registration functions - use syscalls to register with kernel
+void RegisterCurrentTaskIRQ(uint32_t irqNumber)
+{
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %0                    \n"  /* IRQ number */
+        "svc %1                        \n"
+        :
+        : "r" (irqNumber), "i" (COMMAND_REGISTER_TASK_IRQ)
+        : "r0", "memory"
+    );
+}
+
+void UnregisterCurrentTaskIRQ(void)
+{
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "svc %0                        \n"
+        :
+        : "i" (COMMAND_UNREGISTER_TASK_IRQ)
+        : "memory"
+    );
+}
+
+// Semaphore operations
+SemaphoreHandle module_semaphore_create(void)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "svc %1                        \n"
+        : "=r" (result)
+        : "i" (COMMAND_SEMAPHORE_CREATE)
+        : "memory"
+    );
+    return (SemaphoreHandle)result;
+}
+
+int32_t module_semaphore_wait(SemaphoreHandle sem, uint32_t timeout)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* semaphore handle */
+        "mov r1, %2                    \n"  /* timeout */
+        "svc %3                        \n"
+        : "=r" (result)
+        : "r" (sem), "r" (timeout), "i" (COMMAND_SEMAPHORE_WAIT)
+        : "r1", "memory"
+    );
+    return (int32_t)result;
+}
+
+void module_semaphore_signal(SemaphoreHandle sem)
+{
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %0                    \n"  /* semaphore handle */
+        "svc %1                        \n"
+        :
+        : "r" (sem), "i" (COMMAND_SEMAPHORE_SIGNAL)
+        : "r0", "memory"
+    );
+}
+
+void module_semaphore_delete(SemaphoreHandle sem)
+{
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %0                    \n"  /* semaphore handle */
+        "svc %1                        \n"
+        :
+        : "r" (sem), "i" (COMMAND_SEMAPHORE_DELETE)
+        : "r0", "memory"
+    );
+}
+
+// DPC operations
+int32_t module_dpc_register_handler(uint32_t irqNumber, SemaphoreHandle sem, DPCCallback callback, void* context)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* IRQ number */
+        "mov r1, %2                    \n"  /* semaphore handle */
+        "mov r2, %3                    \n"  /* callback */
+        "mov r3, %4                    \n"  /* context */
+        "svc %5                        \n"
+        : "=r" (result)
+        : "r" (irqNumber), "r" (sem), "r" (callback), "r" (context), "i" (COMMAND_DPC_REGISTER_HANDLER)
+        : "memory"
+    );
+    return (int32_t)result;
+}
+
+void module_dpc_unregister_handler(uint32_t irqNumber, SemaphoreHandle sem)
+{
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %0                    \n"  /* IRQ number */
+        "mov r1, %1                    \n"  /* semaphore handle */
+        "svc %2                        \n"
+        :
+        : "r" (irqNumber), "r" (sem), "i" (COMMAND_DPC_UNREGISTER_HANDLER)
+        : "r0", "r1", "memory"
+    );
+}

@@ -97,15 +97,15 @@ static void draw_header(uint32_t heap_total, uint32_t heap_free, uint32_t heap_u
 {
     // Clear screen and move cursor to home position (VT100)
     printf("\033[2J\033[H");
-    printf("-----------------------------------------------------------------------\r\n");
-    printf("|=================== CRTOS Monitor | Tasks: %-3lu ====================|\r\n", task_count);
+    printf("-------------------------------------------------------------------------------\r\n");
+    printf("|========================= CRTOS Monitor | Tasks: %-3lu =========================|\r\n", task_count);
 
     // Heap usage bar
     uint32_t heap_percent = (heap_used * 100) / heap_total;
     printf("|Heap [");
-    for (uint32_t i = 0; i < 56; i++)
+    for (uint32_t i = 0; i < 60; i++)
     {
-        if (i < (heap_percent * 56 / 100))
+        if (i < (heap_percent * 60 / 100))
         {
             printf("#");
         }
@@ -116,9 +116,9 @@ static void draw_header(uint32_t heap_total, uint32_t heap_free, uint32_t heap_u
     }
     printf("] %3lu%%\r\n", heap_percent);
     printf("|Total:%-6lu | Used:%-6lu | Free:%-6lu bytes\r\n", heap_total, heap_used, heap_free);
-    printf("-----------------------------------------------------------------------\r\n");
-    printf("|%-4s %-20s %-3s %-8s %-6s %-6s %-4s %-6s %-4s %-8s|\r\n", "PID", "NAME", "PRI", "STATE", "STACK", "FREE", "STK%", "HEAP", "CPU%", "IRQ");
-    printf("-----------------------------------------------------------------------\r\n");
+    printf("-------------------------------------------------------------------------------\r\n");
+    printf("|%-4s %-22s %-3s %-8s %-6s %-6s %-3s %-6s %-4s %-6s|\r\n", "PID", "NAME", "PRI", "STATE", "STACK", "FREE", "STK%", "HEAP", "CPU%", "IRQ");
+    printf("-------------------------------------------------------------------------------\r\n");
 }
 
 /**
@@ -136,46 +136,18 @@ static void display_task_info(uint32_t pid, const char *name, uint32_t priority,
     uint32_t stack_size_words = stack_size / 4;
     uint32_t stack_free_words = stack_free / 4;
     
-    // Format IRQ string without snprintf
-    char irq_str[9] = "---     ";
     if (irq_number != 0xFFFFFFFF)
     {
-        // Simple IRQ number formatting: "IRQ" + up to 3 digits
-        irq_str[0] = 'I';
-        irq_str[1] = 'R';
-        irq_str[2] = 'Q';
-        
-        // Convert number to string (max 3 digits)
-        if (irq_number >= 100)
-        {
-            irq_str[3] = '0' + ((irq_number / 100) % 10);
-            irq_str[4] = '0' + ((irq_number / 10) % 10);
-            irq_str[5] = '0' + (irq_number % 10);
-            irq_str[6] = ' ';
-            irq_str[7] = ' ';
-        }
-        else if (irq_number >= 10)
-        {
-            irq_str[3] = '0' + ((irq_number / 10) % 10);
-            irq_str[4] = '0' + (irq_number % 10);
-            irq_str[5] = ' ';
-            irq_str[6] = ' ';
-            irq_str[7] = ' ';
-        }
-        else
-        {
-            irq_str[3] = '0' + (irq_number % 10);
-            irq_str[4] = ' ';
-            irq_str[5] = ' ';
-            irq_str[6] = ' ';
-            irq_str[7] = ' ';
-        }
-        irq_str[8] = '\0';
+        printf("|%-4lu %-22s %-3lu %-8s %-6lu %-6lu %3lu%% %-6lu %3lu%% IRQ%-3lu|\r\n",
+               pid, name, priority, get_task_state_string(state),
+               stack_size_words, stack_free_words, stack_percent, heap_allocated, cpu_percent, irq_number);
     }
-    
-    printf("|%-4lu %-20s %-3lu %-8s %-6lu %-6lu %3lu%% %-6lu %3lu%% %-8s|\r\n",
-           pid, name, priority, get_task_state_string(state),
-           stack_size_words, stack_free_words, stack_percent, heap_allocated, cpu_percent, irq_str);
+    else
+    {
+        printf("|%-4lu %-22s %-3lu %-8s %-6lu %-6lu %3lu%% %-6lu %3lu%% ----- |\r\n",
+               pid, name, priority, get_task_state_string(state),
+               stack_size_words, stack_free_words, stack_percent, heap_allocated, cpu_percent);
+    }
 }
 
 /**
@@ -183,7 +155,7 @@ static void display_task_info(uint32_t pid, const char *name, uint32_t priority,
  */
 static void draw_footer(void)
 {
-    printf("-----------------------------------------------------------------------\r\n");
+    printf("-------------------------------------------------------------------------------\r\n");
     printf("htop_module monitoring | Refresh: 1000ms\r\n\r\n");
 }
 
@@ -282,25 +254,25 @@ static uint32_t calculate_cpu_usage(const char *task_name, uint32_t current_cycl
 /**
  * Update task snapshots for next CPU calculation
  */
-static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_t *cpu_percents)
+static void update_snapshots(uint32_t tasks_retrieved, ModuleTaskInfo *tasks, uint32_t *cpu_percents)
 {
     // Grow snapshot array if needed
-    if (task_count > prev_snapshots_capacity)
+    if (tasks_retrieved > prev_snapshots_capacity)
     {
-        TaskSnapshot *new_snapshots = (TaskSnapshot *)module_malloc(task_count * sizeof(TaskSnapshot));
+        TaskSnapshot *new_snapshots = (TaskSnapshot *)module_malloc(tasks_retrieved * sizeof(TaskSnapshot));
         if (new_snapshots)
         {
             // Copy old data if exists
             if (prev_snapshots)
             {
-                for (uint32_t i = 0; i < prev_task_count && i < task_count; i++)
+                for (uint32_t i = 0; i < prev_task_count && i < tasks_retrieved; i++)
                 {
                     new_snapshots[i] = prev_snapshots[i];
                 }
                 module_free(prev_snapshots);
             }
             prev_snapshots = new_snapshots;
-            prev_snapshots_capacity = task_count;
+            prev_snapshots_capacity = tasks_retrieved;
         }
         else
         {
@@ -310,10 +282,10 @@ static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_
     }
 
     // For each current task, find or create snapshot
-    for (uint32_t i = 0; i < task_count; i++)
+    for (uint32_t i = 0; i < tasks_retrieved; i++)
     {
         // Try to find existing snapshot for this task
-        uint32_t snapshot_idx = task_count;
+        uint32_t snapshot_idx = tasks_retrieved;
         for (uint32_t j = 0; j < prev_task_count; j++)
         {
             if (strcmp(prev_snapshots[j].name, tasks[i].name) == 0)
@@ -324,7 +296,7 @@ static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_
         }
 
         // If not found, use a new slot
-        if (snapshot_idx >= task_count)
+        if (snapshot_idx >= tasks_retrieved)
         {
             snapshot_idx = i;
             prev_snapshots[snapshot_idx].cpu_percent = 0;
@@ -337,7 +309,7 @@ static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_
         prev_snapshots[snapshot_idx].cpu_percent = cpu_percents[i];
     }
 
-    prev_task_count = task_count;
+    prev_task_count = tasks_retrieved;
 }
 
 /* =============================================================================

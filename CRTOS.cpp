@@ -18,6 +18,41 @@
 #include "stdio.h"
 #include <cstring>
 
+// NVIC register definitions for interrupt control
+#define NVIC_ISER_BASE ((volatile uint32_t *)0xE000E100ul)
+#define NVIC_IPR_BASE  ((volatile uint32_t *)0xE000E400ul)
+
+// Inline NVIC functions to avoid header conflicts
+static inline void NVIC_SetPriority(int32_t IRQn, uint32_t priority)
+{
+    if (IRQn >= 0)
+    {
+        // External interrupt
+        volatile uint8_t *ipr = (volatile uint8_t *)NVIC_IPR_BASE;
+        ipr[IRQn] = (uint8_t)((priority << 4) & 0xFFu);
+    }
+    else
+    {
+        // System exception - use SCB->SHP
+        volatile uint32_t *shpr = (volatile uint32_t *)0xE000ED18ul;
+        int32_t idx = ((int32_t)IRQn & 0xFu) - 4;
+        if (idx >= 0)
+        {
+            volatile uint8_t *shp = (volatile uint8_t *)shpr;
+            shp[idx] = (uint8_t)((priority << 4) & 0xFFu);
+        }
+    }
+}
+
+static inline void NVIC_EnableIRQ(int32_t IRQn)
+{
+    if (IRQn >= 0)
+    {
+        volatile uint32_t *iser = NVIC_ISER_BASE;
+        iser[IRQn >> 5] = (uint32_t)(1ul << (IRQn & 0x1Ful));
+    }
+}
+
 __attribute__((used)) volatile TaskControlBlock *sCurrentTCB = nullptr;
 CRTOS::Task::TaskHandle idleTaskHandle = nullptr;
 
@@ -509,6 +544,156 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
         }
         break;
     }
+    case SVC_Commands::COMMAND_REGISTER_TASK_IRQ:
+    {
+        // Register current task for an IRQ: R0 = IRQ number
+        uint32_t irqNumber = callerStack[0u];
+        if (sCurrentTCB != nullptr)
+        {
+            const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = irqNumber;
+            
+            // Enable the interrupt in NVIC
+            NVIC_SetPriority((int32_t)irqNumber, 5); // Set interrupt priority (lower number = higher priority)
+            NVIC_EnableIRQ((int32_t)irqNumber);      // Enable interrupt in NVIC
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_UNREGISTER_TASK_IRQ:
+    {
+        // Unregister current task from IRQ
+        if (sCurrentTCB != nullptr)
+        {
+            const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = 0xFFFFFFFFu;
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_SEMAPHORE_CREATE:
+    {
+        // Create a binary semaphore, return handle in R0
+        CRTOS::BinarySemaphore* sem = new CRTOS::BinarySemaphore();
+        callerStack[0u] = (uint32_t)sem;
+        break;
+    }
+    case SVC_Commands::COMMAND_SEMAPHORE_WAIT:
+    {
+        // Wait on semaphore: R0 = semaphore handle, R1 = timeout
+        // Returns 0 on success, -1 on timeout in R0
+        // NOTE: We cannot call sem->wait() because it has a busy-wait loop
+        // that won't work in SVC context. Instead, we manually handle blocking.
+        
+        CRTOS::BinarySemaphore* sem = (CRTOS::BinarySemaphore*)callerStack[0u];
+        uint32_t timeout_ticks = callerStack[1u];
+        
+        if (sem == nullptr)
+        {
+            callerStack[0u] = -1;
+            break;
+        }
+        
+        // Access semaphore internals directly
+        uint32_t* sem_val = (uint32_t*)((uint8_t*)sem + sizeof(void*)); // _val is after listOfTasksWaitingToRecv pointer
+        Node<uint32_t*>** waiting_list = (Node<uint32_t*>**)sem;  // listOfTasksWaitingToRecv is first member
+        
+        uint32_t mask = getInterruptMask();
+        
+        // Check if semaphore is available
+        if (*sem_val > 0u)
+        {
+            // Semaphore available - consume it
+            *sem_val = 0u;
+            callerStack[0u] = 0; // Success
+            setInterruptMask(mask);
+        }
+        else if (timeout_ticks == 0u)
+        {
+            // No wait requested and semaphore not available
+            callerStack[0u] = -1; // Immediate timeout
+            setInterruptMask(mask);
+        }
+        else
+        {
+            // Block the task - add to waiting list
+            TaskControlBlock* tcbToBlock = (TaskControlBlock*)sCurrentTCB;
+            tcbToBlock->timeout = tickCount + timeout_ticks;
+            tcbToBlock->state = TaskState::TASK_BLOCKED_BY_SEMAPHORE;
+            
+            // Add to semaphore's waiting list
+            Node<uint32_t*>* newNode = reinterpret_cast<Node<uint32_t*>*>(mem.allocate(sizeof(Node<uint32_t*>)));
+            if (newNode != nullptr)
+            {
+                newNode->data = reinterpret_cast<uint32_t**>(tcbToBlock);
+                newNode->next = *waiting_list;
+                newNode->prev = nullptr;
+                if (*waiting_list != nullptr)
+                {
+                    (*waiting_list)->prev = newNode;
+                }
+                *waiting_list = newNode;
+            }
+            
+            // Optimistically set success - will be changed to -1 on timeout
+            callerStack[0u] = 0;
+            setInterruptMask(mask);
+            
+            // Trigger context switch - task will resume here after being unblocked
+            *ICSR_REG = NVIC_PENDSV_BIT;
+            __DSB();
+            __ISB();
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_SEMAPHORE_SIGNAL:
+    {
+        // Signal a semaphore: R0 = semaphore handle
+        CRTOS::BinarySemaphore* sem = (CRTOS::BinarySemaphore*)callerStack[0u];
+        if (sem != nullptr)
+        {
+            sem->signal();
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_SEMAPHORE_DELETE:
+    {
+        // Delete a semaphore: R0 = semaphore handle
+        CRTOS::BinarySemaphore* sem = (CRTOS::BinarySemaphore*)callerStack[0u];
+        if (sem != nullptr)
+        {
+            delete sem;
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_DPC_REGISTER_HANDLER:
+    {
+        // Register DPC handler: R0 = IRQ, R1 = semaphore, R2 = callback, R3 = context
+        // Returns 0 on success, -1 on failure in R0
+        uint32_t irqNumber = callerStack[0u];
+        CRTOS::BinarySemaphore* sem = (CRTOS::BinarySemaphore*)callerStack[1u];
+        void (*callback)(void*) = (void (*)(void*))callerStack[2u];
+        void* context = (void*)callerStack[3u];
+        
+        if (sem != nullptr)
+        {
+            CRTOS::Result res = CRTOS::GlobalDPCDispatcher.RegisterHandler(irqNumber, sem, callback, context);
+            callerStack[0u] = (res == CRTOS::Result::RESULT_SUCCESS) ? 0 : -1;
+        }
+        else
+        {
+            callerStack[0u] = -1;
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_DPC_UNREGISTER_HANDLER:
+    {
+        // Unregister DPC handler: R0 = IRQ, R1 = semaphore
+        uint32_t irqNumber = callerStack[0u];
+        CRTOS::BinarySemaphore* sem = (CRTOS::BinarySemaphore*)callerStack[1u];
+        
+        if (sem != nullptr)
+        {
+            CRTOS::GlobalDPCDispatcher.UnregisterHandler(irqNumber, sem);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -797,6 +982,9 @@ extern "C" void switchCtx(void)
         case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
             if (tickCount >= temp->data->timeout)
             {
+                // Timeout occurred - set return value to -1 (failure)
+                // The saved R0 is at offset 0 in the task's saved stack context
+                ((volatile uint32_t*)(temp->data->stackTop))[0] = (uint32_t)(-1);
                 temp->data->state = TaskState::TASK_READY;
             }
             break;
@@ -1015,7 +1203,7 @@ void idleTask(void *)
 {
     for (;;)
     {
-        if (isPendingTask() == true)
+        if (isHigherPrioTaskPending() == true)
         {
             *ICSR_REG = NVIC_PENDSV_BIT;
             __ISB();

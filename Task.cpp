@@ -136,7 +136,7 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         {
             tmpStack[i] = 0xDEADBEEF;
         }
-        memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
+        memset_optimized(&(tmpTCB->name[0u]), 0u, 24u);
 
         tmpTCB->stack = &tmpStack[0u];
         tmpTCB->stackSize = stackDepth;
@@ -161,7 +161,7 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         tmpTCB->state = TaskState::TASK_READY;
 
         uint32_t nameLength = pStringLength(name);
-        memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 20u ? nameLength : 20u);
+        memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 24u ? nameLength : 24u);
 
         volatile uint32_t *stackTop = &(tmpTCB->stack[stackDepth - 1u]);
         stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7u);
@@ -210,7 +210,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(const uint
             continue;
         }
 
-        memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
+        memset_optimized(&(tmpTCB->name[0u]), 0u, 24u);
 
         tmpTCB->stackSize = 0u;
         tmpTCB->function_args = args;
@@ -237,7 +237,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(const uint
         tmpTCB->state = TaskState::TASK_READY;
 
         uint32_t nameLength = pStringLength(name);
-        memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 20u ? nameLength : 20u);
+        memcpy_optimized(&tmpTCB->name[0], (char *)&name[0u], nameLength < 24u ? nameLength : 24u);
 
         volatile uint32_t *stackTop = &(tmpTCB->stack[tmpTCB->stackSize - 1u]);
         stackTop = (uint32_t *)(((uint32_t)stackTop) & ~7u);
@@ -288,7 +288,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
             continue;
         }
 
-        memset_optimized(&(tmpTCB->name[0u]), 0u, 20u);
+        memset_optimized(&(tmpTCB->name[0u]), 0u, 24u);
         tmpTCB->function_args = args;
         tmpTCB->enterCycles = 0u;
         tmpTCB->exitCycles = 0u;
@@ -448,12 +448,12 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
 
         // Task name from module descriptor
         // Ensure the module name from descriptor is null-terminated
-        char moduleName[20] = {0};
+        char moduleName[24] = {0};
         if (md->magic == MODULE_MAGIC)
         {
             // Copy name from module descriptor (max 19 chars to leave room for null terminator)
             uint32_t nameLen = 0;
-            while (nameLen < 19 && nameLen < 32 && md->name[nameLen] != '\0')
+            while (nameLen < 24 && nameLen < 32 && md->name[nameLen] != '\0')
             {
                 moduleName[nameLen] = md->name[nameLen];
                 nameLen++;
@@ -466,7 +466,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
             const char *fallbackName = "unnamed_module";
             memcpy_optimized(moduleName, (void *)fallbackName, 15);
         }
-        memcpy_optimized(&tmpTCB->name[0], moduleName, 20);
+        memcpy_optimized(&tmpTCB->name[0], moduleName, 24);
 
         // IMPORTANT: Track the loaded module BEFORE adding to ready list
         // This prevents race condition where module starts before tracking is set up
@@ -483,7 +483,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         if (loadedModules != nullptr && loadedModulesCount < MAX_LOADED_MODULES)
         {
             LoadedModuleInfo *modInfo = &loadedModules[loadedModulesCount];
-            memcpy_optimized(modInfo->name, tmpTCB->name, 20);
+            memcpy_optimized(modInfo->name, tmpTCB->name, 24);
             modInfo->baseAddress = (uint32_t)binary;
             modInfo->entryPoint = new_entry & ~1u; // Clear Thumb bit for address display
 
@@ -830,7 +830,7 @@ uint32_t CRTOS::Task::GetAllTasksStackInfo(CRTOS::TaskStackInfo *infoArray, uint
         uint32_t freeStackBytes = freeStack * sizeof(uint32_t);
 
         // Fill in the info structure
-        memcpy_optimized(&infoArray[taskCount].name[0], &tcb->name[0], 20u);
+        memcpy_optimized(&infoArray[taskCount].name[0], &tcb->name[0], 24u);
         infoArray[taskCount].stackSize = totalStackBytes;
         infoArray[taskCount].stackUsed = usedStackBytes;
         infoArray[taskCount].stackFree = freeStackBytes;
@@ -974,7 +974,7 @@ uint32_t CRTOS::Task::LPC55S69_Features::GetAllModulesInfo(CRTOS::ModuleInfo *in
         CRTOS::ModuleInfo *dest = &infoArray[count];
 
         // Copy module information
-        memcpy_optimized(dest->name, src->name, 20);
+        memcpy_optimized(dest->name, src->name, 24);
         dest->baseAddress = src->baseAddress;
         dest->entryPoint = src->entryPoint;
         dest->textAddr = src->textAddr;
@@ -1016,7 +1016,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::GetModuleInfo(TaskHandle *handle, 
         {
             LoadedModuleInfo *src = &loadedModules[i];
 
-            memcpy_optimized(info.name, src->name, 20);
+            memcpy_optimized(info.name, src->name, 24);
             info.baseAddress = src->baseAddress;
             info.entryPoint = src->entryPoint;
             info.textAddr = src->textAddr;

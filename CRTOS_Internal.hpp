@@ -92,7 +92,7 @@ typedef struct __attribute__((packed)) ModuleDescriptorBin
 // Module tracking structure
 struct LoadedModuleInfo
 {
-    char name[20];
+    char name[24];
     uint32_t baseAddress;
     uint32_t entryPoint;
     uint32_t textAddr;
@@ -379,6 +379,13 @@ inline Node<T> *ListSearchByData(Node<T> *head, T *target)
     return nullptr;
 }
 
+// Constants
+constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
+constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
+constexpr uint32_t NVIC_SYSTICK_PRIO = NVIC_MIN_PRIO << 24u;
+constexpr uint32_t MAX_SYSCALL_IRQ_PRIO = 1ul << 5u;
+constexpr uint32_t NVIC_PENDSV_BIT = 1ul << 28u;
+
 // Hardware register definitions
 #define DWT_REG ((volatile uint32_t *)0xE0001000ul)
 #define ICSR_REG ((volatile uint32_t *)0xE000ED04ul)
@@ -391,13 +398,6 @@ inline Node<T> *ListSearchByData(Node<T> *head, T *target)
 #define SysTick_CTRL_CLKSOURCE (1ul << 2u)
 #define SysTick_CTRL_TICKINT (1ul << 1u)
 #define SysTick_CTRL_ENABLE (1ul)
-
-// Constants
-constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
-constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
-constexpr uint32_t NVIC_SYSTICK_PRIO = NVIC_MIN_PRIO << 24u;
-constexpr uint32_t MAX_SYSCALL_IRQ_PRIO = 1ul << 5u;
-constexpr uint32_t NVIC_PENDSV_BIT = 1ul << 28u;
 
 // Inline barrier functions
 static inline void __DSB(void)

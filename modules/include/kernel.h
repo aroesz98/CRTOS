@@ -29,6 +29,14 @@ enum SVC_Commands
     COMMAND_GET_HEAP_INFO,
     COMMAND_MODULE_MALLOC,
     COMMAND_MODULE_FREE,
+    COMMAND_REGISTER_TASK_IRQ,
+    COMMAND_UNREGISTER_TASK_IRQ,
+    COMMAND_SEMAPHORE_CREATE,
+    COMMAND_SEMAPHORE_WAIT,
+    COMMAND_SEMAPHORE_SIGNAL,
+    COMMAND_SEMAPHORE_DELETE,
+    COMMAND_DPC_REGISTER_HANDLER,
+    COMMAND_DPC_UNREGISTER_HANDLER,
 
     COMMAND_UNKNOWN = 0xFFFFFFFFu
 };
@@ -128,6 +136,41 @@ void* module_malloc(uint32_t size);
 
 // Module memory deallocation
 void module_free(void* ptr);
+
+// Register current task for an IRQ (for display in htop)
+void RegisterCurrentTaskIRQ(uint32_t irqNumber);
+
+// Unregister current task from IRQ
+void UnregisterCurrentTaskIRQ(void);
+
+// Semaphore operations (opaque handle)
+typedef void* SemaphoreHandle;
+
+// Create a binary semaphore (returns handle or NULL on failure)
+SemaphoreHandle module_semaphore_create(void);
+
+// Wait on semaphore (timeout in ticks, 0xFFFFFFFF = infinite)
+// Returns 0 on success, -1 on timeout
+int32_t module_semaphore_wait(SemaphoreHandle sem, uint32_t timeout);
+
+// Signal a semaphore
+void module_semaphore_signal(SemaphoreHandle sem);
+
+// Delete a semaphore
+void module_semaphore_delete(SemaphoreHandle sem);
+
+// DPC operations
+typedef void (*DPCCallback)(void* context);
+
+// Register DPC handler for an IRQ
+// sem: semaphore to signal when interrupt fires
+// callback: optional callback to run in ISR context (can be NULL)
+// context: context pointer passed to callback
+// Returns 0 on success, -1 on failure
+int32_t module_dpc_register_handler(uint32_t irqNumber, SemaphoreHandle sem, DPCCallback callback, void* context);
+
+// Unregister DPC handler
+void module_dpc_unregister_handler(uint32_t irqNumber, SemaphoreHandle sem);
 
 #if defined(__cplusplus)
 }
