@@ -40,6 +40,7 @@ class HeapAllocator
             bool free;
             Block *prev;
             Block *next;
+            void *ownerTCB;  // Task that allocated this block
             uint32_t endMarker;
         };
 

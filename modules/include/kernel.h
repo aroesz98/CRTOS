@@ -27,6 +27,8 @@ enum SVC_Commands
     COMMAND_GET_TASK_COUNT,
     COMMAND_GET_TASK_INFO,
     COMMAND_GET_HEAP_INFO,
+    COMMAND_MODULE_MALLOC,
+    COMMAND_MODULE_FREE,
 
     COMMAND_UNKNOWN = 0xFFFFFFFFu
 };
@@ -97,7 +99,9 @@ typedef struct ModuleTaskInfo
     uint32_t stackUsed;
     uint32_t stackFree;
     uint32_t stackPercent;
+    uint32_t heapAllocated;  // Heap memory allocated by this task
     uint32_t runtimeCycles;  // Total CPU cycles consumed by this task
+    uint32_t registeredIRQ;  // IRQ number this task is registered for (0xFFFFFFFF if none)
 } ModuleTaskInfo;
 
 // Heap information structure
@@ -118,6 +122,12 @@ int32_t module_get_task_info(uint32_t task_index, ModuleTaskInfo* info);
 
 // Get heap information
 void module_get_heap_info(ModuleHeapInfo* info);
+
+// Module memory allocation (uses kernel heap)
+void* module_malloc(uint32_t size);
+
+// Module memory deallocation
+void module_free(void* ptr);
 
 #if defined(__cplusplus)
 }

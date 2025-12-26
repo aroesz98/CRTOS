@@ -19,8 +19,7 @@
 /* =============================================================================
  * Configuration
  * ===========================================================================*/
-#define MONITOR_INTERVAL_MS 500u // Update every 500ms
-#define MAX_TASKS 10             // Maximum tasks to monitor (reduced for stack)
+#define MONITOR_INTERVAL_MS 1000u // Update every 1000ms
 #define HEADER_REFRESH_COUNT 10  // Refresh header every N updates
 
 /* =============================================================================
@@ -51,16 +50,20 @@ static const char *get_task_state_string(uint8_t state)
 {
     switch (state)
     {
-    case 0:
-        return "READY  ";
-    case 1:
+    case 0:  // TASK_RUNNING
         return "RUNNING";
-    case 2:
-        return "BLOCKED";
-    case 3:
-        return "SUSPEND";
-    case 4:
-        return "DELETED";
+    case 1:  // TASK_READY
+        return "READY  ";
+    case 2:  // TASK_DELAYED
+        return "DELAYED";
+    case 3:  // TASK_PAUSED
+        return "PAUSED ";
+    case 4:  // TASK_BLOCKED_BY_SEMAPHORE
+        return "BLK-SEM";
+    case 5:  // TASK_BLOCKED_BY_QUEUE
+        return "BLK-QUE";
+    case 6:  // TASK_BLOCKED_BY_CIRC_BUFFER
+        return "BLK-BUF";
     default:
         return "UNKNOWN";
     }
@@ -94,14 +97,15 @@ static void draw_header(uint32_t heap_total, uint32_t heap_free, uint32_t heap_u
 {
     // Clear screen and move cursor to home position (VT100)
     printf("\033[2J\033[H");
-    printf("========== CRTOS Monitor | Tasks: %-3lu ==========\r\n", task_count);
+    printf("-----------------------------------------------------------------------\r\n");
+    printf("|=================== CRTOS Monitor | Tasks: %-3lu ====================|\r\n", task_count);
 
     // Heap usage bar
     uint32_t heap_percent = (heap_used * 100) / heap_total;
-    printf("Heap [");
-    for (uint32_t i = 0; i < 40; i++)
+    printf("|Heap [");
+    for (uint32_t i = 0; i < 56; i++)
     {
-        if (i < (heap_percent * 40 / 100))
+        if (i < (heap_percent * 56 / 100))
         {
             printf("#");
         }
@@ -111,9 +115,10 @@ static void draw_header(uint32_t heap_total, uint32_t heap_free, uint32_t heap_u
         }
     }
     printf("] %3lu%%\r\n", heap_percent);
-    printf("Total:%-6lu | Used:%-6lu | Free:%-6lu bytes\r\n", heap_total, heap_used, heap_free);
-    printf("%-4s %-16s %-3s %-8s %-6s %-5s %-5s %-4s %-4s\r\n", "PID", "NAME", "PRI", "STATE", "STACK", "USED", "FREE", "STK%", "CPU%");
-    printf("------------------------------------------------------------------\r\n");
+    printf("|Total:%-6lu | Used:%-6lu | Free:%-6lu bytes\r\n", heap_total, heap_used, heap_free);
+    printf("-----------------------------------------------------------------------\r\n");
+    printf("|%-4s %-20s %-3s %-8s %-6s %-6s %-4s %-6s %-4s %-8s|\r\n", "PID", "NAME", "PRI", "STATE", "STACK", "FREE", "STK%", "HEAP", "CPU%", "IRQ");
+    printf("-----------------------------------------------------------------------\r\n");
 }
 
 /**
@@ -122,11 +127,55 @@ static void draw_header(uint32_t heap_total, uint32_t heap_free, uint32_t heap_u
 static void display_task_info(uint32_t pid, const char *name, uint32_t priority,
                               uint8_t state, uint32_t stack_size, uint32_t stack_used,
                               uint32_t stack_free, uint32_t stack_percent,
-                              uint32_t cpu_percent)
+                              uint32_t heap_allocated, uint32_t cpu_percent,
+                              uint32_t irq_number)
 {
-    printf("%-4lu %-16s %-3lu %-8s %-6lu %-5lu %-5lu %3lu%% %3lu%%\r\n",
+    (void)stack_used; // Unused parameter - kept for API consistency
+    
+    // Convert bytes to words (divide by 4)
+    uint32_t stack_size_words = stack_size / 4;
+    uint32_t stack_free_words = stack_free / 4;
+    
+    // Format IRQ string without snprintf
+    char irq_str[9] = "---     ";
+    if (irq_number != 0xFFFFFFFF)
+    {
+        // Simple IRQ number formatting: "IRQ" + up to 3 digits
+        irq_str[0] = 'I';
+        irq_str[1] = 'R';
+        irq_str[2] = 'Q';
+        
+        // Convert number to string (max 3 digits)
+        if (irq_number >= 100)
+        {
+            irq_str[3] = '0' + ((irq_number / 100) % 10);
+            irq_str[4] = '0' + ((irq_number / 10) % 10);
+            irq_str[5] = '0' + (irq_number % 10);
+            irq_str[6] = ' ';
+            irq_str[7] = ' ';
+        }
+        else if (irq_number >= 10)
+        {
+            irq_str[3] = '0' + ((irq_number / 10) % 10);
+            irq_str[4] = '0' + (irq_number % 10);
+            irq_str[5] = ' ';
+            irq_str[6] = ' ';
+            irq_str[7] = ' ';
+        }
+        else
+        {
+            irq_str[3] = '0' + (irq_number % 10);
+            irq_str[4] = ' ';
+            irq_str[5] = ' ';
+            irq_str[6] = ' ';
+            irq_str[7] = ' ';
+        }
+        irq_str[8] = '\0';
+    }
+    
+    printf("|%-4lu %-20s %-3lu %-8s %-6lu %-6lu %3lu%% %-6lu %3lu%% %-8s|\r\n",
            pid, name, priority, get_task_state_string(state),
-           stack_size, stack_used, stack_free, stack_percent, cpu_percent);
+           stack_size_words, stack_free_words, stack_percent, heap_allocated, cpu_percent, irq_str);
 }
 
 /**
@@ -134,8 +183,8 @@ static void display_task_info(uint32_t pid, const char *name, uint32_t priority,
  */
 static void draw_footer(void)
 {
-    printf("------------------------------------------------------------------\r\n");
-    printf("htop_module monitoring | Refresh: 500ms\r\n\r\n");
+    printf("-----------------------------------------------------------------------\r\n");
+    printf("htop_module monitoring | Refresh: 1000ms\r\n\r\n");
 }
 
 /* =============================================================================
@@ -152,11 +201,14 @@ typedef struct
     uint32_t cpu_percent; // Calculated CPU percentage
 } TaskSnapshot;
 
-static TaskSnapshot prev_snapshots[MAX_TASKS];
+// Dynamic storage for task snapshots (grows as needed)
+static TaskSnapshot *prev_snapshots = NULL;
 static uint32_t prev_task_count = 0;
+static uint32_t prev_snapshots_capacity = 0;
 
-// Move all large arrays/structures to static to avoid stack overflow
-static ModuleTaskInfo task_info_buffer[MAX_TASKS];
+// Dynamic task and heap info buffers (allocated based on actual task count)
+static ModuleTaskInfo *task_info_buffer = NULL;
+static uint32_t task_info_buffer_capacity = 0;
 static ModuleHeapInfo heap_info_buffer;
 
 // Smoothing factor for CPU average (0-100): higher = more smoothing
@@ -232,12 +284,37 @@ static uint32_t calculate_cpu_usage(const char *task_name, uint32_t current_cycl
  */
 static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_t *cpu_percents)
 {
+    // Grow snapshot array if needed
+    if (task_count > prev_snapshots_capacity)
+    {
+        TaskSnapshot *new_snapshots = (TaskSnapshot *)module_malloc(task_count * sizeof(TaskSnapshot));
+        if (new_snapshots)
+        {
+            // Copy old data if exists
+            if (prev_snapshots)
+            {
+                for (uint32_t i = 0; i < prev_task_count && i < task_count; i++)
+                {
+                    new_snapshots[i] = prev_snapshots[i];
+                }
+                module_free(prev_snapshots);
+            }
+            prev_snapshots = new_snapshots;
+            prev_snapshots_capacity = task_count;
+        }
+        else
+        {
+            // Allocation failed, keep old snapshots
+            return;
+        }
+    }
+
     // For each current task, find or create snapshot
-    for (uint32_t i = 0; i < task_count && i < MAX_TASKS; i++)
+    for (uint32_t i = 0; i < task_count; i++)
     {
         // Try to find existing snapshot for this task
-        uint32_t snapshot_idx = MAX_TASKS;
-        for (uint32_t j = 0; j < prev_task_count && j < MAX_TASKS; j++)
+        uint32_t snapshot_idx = task_count;
+        for (uint32_t j = 0; j < prev_task_count; j++)
         {
             if (strcmp(prev_snapshots[j].name, tasks[i].name) == 0)
             {
@@ -247,7 +324,7 @@ static void update_snapshots(uint32_t task_count, ModuleTaskInfo *tasks, uint32_
         }
 
         // If not found, use a new slot
-        if (snapshot_idx >= MAX_TASKS)
+        if (snapshot_idx >= task_count)
         {
             snapshot_idx = i;
             prev_snapshots[snapshot_idx].cpu_percent = 0;
@@ -316,11 +393,32 @@ __attribute__((section(".entry"))) int module_entry(uint32_t reason, void *ctx)
             shared->data[CMD_OFFSET] = CMD_IDLE;
         }
 
-        // Get real task information from kernel (use static buffer to avoid stack overflow)
+        // Get real task information from kernel (allocate buffer dynamically)
         uint32_t task_count = module_get_task_count();
 
+        // Grow task info buffer if needed
+        if (task_count > task_info_buffer_capacity)
+        {
+            ModuleTaskInfo *new_buffer = (ModuleTaskInfo *)module_malloc(task_count * sizeof(ModuleTaskInfo));
+            if (new_buffer)
+            {
+                if (task_info_buffer)
+                {
+                    module_free(task_info_buffer);
+                }
+                task_info_buffer = new_buffer;
+                task_info_buffer_capacity = task_count;
+            }
+            else
+            {
+                printf("[HTOP] ERROR: Failed to allocate memory for %lu tasks!\r\n", task_count);
+                delay(refresh_interval);
+                continue;
+            }
+        }
+
         uint32_t tasks_retrieved = 0;
-        for (uint32_t i = 0; i < task_count && i < MAX_TASKS; i++)
+        for (uint32_t i = 0; i < task_count; i++)
         {
             if (module_get_task_info(i, &task_info_buffer[i]) == 0)
             {
@@ -334,8 +432,16 @@ __attribute__((section(".entry"))) int module_entry(uint32_t reason, void *ctx)
         // Calculate total CPU delta for all tasks
         uint64_t total_delta = calculate_total_delta(tasks_retrieved);
 
+        // Allocate CPU percentage array dynamically
+        uint32_t *cpu_percents = (uint32_t *)module_malloc(tasks_retrieved * sizeof(uint32_t));
+        if (!cpu_percents)
+        {
+            printf("[HTOP] ERROR: Failed to allocate CPU percent buffer!\r\n");
+            delay(refresh_interval);
+            continue;
+        }
+
         // Calculate individual CPU percentages and store them
-        static uint32_t cpu_percents[MAX_TASKS];
         for (uint32_t i = 0; i < tasks_retrieved; i++)
         {
             cpu_percents[i] = calculate_cpu_usage(task_info_buffer[i].name,
@@ -389,13 +495,17 @@ __attribute__((section(".entry"))) int module_entry(uint32_t reason, void *ctx)
             display_task_info(i, task_info_buffer[i].name, task_info_buffer[i].priority,
                               (uint8_t)task_info_buffer[i].state, task_info_buffer[i].stackSize,
                               task_info_buffer[i].stackUsed, task_info_buffer[i].stackFree,
-                              stack_percent, cpu_percents[i]);
+                              stack_percent, task_info_buffer[i].heapAllocated, cpu_percents[i],
+                              task_info_buffer[i].registeredIRQ);
         }
 
         draw_footer();
 
         // Update snapshots for next CPU calculation
         update_snapshots(tasks_retrieved, task_info_buffer, cpu_percents);
+
+        // Free CPU percents array
+        module_free(cpu_percents);
 
         header_counter++;
 

@@ -18,6 +18,14 @@
 #include <cstdint>
 #include <atomic>
 
+#include "Task.hpp"
+#include "Mutex.hpp"
+#include "BinarySemaphore.hpp"
+#include "Timer.hpp"
+#include "Queue.hpp"
+#include "CircularBuffer.hpp"
+#include "InterruptDPC.hpp"
+
 template <typename T>
 class Node;
 
@@ -62,6 +70,7 @@ namespace CRTOS
         uint32_t stackUsed;          // Used stack in bytes
         uint32_t stackFree;          // Free stack in bytes
         uint32_t utilizationPercent; // Stack utilization percentage (0-100)
+        uint32_t heapAllocated;      // Heap memory allocated by this task in bytes
         void* taskHandle;            // Task handle
     };
 
@@ -100,6 +109,7 @@ namespace CRTOS
     {
         void SetCoreClock(uint32_t ClockInMHz);
         void SetTickRate(uint32_t TicksPerSecond);
+        void SetTimeSlice(uint32_t ticks);  // Set time slice quantum (in ticks)
         Result InitMem(void *pool, uint32_t size);
         void* Allocate(uint32_t size);
         void Deallocate(void *ptr);
@@ -110,145 +120,14 @@ namespace CRTOS
         void DefragmentHeap(void);
     }
 
-    class Mutex
-    {
-        public:
-            Mutex(void);
-            ~Mutex(void);
-            void Lock(void);
-            void Unlock(void);
-
-        private:
-            std::atomic_flag flag;
-            uint32_t irqMask;
-    };
-
-    class BinarySemaphore
-    {
-		public:
-    		BinarySemaphore() = default;
-			~BinarySemaphore() = default;
-
-			Result wait(uint32_t ticks);
-			Result signal();
-
-		private:
-			Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
-			uint32_t _val;
-    };
-
-    namespace Task
-    {
-        typedef void (*TaskFunction)(void *);
-        typedef void* TaskHandle;
-        typedef void (*StackOverflowHook)(const char *taskName, void *taskHandle);
-
-        Result Create(void (*function)(void *),  const char * const name, uint32_t stackDepth, void *args, uint32_t prio, TaskHandle *handle);
-        Result Delete(void);
-        Result Delete(TaskHandle *handle);
-
-        CRTOS::Result Delay(uint32_t ticks);
-        CRTOS::Result Pause(TaskHandle *handle);
-        CRTOS::Result Resume(TaskHandle *handle);
-        void Yield(void);
-        
-        void SetStackOverflowHook(StackOverflowHook hook);
-
-        uint32_t GetTaskCycles(void);
-        uint32_t GetFreeStack(void);
-        uint32_t GetFreeStack(TaskHandle *handle);
-        uint32_t GetAllTasksStackInfo(TaskStackInfo *infoArray, uint32_t maxTasks);
-        void GetCoreLoad(uint32_t &load, uint32_t &mantissa);
-        uint32_t GetLastTaskSwitchTime(void);  // Get the last task switch latency in cycles
-
-        uint32_t EnterCriticalSection(void);
-        void ExitCriticalSection(uint32_t mask);
-
-        char* GetCurrentTaskName(void);
-        char* GetTaskName(TaskHandle *handle);
-        TaskHandle GetCurrentTaskHandle(void);
-
-        namespace LPC55S69_Features
-        {
-            Result CreateTaskForExecutable(const uint8_t *elf_file, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
-            // Create task from a raw BIN module produced by this module template
-			// The BIN layout begins with ProgramInfo followed by code/rodata.
-			Result CreateTaskForBinModule(uint8_t *bin, const char *const name, void *args, uint32_t prio, TaskHandle *handle);
-			
-			// Module management functions
-			uint32_t GetLoadedModulesCount(void);
-			uint32_t GetAllModulesInfo(ModuleInfo *infoArray, uint32_t maxModules);
-			Result GetModuleInfo(TaskHandle *handle, ModuleInfo &info);
-			Result SetModuleState(TaskHandle *handle, ModuleState newState);
-			
-			// Module data exchange functions
-			Result WriteToModule(TaskHandle *handle, uint32_t value);
-			Result ReadFromModule(TaskHandle *handle, uint32_t &value);
-			Result GetModuleSharedMemory(TaskHandle *handle, void **sharedMemPtr);
-        };
-    };
-
     namespace Scheduler
     {
         Result Start(void);
     };
 
-    namespace Timer
-    {
-        typedef struct
-        {
-            uint32_t timeoutTicks;
-            uint32_t elapsedTicks;
-            bool isActive;
-            void (*callback)(void*);
-            void *callbackArgs;
-            bool autoReload;
-        } SoftwareTimer;
-
-        Result Init(SoftwareTimer *timer, uint32_t timeoutTicks, void (*callback)(void*), void *callbackArgs, bool autoReload);
-        Result Start(SoftwareTimer *timer);
-        Result Stop(SoftwareTimer *timer);
-    };
-
-    class Queue
-    {
-        private:
-            uint8_t *mQueue;
-            uint32_t mFront;
-            uint32_t mRear;
-            uint32_t mSize;
-            uint32_t mMaxSize;
-            uint32_t mElementSize;
-            Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
-
-        public:
-            Queue(uint32_t maxsize, uint32_t element_size);
-            ~Queue(void);
-
-            Result Send(void* item);
-            Result Receive(void* item, uint32_t timeout = 0u);
-    };
-
-   class CircularBuffer
-   {
-       private:
-           uint8_t* mBuffer;
-           uint32_t mHead;
-           uint32_t mTail;
-           uint32_t mCurrentSize;
-           uint32_t mBufferSize;
-           Node<uint32_t*> *listOfTasksWaitingToRecv = nullptr;
-
-       public:
-           CircularBuffer(uint32_t mBuffer_size);
-           CircularBuffer(const CircularBuffer& old);
-           ~CircularBuffer(void);
-
-           Result Init(void);
-
-           Result Send(const uint8_t* data, uint32_t size);
-           Result Receive(uint8_t* data, uint32_t size, uint32_t timeout_ms = 0u);
-   };
+    // Task IRQ registration - allows current task to associate itself with an IRQ number
+    void RegisterCurrentTaskIRQ(uint32_t irqNumber);
+    void UnregisterCurrentTaskIRQ(void);
 
     namespace CRC32
     {

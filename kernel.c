@@ -208,3 +208,36 @@ void module_get_heap_info(ModuleHeapInfo* info)
         : "r0", "memory"
     );
 }
+
+void* module_malloc(uint32_t size)
+{
+    register void* result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* size */
+        "svc %2                        \n"
+        : "=r" (result)
+        : "r" (size), "i" (COMMAND_MODULE_MALLOC)
+        : "memory"
+    );
+    return result;
+}
+
+void module_free(void* ptr)
+{
+    if (ptr == 0)
+    {
+        return;
+    }
+    
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %0                    \n"  /* pointer */
+        "svc %1                        \n"
+        :
+        : "r" (ptr), "i" (COMMAND_MODULE_FREE)
+        : "r0", "memory"
+    );
+}

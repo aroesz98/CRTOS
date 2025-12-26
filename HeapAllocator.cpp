@@ -16,6 +16,31 @@
 #include <cstdint>
 #include <cstdio>
 #include <cassert>
+#include <cstddef>
+
+// Forward declare TaskControlBlock structure to access heapAllocated field
+struct TaskControlBlock
+{
+    volatile uint32_t *stackTop;
+    volatile uint32_t *stack;
+    void (*function)(void *);
+    void *function_args;
+    uint32_t vtor_addr;
+    uint32_t priority;
+    uint32_t state;
+    uint32_t timeout;
+    uint32_t delayUpTo;
+    uint32_t stackSize;
+    uint32_t enterCycles;
+    uint32_t exitCycles;
+    uint64_t executionTime;
+    uint32_t heapAllocated;
+    char name[20u];
+};
+
+extern "C" {
+    extern volatile TaskControlBlock *sCurrentTCB;
+}
 
 static constexpr uint32_t MARKER = 0xDEADBEEFul;
 
@@ -62,6 +87,19 @@ void* HeapAllocator::allocate(uint32_t size)
                     split(forward, size);
                 }
                 forward->free = false;
+                
+                // Track allocation for current task
+                if (sCurrentTCB != nullptr)
+                {
+                    TaskControlBlock *tcb = (TaskControlBlock *)sCurrentTCB;
+                    tcb->heapAllocated += forward->size;
+                    forward->ownerTCB = tcb;  // Store owner
+                }
+                else
+                {
+                    forward->ownerTCB = nullptr;
+                }
+                
                 return (void*)((char*)forward + sizeof(Block) + sizeof(uint32_t));
             }
             forward = forward->next;
@@ -76,6 +114,19 @@ void* HeapAllocator::allocate(uint32_t size)
                     split(backward, size);
                 }
                 backward->free = false;
+                
+                // Track allocation for current task
+                if (sCurrentTCB != nullptr)
+                {
+                    TaskControlBlock *tcb = (TaskControlBlock *)sCurrentTCB;
+                    tcb->heapAllocated += backward->size;
+                    backward->ownerTCB = tcb;  // Store owner
+                }
+                else
+                {
+                    backward->ownerTCB = nullptr;
+                }
+                
                 return (void*)((char*)backward + sizeof(Block) + sizeof(uint32_t));
             }
             backward = backward->prev;
@@ -99,6 +150,18 @@ void HeapAllocator::deallocate(void *ptr)
         assert(false && "Memory corruption detected\r\n");
         return;
     }
+    
+    // Decrement heap counter for owner task
+    if (block->ownerTCB != nullptr)
+    {
+        TaskControlBlock *tcb = (TaskControlBlock *)block->ownerTCB;
+        if (tcb->heapAllocated >= block->size)
+        {
+            tcb->heapAllocated -= block->size;
+        }
+        block->ownerTCB = nullptr;
+    }
+    
     block->free = true;
 
     if (block->prev && block->prev->free)

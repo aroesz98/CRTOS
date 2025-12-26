@@ -15,6 +15,13 @@ memcpy_optimized:
     beq     stop
 
     push    {r1, r3, r4}
+    
+    // Check alignment: both src and dst must be 4-byte aligned for ldrd/strd
+    // r0 = dest, r1 = src
+    orr     r3, r0, r1              // Combine both addresses
+    ands    r3, r3, #3              // Check if any of lower 2 bits are set
+    bne     copybytes               // If not aligned, use byte copy
+    
     cmp     r2, #127
 	bhi		copy128
 	cmp     r2, #31
