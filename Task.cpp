@@ -59,29 +59,6 @@ void CRTOS::Task::ExitCriticalSection(uint32_t mask = 0u)
     setInterruptMask(mask);
 }
 
-static bool isPendingTask(void)
-{
-    Node<TaskControlBlock> *temp = readyTaskList;
-    while (temp != nullptr)
-    {
-        if (temp->data->state == TaskState::TASK_DELAYED)
-        {
-            if (tickCount >= temp->data->delayUpTo)
-            {
-                temp->data->state = TaskState::TASK_READY;
-            }
-        }
-        if (temp->data->state == TaskState::TASK_READY)
-        {
-            return true;
-        }
-
-        temp = temp->next;
-    }
-
-    return false;
-}
-
 extern "C" void setTimeSliceExpired(void);
 
 void CRTOS::Task::Yield(void)
@@ -146,6 +123,7 @@ CRTOS::Result CRTOS::Task::Create(TaskFunction function, const char *const name,
         tmpTCB->exitCycles = 0u;
         tmpTCB->heapAllocated = 0u;
         tmpTCB->registeredIRQ = 0xFFFFFFFFu;
+        tmpTCB->blockingNode = nullptr;
         tmpTCB->vtor_addr = 0u;
 
         if (prio >= MAX_TASK_PRIORITY)
@@ -218,6 +196,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForExecutable(const uint
         tmpTCB->exitCycles = 0u;
         tmpTCB->heapAllocated = 0u;
         tmpTCB->registeredIRQ = 0xFFFFFFFFu;
+        tmpTCB->blockingNode = nullptr;
 
         elf.parse(elf_file, (uint32_t **)(&(tmpTCB->stack)), &(tmpTCB->stackSize), &(tmpTCB->vtor_addr));
         tmpTCB->vtor_addr = 0u;
@@ -294,6 +273,7 @@ CRTOS::Result CRTOS::Task::LPC55S69_Features::CreateTaskForBinModule(uint8_t *bi
         tmpTCB->exitCycles = 0u;
         tmpTCB->heapAllocated = 0u;
         tmpTCB->registeredIRQ = 0xFFFFFFFFu;
+        tmpTCB->blockingNode = nullptr;
 
         // Determine image size using descriptor if present; otherwise fallback to data offset + data size
         ProgramInfoBin *pinfo_src = reinterpret_cast<ProgramInfoBin *>(bin);

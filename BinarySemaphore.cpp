@@ -44,6 +44,7 @@ CRTOS::Result CRTOS::BinarySemaphore::signal(void)
             if (tmp->state == TaskState::TASK_BLOCKED_BY_SEMAPHORE)
             {
                 tmp->state = TaskState::TASK_READY;
+                tmp->blockingNode = nullptr; // Clear node pointer since it's being freed
             }
             ListDeleteAtBeginning(listOfTasksWaitingToRecv);
         }

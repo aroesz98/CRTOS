@@ -255,7 +255,8 @@ __attribute__((section(".entry"))) int module_entry(uint32_t reason, void* ctx)
     printf("Printf test: counter=%lu\n", cnt);
     
     // Setup periodic timer for logging
-    initialize_timer();
+    // DISABLED: Timer logging causes heap growth due to module malloc/free limitations
+    // initialize_timer();
     
     // Main execution loop
     while (1) {

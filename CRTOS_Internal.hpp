@@ -53,7 +53,8 @@ struct TaskControlBlock
     uint64_t executionTime;
     uint32_t heapAllocated;      // Total heap memory allocated by this task
     uint32_t registeredIRQ;      // IRQ number this task is registered for (0xFFFFFFFF if none)
-    char name[20u];
+    void *blockingNode;          // Pointer to the Node in a waiting list (for cleanup on timeout)
+    char name[24];
 };
 
 // Must match module ProgramInfo

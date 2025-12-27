@@ -151,7 +151,7 @@ __attribute__((section(".entry"))) int module_entry(uint32_t reason, void *ctx)
     
     // Initialize state
     state.running = 1;
-    state.verbose = 1;  // Disable verbose logging
+    state.verbose = 0;  // Disable verbose logging to prevent heap leak (printf uses malloc)
     reset_stats();
     state.min_latency = 0xFFFFFFFF;
     

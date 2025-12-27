@@ -629,6 +629,9 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
                     (*waiting_list)->prev = newNode;
                 }
                 *waiting_list = newNode;
+                
+                // Save node pointer in TCB for cleanup on timeout
+                tcbToBlock->blockingNode = newNode;
             }
             
             // Optimistically set success - will be changed to -1 on timeout
@@ -982,8 +985,27 @@ extern "C" void switchCtx(void)
         case TaskState::TASK_BLOCKED_BY_SEMAPHORE:
             if (tickCount >= temp->data->timeout)
             {
-                // Timeout occurred - set return value to -1 (failure)
-                // The saved R0 is at offset 0 in the task's saved stack context
+                // Timeout occurred - remove node from semaphore's waiting list and free it
+                if (temp->data->blockingNode != nullptr)
+                {
+                    Node<uint32_t*>* nodeToFree = (Node<uint32_t*>*)temp->data->blockingNode;
+                    
+                    // Remove from linked list
+                    if (nodeToFree->prev != nullptr)
+                    {
+                        nodeToFree->prev->next = nodeToFree->next;
+                    }
+                    if (nodeToFree->next != nullptr)
+                    {
+                        nodeToFree->next->prev = nodeToFree->prev;
+                    }
+                    
+                    // Free the node
+                    mem.deallocate(nodeToFree);
+                    temp->data->blockingNode = nullptr;
+                }
+                
+                // Set return value to -1 (failure)
                 ((volatile uint32_t*)(temp->data->stackTop))[0] = (uint32_t)(-1);
                 temp->data->state = TaskState::TASK_READY;
             }
