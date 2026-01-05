@@ -18,7 +18,6 @@
 #include "HeapAllocator.hpp"
 
 // External declarations from CRTOS.cpp
-extern HeapAllocator mem;
 extern volatile TaskControlBlock *sCurrentTCB;
 extern "C" uint32_t getInterruptMask(void);
 extern "C" void setInterruptMask(uint32_t mask);
@@ -29,160 +28,147 @@ extern bool isHigherPrioTaskPending(void);
 CRTOS::Queue::Queue(uint32_t maxsize, uint32_t element_size)
     : mFront(0u), mRear(0u), mSize(0u), mMaxSize(maxsize), mElementSize(element_size)
 {
-    mQueue = reinterpret_cast<uint8_t *>(mem.allocate(maxsize * element_size));
+    mQueue = reinterpret_cast<uint8_t *>(HeapAllocator::Allocate(maxsize * element_size));
 }
 
 CRTOS::Queue::~Queue(void)
 {
-    mem.deallocate(mQueue);
+    HeapAllocator::Free(mQueue);
 }
 
 CRTOS::Result CRTOS::Queue::Send(void *item)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-
-    do
+    if (item == nullptr)
     {
-        if (item == nullptr)
-        {
-            result = CRTOS::Result::RESULT_BAD_PARAMETER;
-            continue;
-        }
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
 
-        if (mQueue == nullptr)
-        {
-            result = CRTOS::Result::RESULT_NO_MEMORY;
-            continue;
-        }
+    if (mQueue == nullptr)
+    {
+        return CRTOS::Result::RESULT_NO_MEMORY;
+    }
 
-        if (mSize == mMaxSize)
-        {
-            result = CRTOS::Result::RESULT_QUEUE_FULL;
-            continue;
-        }
+    uint32_t mask = getInterruptMask();
 
-        uint32_t mask = getInterruptMask();
-
-        if (listOfTasksWaitingToRecv != nullptr)
-        {
-            TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
-            if (tmp->state == TaskState::TASK_BLOCKED_BY_QUEUE)
-            {
-                tmp->state = TaskState::TASK_READY;
-            }
-            ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-        }
-
-        memcpy_optimized(mQueue + (mRear * mElementSize), item, mElementSize);
-        mRear = (mRear + 1) % mMaxSize;
-        mSize++;
-
+    if (mSize == mMaxSize)
+    {
         setInterruptMask(mask);
-    } while (0u);
+        return CRTOS::Result::RESULT_QUEUE_FULL;
+    }
 
-    return result;
+    // Add item to queue
+    memcpy_optimized(mQueue + (mRear * mElementSize), item, mElementSize);
+    mRear = (mRear + 1) % mMaxSize;
+    mSize++;
+
+    // Wake up waiting receiver if any
+    if (listOfTasksWaitingToRecv != nullptr)
+    {
+        TaskControlBlock *waitingTask = reinterpret_cast<TaskControlBlock*>(listOfTasksWaitingToRecv->data);
+        
+        // Mark as NOT timed out (woken by Send)
+        waitingTask->wokenByTimeout = false;
+        waitingTask->state = TaskState::TASK_READY;
+        waitingTask->blockingNode = nullptr;
+        
+        ListDeleteAtBeginning(listOfTasksWaitingToRecv);
+        
+        setInterruptMask(mask);
+        
+        // Trigger scheduler
+        *ICSR_REG = NVIC_PENDSV_BIT;
+        __DSB();
+        __ISB();
+    }
+    else
+    {
+        setInterruptMask(mask);
+    }
+
+    return CRTOS::Result::RESULT_SUCCESS;
 }
 
 CRTOS::Result CRTOS::Queue::Receive(void *item, uint32_t timeout)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-    uint32_t time = GetSystemTime();
-    uint32_t stimeout = time + timeout;
-    bool isBlocked = false;
+    if (item == nullptr)
+    {
+        return CRTOS::Result::RESULT_BAD_PARAMETER;
+    }
+
+    if (mQueue == nullptr)
+    {
+        return CRTOS::Result::RESULT_NO_MEMORY;
+    }
 
     uint32_t mask = getInterruptMask();
 
-    for (;;)
+    // 1. Success: Data available immediately
+    if (mSize > 0u)
     {
-        time = GetSystemTime();
-
-        if (item == nullptr)
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_BAD_PARAMETER;
-            return result;
-        }
-
-        if (mQueue == nullptr)
-        {
-            setInterruptMask(mask);
-            result = CRTOS::Result::RESULT_NO_MEMORY;
-            return result;
-        }
-
-        if (mSize > 0u)
-        {
-            memcpy_optimized(item, mQueue + (mFront * mElementSize), mElementSize);
-            mFront = (mFront + 1) % mMaxSize;
-            mSize--;
-
-            setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_SUCCESS;
-            return result;
-        }
-        else
-        {
-            if (timeout == 0u)
-            {
-                setInterruptMask(mask);
-
-                result = CRTOS::Result::RESULT_QUEUE_TIMEOUT;
-                return result;
-            }
-            if (isBlocked == false)
-            {
-                sCurrentTCB->timeout = stimeout;
-                sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_QUEUE;
-                ListInsertAtEnd(listOfTasksWaitingToRecv, (uint32_t **)&sCurrentTCB);
-                isBlocked = true;
-            }
-        }
-
+        memcpy_optimized(item, mQueue + (mFront * mElementSize), mElementSize);
+        mFront = (mFront + 1) % mMaxSize;
+        mSize--;
         setInterruptMask(mask);
-
-        if (time < stimeout)
-        {
-            if (mSize > 0u)
-            {
-                mask = getInterruptMask();
-                if (listOfTasksWaitingToRecv != nullptr)
-                {
-                    TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
-                    if (tmp->state == TaskState::TASK_BLOCKED_BY_QUEUE)
-                    {
-                        tmp->state = TaskState::TASK_READY;
-                    }
-                    ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-                }
-                setInterruptMask(mask);
-
-                if (isHigherPrioTaskPending() == true)
-                {
-                    *ICSR_REG = NVIC_PENDSV_BIT;
-
-                    __DSB();
-                    __ISB();
-                }
-            }
-        }
-        else
-        {
-            // Timeout occurred - remove ourselves from waiting list
-            mask = getInterruptMask();
-
-            // Find and remove current task from waiting list
-            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
-            if (temp != nullptr)
-            {
-                ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-            }
-
-            sCurrentTCB->state = TaskState::TASK_READY;
-            setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_QUEUE_TIMEOUT;
-            return result;
-        }
+        return CRTOS::Result::RESULT_SUCCESS;
     }
+
+    // 2. Immediate Failure: Polling only, no wait
+    if (timeout == 0u)
+    {
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_QUEUE_TIMEOUT;
+    }
+
+    // 3. Blocking with Timeout
+    TaskControlBlock* currentTask = (TaskControlBlock*)sCurrentTCB;
+    
+    // Add task to queue's waiting list
+    Node<uint32_t*> *newNode = reinterpret_cast<Node<uint32_t*>*>(HeapAllocator::Allocate(sizeof(Node<uint32_t*>)));
+    if (newNode != nullptr)
+    {
+        newNode->data = reinterpret_cast<uint32_t**>(currentTask);
+        newNode->next = listOfTasksWaitingToRecv;
+        newNode->prev = nullptr;
+        if (listOfTasksWaitingToRecv != nullptr)
+        {
+            listOfTasksWaitingToRecv->prev = newNode;
+        }
+        listOfTasksWaitingToRecv = newNode;
+        currentTask->blockingNode = newNode;
+    }
+    
+    // Set timeout
+    currentTask->timeout = (timeout == 0xFFFFFFFF) ? 0xFFFFFFFF : (GetSystemTime() + timeout);
+    currentTask->wokenByTimeout = false;
+    currentTask->state = TaskState::TASK_BLOCKED_BY_QUEUE;
+    
+    setInterruptMask(mask);
+    
+    // Yield - give up CPU
+    *ICSR_REG = NVIC_PENDSV_BIT;
+    __DSB();
+    __ISB();
+    
+    // --- TASK RESUMES HERE ---
+    
+    mask = getInterruptMask();
+    
+    if (currentTask->wokenByTimeout)
+    {
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_QUEUE_TIMEOUT;
+    }
+    
+    // We were woken by Send - data should be available
+    if (mSize > 0u)
+    {
+        memcpy_optimized(item, mQueue + (mFront * mElementSize), mElementSize);
+        mFront = (mFront + 1) % mMaxSize;
+        mSize--;
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_SUCCESS;
+    }
+    
+    setInterruptMask(mask);
+    return CRTOS::Result::RESULT_QUEUE_TIMEOUT;
 }

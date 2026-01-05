@@ -17,6 +17,11 @@
 #include <cstdio>
 #include <cassert>
 #include <cstddef>
+#include "fsl_cache.h"  // For cache maintenance on SDRAM heap metadata
+
+// Enable heap tracking for memory leak detection
+#define HEAP_TRACKING_ENABLED
+#include "HeapTracker.hpp"
 
 // Forward declare TaskControlBlock structure to access heapAllocated field
 struct TaskControlBlock
@@ -62,6 +67,9 @@ void HeapAllocator::init(void *memoryPool, uint32_t totalSize)
     mPool = memoryPool;
     mPoolSize = totalSize;
     tail = head;
+    
+    // Ensure Block header is written to memory (important for cached SDRAM)
+    DCACHE_CleanByRange((uint32_t)head, sizeof(Block));
 }
 
 void* HeapAllocator::allocate(uint32_t size)
@@ -100,6 +108,9 @@ void* HeapAllocator::allocate(uint32_t size)
                     forward->ownerTCB = nullptr;
                 }
                 
+                // Clean modified Block header
+                DCACHE_CleanByRange((uint32_t)forward, sizeof(Block));
+                
                 return (void*)((char*)forward + sizeof(Block) + sizeof(uint32_t));
             }
             forward = forward->next;
@@ -126,6 +137,9 @@ void* HeapAllocator::allocate(uint32_t size)
                 {
                     backward->ownerTCB = nullptr;
                 }
+                
+                // Clean modified Block header
+                DCACHE_CleanByRange((uint32_t)backward, sizeof(Block));
                 
                 return (void*)((char*)backward + sizeof(Block) + sizeof(uint32_t));
             }
@@ -171,8 +185,10 @@ void HeapAllocator::deallocate(void *ptr)
         if (block->next)
         {
             block->next->prev = block->prev;
+            DCACHE_CleanByRange((uint32_t)block->next, sizeof(Block));
         }
         block->prev->endMarker = MARKER;
+        DCACHE_CleanByRange((uint32_t)block->prev, sizeof(Block));
         block = block->prev;
     }
     if (block->next && block->next->free)
@@ -182,6 +198,7 @@ void HeapAllocator::deallocate(void *ptr)
         if (block->next)
         {
             block->next->prev = block;
+            DCACHE_CleanByRange((uint32_t)block->next, sizeof(Block));
         }
         block->endMarker = MARKER;
     }
@@ -190,6 +207,9 @@ void HeapAllocator::deallocate(void *ptr)
     {
         tail = block;
     }
+
+    // Clean the block header after all modifications
+    DCACHE_CleanByRange((uint32_t)block, sizeof(Block));
 
     join(block);
 
@@ -250,6 +270,8 @@ void HeapAllocator::split(Block *block, uint32_t size)
     if (block->next)
     {
         block->next->prev = newBlock;
+        // Clean the modified prev pointer
+        DCACHE_CleanByRange((uint32_t)block->next, sizeof(Block));
     }
     block->next = newBlock;
     block->size = size;
@@ -259,6 +281,10 @@ void HeapAllocator::split(Block *block, uint32_t size)
     {
         tail = newBlock;
     }
+    
+    // Clean both modified Block headers to ensure they're written to memory
+    DCACHE_CleanByRange((uint32_t)block, sizeof(Block));
+    DCACHE_CleanByRange((uint32_t)newBlock, sizeof(Block));
 }
 
 void HeapAllocator::join(Block *block)
@@ -271,9 +297,11 @@ void HeapAllocator::join(Block *block)
         if (block->next)
         {
             block->next->prev = block->prev;
+            DCACHE_CleanByRange((uint32_t)block->next, sizeof(Block));
         }
 
         block->prev->endMarker = MARKER;
+        DCACHE_CleanByRange((uint32_t)block->prev, sizeof(Block));
         block = block->prev;
     }
 
@@ -285,6 +313,7 @@ void HeapAllocator::join(Block *block)
         if (block->next)
         {
             block->next->prev = block;
+            DCACHE_CleanByRange((uint32_t)block->next, sizeof(Block));
         }
 
         block->endMarker = MARKER;
@@ -294,6 +323,9 @@ void HeapAllocator::join(Block *block)
     {
         tail = block;
     }
+    
+    // Clean the final block state
+    DCACHE_CleanByRange((uint32_t)block, sizeof(Block));
 }
 
 void HeapAllocator::defragment()
@@ -376,4 +408,366 @@ void HeapAllocator::defragment()
         current = current->next;
     }
 }
+
+bool HeapAllocator::contains(void* ptr) const
+{
+    if (mPool == nullptr || ptr == nullptr)
+        return false;
+    
+    uint32_t addr = (uint32_t)ptr;
+    uint32_t poolStart = (uint32_t)mPool;
+    uint32_t poolEnd = poolStart + mPoolSize;
+    
+    return (addr >= poolStart && addr < poolEnd);
+}
+
+// ============================================================================
+// Static Unified Memory Management Implementation
+// ============================================================================
+
+// Static member initialization
+Memory::MemoryRegion HeapAllocator::s_regions[MAX_REGIONS] = {};
+HeapAllocator HeapAllocator::s_allocators[MAX_REGIONS];
+uint32_t HeapAllocator::s_regionCount = 0;
+
+bool HeapAllocator::RegisterRegion(const char* name, void* pool, uint32_t size, 
+                                   uint32_t flags)
+{
+    if (s_regionCount >= MAX_REGIONS || pool == nullptr || size == 0)
+    {
+        return false;
+    }
+    
+    // Add region at the end (first registered = first checked)
+    uint32_t index = s_regionCount;
+    
+    // Initialize the new region
+    s_regions[index].name = name;
+    s_regions[index].baseAddress = pool;
+    s_regions[index].size = size;
+    s_regions[index].flags = flags;
+    s_regions[index].initialized = true;
+    
+    s_allocators[index].init(pool, size);
+    
+    s_regionCount++;
+    
+    return true;
+}
+
+int32_t HeapAllocator::FindBestRegion(uint32_t size, const Memory::AllocHints& hints)
+{
+    int32_t bestMatch = -1;
+    int32_t bestScore = -1;
+    
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        const Memory::MemoryRegion& region = s_regions[i];
+        
+        if (!region.initialized)
+            continue;
+        
+        // Check required flags - must all be present
+        if (hints.requiredFlags != Memory::MEM_NONE)
+        {
+            if ((region.flags & hints.requiredFlags) != hints.requiredFlags)
+                continue;
+        }
+        
+        // Check excluded flags - must not be present
+        if (hints.excludeFlags != Memory::MEM_NONE)
+        {
+            if ((region.flags & hints.excludeFlags) != 0)
+                continue;
+        }
+        
+        // Check if region has enough free memory
+        if (s_allocators[i].getFreeMemory() < size)
+            continue;
+        
+        // Calculate match score - registration order is the PRIMARY factor
+        // First registered region gets highest score
+        int32_t score = (MAX_REGIONS - i) * 1000;
+        
+        // Count matching preferred flags as secondary factor
+        if (hints.preferredFlags != Memory::MEM_NONE)
+        {
+            uint32_t matched = region.flags & hints.preferredFlags;
+            while (matched)
+            {
+                score += 10;
+                matched &= (matched - 1);
+            }
+        }
+        
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestMatch = (int32_t)i;
+        }
+    }
+    
+    return bestMatch;
+}
+
+int32_t HeapAllocator::FindRegionForPointer(void* ptr)
+{
+    if (ptr == nullptr)
+        return -1;
+    
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        if (s_allocators[i].contains(ptr))
+        {
+            return (int32_t)i;
+        }
+    }
+    
+    return -1;
+}
+
+// Marker used to identify aligned allocations
+static constexpr uint32_t ALIGNED_MARKER = 0xA116DEAD;
+
+// Structure stored before aligned pointer
+struct AlignedHeader
+{
+    void* rawPtr;
+    uint32_t marker;
+};
+
+void* HeapAllocator::Allocate(uint32_t size, const Memory::AllocHints& hints)
+{
+    if (size == 0)
+        return nullptr;
+    
+    // Determine actual allocation size
+    uint32_t alignment = hints.alignment > 8 ? hints.alignment : 8;
+    uint32_t totalSize = size;
+    
+    // For alignments > 8, we need to over-allocate
+    // We'll store AlignedHeader just before the aligned pointer
+    bool needsAlignmentPadding = (alignment > 8);
+    if (needsAlignmentPadding)
+    {
+        // Add extra space for alignment and header storage
+        totalSize = size + alignment + sizeof(AlignedHeader);
+    }
+    
+    // Find best matching region
+    int32_t regionIndex = FindBestRegion(totalSize, hints);
+    
+    if (regionIndex >= 0)
+    {
+        void* rawPtr = s_allocators[regionIndex].allocate(totalSize);
+        if (rawPtr != nullptr)
+        {
+            void* resultPtr = rawPtr;
+            
+            if (needsAlignmentPadding)
+            {
+                // Calculate aligned pointer (after leaving room for header)
+                uintptr_t rawAddr = (uintptr_t)rawPtr;
+                uintptr_t alignedAddr = (rawAddr + sizeof(AlignedHeader) + alignment - 1) & ~(alignment - 1);
+                
+                // Store header just before aligned address
+                AlignedHeader* header = (AlignedHeader*)(alignedAddr - sizeof(AlignedHeader));
+                header->rawPtr = rawPtr;
+                header->marker = ALIGNED_MARKER;
+                
+                resultPtr = (void*)alignedAddr;
+            }
+            
+            // Track allocation
+            HEAP_TRACK_ALLOC(resultPtr, size, totalSize, regionIndex);
+            
+            return resultPtr;
+        }
+    }
+    
+    // Fallback: try any region that has enough space
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        if ((int32_t)i == regionIndex)
+            continue;  // Already tried
+        
+        // Skip if required flags not met
+        if (hints.requiredFlags != Memory::MEM_NONE)
+        {
+            if ((s_regions[i].flags & hints.requiredFlags) != hints.requiredFlags)
+                continue;
+        }
+        
+        // Skip if excluded flags present
+        if (hints.excludeFlags != Memory::MEM_NONE)
+        {
+            if ((s_regions[i].flags & hints.excludeFlags) != 0)
+                continue;
+        }
+        
+        void* rawPtr = s_allocators[i].allocate(totalSize);
+        if (rawPtr != nullptr)
+        {
+            void* resultPtr = rawPtr;
+            
+            if (needsAlignmentPadding)
+            {
+                // Calculate aligned pointer (after leaving room for header)
+                uintptr_t rawAddr = (uintptr_t)rawPtr;
+                uintptr_t alignedAddr = (rawAddr + sizeof(AlignedHeader) + alignment - 1) & ~(alignment - 1);
+                
+                // Store header just before aligned address
+                AlignedHeader* header = (AlignedHeader*)(alignedAddr - sizeof(AlignedHeader));
+                header->rawPtr = rawPtr;
+                header->marker = ALIGNED_MARKER;
+                
+                resultPtr = (void*)alignedAddr;
+            }
+            
+            // Track allocation
+            HEAP_TRACK_ALLOC(resultPtr, size, totalSize, i);
+            
+            return resultPtr;
+        }
+    }
+    
+    // Track allocation failure
+    HEAP_TRACK_FAIL(size);
+    
+    return nullptr;
+}
+
+void HeapAllocator::Free(void* ptr)
+{
+    if (ptr == nullptr)
+        return;
+    
+    // Track deallocation
+    HEAP_TRACK_FREE(ptr);
+    
+    void* rawPtr = ptr;
+    
+    // Check if this is an aligned allocation by looking for the marker
+    AlignedHeader* header = (AlignedHeader*)((uintptr_t)ptr - sizeof(AlignedHeader));
+    
+    if (header->marker == ALIGNED_MARKER)
+    {
+        // This was an aligned allocation, use the stored raw pointer
+        rawPtr = header->rawPtr;
+        // Clear marker to prevent double-free issues
+        header->marker = 0;
+    }
+    
+    int32_t regionIndex = FindRegionForPointer(rawPtr);
+    
+    if (regionIndex >= 0)
+    {
+        s_allocators[regionIndex].deallocate(rawPtr);
+    }
+}
+
+uint32_t HeapAllocator::GetFreeMemory(uint32_t flags)
+{
+    uint32_t total = 0;
+    
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        if (!s_regions[i].initialized)
+            continue;
+        
+        // If flags specified, only count matching regions
+        if (flags != Memory::MEM_NONE)
+        {
+            if ((s_regions[i].flags & flags) != flags)
+                continue;
+        }
+        
+        total += s_allocators[i].getFreeMemory();
+    }
+    
+    return total;
+}
+
+uint32_t HeapAllocator::GetTotalMemory(uint32_t flags)
+{
+    uint32_t total = 0;
+    
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        if (!s_regions[i].initialized)
+            continue;
+        
+        // If flags specified, only count matching regions
+        if (flags != Memory::MEM_NONE)
+        {
+            if ((s_regions[i].flags & flags) != flags)
+                continue;
+        }
+        
+        total += s_regions[i].size;
+    }
+    
+    return total;
+}
+
+uint32_t HeapAllocator::GetRegionCount()
+{
+    return s_regionCount;
+}
+
+const Memory::MemoryRegion* HeapAllocator::GetRegion(uint32_t index)
+{
+    if (index >= s_regionCount)
+        return nullptr;
+    
+    return &s_regions[index];
+}
+
+void HeapAllocator::PrintRegions()
+{
+    extern int printf(const char* format, ...);
+    
+    printf("\r\n=== Memory Regions ===\r\n");
+    printf("Total regions: %u\r\n\r\n", s_regionCount);
+    
+    for (uint32_t i = 0; i < s_regionCount; i++)
+    {
+        const Memory::MemoryRegion& r = s_regions[i];
+        if (!r.initialized)
+            continue;
+        
+        printf("[%u] %s\r\n", i, r.name);
+        printf("    Base: 0x%08X, Size: %u bytes\r\n", (uint32_t)r.baseAddress, r.size);
+        printf("    Free: %u bytes, Used: %u bytes\r\n", 
+               s_allocators[i].getFreeMemory(), s_allocators[i].getAllocatedMemory());
+        printf("    Flags: 0x%08X\r\n", r.flags);
+        
+        // Print flag descriptions
+        printf("    Properties: ");
+        if (r.flags & Memory::MEM_CACHED) printf("CACHED ");
+        if (r.flags & Memory::MEM_DMA_CAPABLE) printf("DMA ");
+        if (r.flags & Memory::MEM_EXECUTABLE) printf("EXEC ");
+        if (r.flags & Memory::MEM_FAST) printf("FAST ");
+        if (r.flags & Memory::MEM_LARGE) printf("LARGE ");
+        if (r.flags & Memory::MEM_NON_CACHED) printf("NOCACHE ");
+        printf("\r\n\r\n");
+    }
+}
+
+uint32_t HeapAllocator::GetRegionFreeMemory(uint32_t index)
+{
+    if (index >= s_regionCount)
+        return 0;
+    
+    return s_allocators[index].getFreeMemory();
+}
+
+uint32_t HeapAllocator::GetRegionAllocatedMemory(uint32_t index)
+{
+    if (index >= s_regionCount)
+        return 0;
+    
+    return s_allocators[index].getAllocatedMemory();
+}
+
 

@@ -12,8 +12,12 @@
  */
 
 #include "InterruptDPC.hpp"
+#include "DPCWorker.hpp"
 #include "CRTOS.hpp"
 #include <cstring>
+
+// Debug output
+extern "C" int DbgConsole_Printf(const char *formatString, ...);
 
 // External functions for interrupt control
 extern "C" uint32_t getInterruptMask(void);
@@ -38,6 +42,7 @@ namespace CRTOS
                 _sources[i].handlers[j].semaphore = nullptr;
                 _sources[i].handlers[j].callback = nullptr;
                 _sources[i].handlers[j].context = nullptr;
+                _sources[i].handlers[j].gotBase = 0;
                 _sources[i].handlers[j].active = false;
             }
         }
@@ -121,6 +126,7 @@ namespace CRTOS
             source->handlers[i].semaphore = nullptr;
             source->handlers[i].callback = nullptr;
             source->handlers[i].context = nullptr;
+            source->handlers[i].gotBase = 0;
             source->handlers[i].active = false;
         }
 
@@ -135,7 +141,8 @@ namespace CRTOS
     Result InterruptDPC::RegisterHandler(uint32_t irqNumber, 
                                         BinarySemaphore* semaphore,
                                         DPCCallback callback,
-                                        void* context)
+                                        void* context,
+                                        uint32_t gotBase)
     {
         if (semaphore == nullptr)
         {
@@ -161,6 +168,7 @@ namespace CRTOS
                 // Already registered, update callback and context
                 source->handlers[i].callback = callback;
                 source->handlers[i].context = context;
+                source->handlers[i].gotBase = gotBase;
                 setInterruptMask(mask);
                 return Result::RESULT_SUCCESS;
             }
@@ -174,6 +182,7 @@ namespace CRTOS
                 source->handlers[i].semaphore = semaphore;
                 source->handlers[i].callback = callback;
                 source->handlers[i].context = context;
+                source->handlers[i].gotBase = gotBase;
                 source->handlers[i].active = true;
                 source->handlerCount++;
                 
@@ -231,6 +240,8 @@ namespace CRTOS
         InterruptSource* source = FindSource(irqNumber);
         if (source == nullptr)
         {
+            // DEBUG: No handlers registered for this IRQ
+            // DbgConsole_Printf("[DPC] IRQ %lu: no source registered\r\n", irqNumber);
             return 0; // No handlers registered
         }
 
@@ -241,16 +252,46 @@ namespace CRTOS
         {
             if (source->handlers[i].active)
             {
-                // Call the optional callback first (in ISR context)
+                // IMPORTANT: Call callback in ISR context to clear the interrupt!
+                // The callback should read data from hardware which clears the IRQ flag.
                 if (source->handlers[i].callback != nullptr)
                 {
-                    source->handlers[i].callback(source->handlers[i].context);
+                    // For PIC modules, we need to set r9 to the module's GOT base
+                    // before calling the callback, and restore it afterward
+                    uint32_t gotBase = source->handlers[i].gotBase;
+                    if (gotBase != 0)
+                    {
+                        // PIC module callback - set r9 to GOT base
+                        uint32_t savedR9;
+                        __asm__ volatile(
+                            "mov %[saved], r9\n\t"
+                            "mov r9, %[got]\n\t"
+                            : [saved] "=&r" (savedR9)
+                            : [got] "r" (gotBase)
+                            : "r9", "memory"
+                        );
+                        
+                        source->handlers[i].callback(source->handlers[i].context);
+                        
+                        __asm__ volatile(
+                            "mov r9, %[saved]\n\t"
+                            :
+                            : [saved] "r" (savedR9)
+                            : "r9", "memory"
+                        );
+                    }
+                    else
+                    {
+                        // Kernel or non-PIC callback - call directly
+                        source->handlers[i].callback(source->handlers[i].context);
+                    }
                 }
 
-                // Signal the semaphore to wake up the waiting task
+                // Signal semaphore to wake up waiting task
+                // This is done via DPCWorker to defer context switch
                 if (source->handlers[i].semaphore != nullptr)
                 {
-                    source->handlers[i].semaphore->signal();
+                    GlobalDPCWorker.EnqueueSignal(irqNumber, source->handlers[i].semaphore);
                     notifiedCount++;
                 }
             }

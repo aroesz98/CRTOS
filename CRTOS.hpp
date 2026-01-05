@@ -21,10 +21,13 @@
 #include "Task.hpp"
 #include "Mutex.hpp"
 #include "BinarySemaphore.hpp"
+#include "Futex.hpp"
 #include "Timer.hpp"
 #include "Queue.hpp"
 #include "CircularBuffer.hpp"
 #include "InterruptDPC.hpp"
+#include "DPCWorker.hpp"
+#include "Syscall/SystemCall.hpp"
 
 template <typename T>
 class Node;
@@ -52,7 +55,10 @@ namespace CRTOS
         RESULT_IPC_TIMEOUT,
         RESULT_IPC_EMPTY,
         RESULT_CRC_NOT_INITIALIZED,
-        RESULT_CRC_ALREADY_INITIALIZED
+        RESULT_CRC_ALREADY_INITIALIZED,
+        RESULT_NOT_FOUND,
+        RESULT_DENIED,
+        RESULT_IO_ERROR
     };
 
     struct HeapInfo
@@ -110,7 +116,6 @@ namespace CRTOS
         void SetCoreClock(uint32_t ClockInMHz);
         void SetTickRate(uint32_t TicksPerSecond);
         void SetTimeSlice(uint32_t ticks);  // Set time slice quantum (in ticks)
-        Result InitMem(void *pool, uint32_t size);
         void* Allocate(uint32_t size);
         void Deallocate(void *ptr);
         uint32_t GetFreeMemory(void);
@@ -125,9 +130,20 @@ namespace CRTOS
         Result Start(void);
     };
 
-    // Task IRQ registration - allows current task to associate itself with an IRQ number
+    // Task IRQ registration - allows current task to associate itself with IRQ numbers
+    // Multiple IRQs can be registered per task (stored as linked list)
     void RegisterCurrentTaskIRQ(uint32_t irqNumber);
-    void UnregisterCurrentTaskIRQ(void);
+    void UnregisterCurrentTaskIRQ(void);  // Unregister all IRQs for current task
+    void UnregisterCurrentTaskIRQ(uint32_t irqNumber);  // Unregister specific IRQ
+    
+    // Task memory region tracking - for proper cleanup on task delete
+    // These track module memory allocations (binary, shared mem, etc.)
+    void TrackTaskMemory(void* address, uint32_t size);
+    void UntrackTaskMemory(void* address);
+    
+    // Versions with explicit TCB pointer and static allocator flag (for module_malloc)
+    void TrackTaskMemory(const volatile void* tcb, uint32_t address, uint32_t size, bool useStaticAllocator = true);
+    void UntrackTaskMemory(const volatile void* tcb, uint32_t address);
 
     namespace CRC32
     {

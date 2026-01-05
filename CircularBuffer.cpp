@@ -18,7 +18,6 @@
 #include "HeapAllocator.hpp"
 
 // External declarations from CRTOS.cpp
-extern HeapAllocator mem;
 extern volatile TaskControlBlock *sCurrentTCB;
 extern "C" uint32_t getInterruptMask(void);
 extern "C" void setInterruptMask(uint32_t mask);
@@ -42,7 +41,7 @@ CRTOS::CircularBuffer::CircularBuffer(const CircularBuffer &old)
     mTail = old.mTail;
     mCurrentSize = old.mCurrentSize;
     mBufferSize = old.mBufferSize;
-    mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
+    mBuffer = reinterpret_cast<uint8_t *>(HeapAllocator::Allocate(mBufferSize));
     memcpy_optimized(&mBuffer[0], &(old.mBuffer[0]), mBufferSize);
 
     setInterruptMask(mask);
@@ -50,7 +49,7 @@ CRTOS::CircularBuffer::CircularBuffer(const CircularBuffer &old)
 
 CRTOS::CircularBuffer::~CircularBuffer(void)
 {
-    mem.deallocate(mBuffer);
+    HeapAllocator::Free(mBuffer);
 }
 
 CRTOS::Result CRTOS::CircularBuffer::Init(void)
@@ -69,7 +68,7 @@ CRTOS::Result CRTOS::CircularBuffer::Init(void)
             continue;
         }
 
-        mBuffer = reinterpret_cast<uint8_t *>(mem.allocate(mBufferSize));
+        mBuffer = reinterpret_cast<uint8_t *>(HeapAllocator::Allocate(mBufferSize));
 
         if (mBuffer == nullptr)
         {
@@ -121,30 +120,27 @@ CRTOS::Result CRTOS::CircularBuffer::Send(const uint8_t *data, uint32_t size)
     mCurrentSize += size;
 
     // Wake up waiting receiver if any
-    bool shouldSwitch = false;
     if (listOfTasksWaitingToRecv != nullptr)
     {
-        TaskControlBlock *tmp = *(TaskControlBlock **)(listOfTasksWaitingToRecv->data);
-        if (tmp->state == TaskState::TASK_BLOCKED_BY_CIRC_BUFFER)
-        {
-            tmp->state = TaskState::TASK_READY;
-            // Check if woken task has higher priority
-            if (tmp->priority > sCurrentTCB->priority)
-            {
-                shouldSwitch = true;
-            }
-        }
+        TaskControlBlock *waitingTask = reinterpret_cast<TaskControlBlock*>(listOfTasksWaitingToRecv->data);
+        
+        // Mark as NOT timed out (woken by Send)
+        waitingTask->wokenByTimeout = false;
+        waitingTask->state = TaskState::TASK_READY;
+        waitingTask->blockingNode = nullptr;
+        
         ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-    }
-
-    setInterruptMask(mask);
-
-    // Trigger context switch if higher priority task was woken
-    if (shouldSwitch)
-    {
+        
+        setInterruptMask(mask);
+        
+        // Trigger scheduler
         *ICSR_REG = NVIC_PENDSV_BIT;
         __DSB();
         __ISB();
+    }
+    else
+    {
+        setInterruptMask(mask);
     }
 
     return CRTOS::Result::RESULT_SUCCESS;
@@ -162,55 +158,93 @@ CRTOS::Result CRTOS::CircularBuffer::Receive(uint8_t *data, uint32_t size, uint3
         return CRTOS::Result::RESULT_NO_MEMORY;
     }
 
-    uint32_t stimeout = tickCount + timeout;
+    uint32_t mask = getInterruptMask();
 
-    while (1)
+    // 1. Success: Data available immediately
+    if (mCurrentSize >= size)
     {
-        uint32_t mask = getInterruptMask();
-
-        // Check if data is available
-        if (mCurrentSize >= size)
+        if (mTail + size <= mBufferSize)
         {
-            // Data available - copy it out
-            if (mTail + size <= mBufferSize)
-            {
-                memcpy_optimized(data, &mBuffer[mTail], size);
-            }
-            else
-            {
-                uint32_t firstPartSize = mBufferSize - mTail;
-                memcpy_optimized(data, &mBuffer[mTail], firstPartSize);
-                memcpy_optimized(&data[firstPartSize], mBuffer, size - firstPartSize);
-            }
-
-            mTail = (mTail + size) % mBufferSize;
-            mCurrentSize -= size;
-
-            setInterruptMask(mask);
-            return CRTOS::Result::RESULT_SUCCESS;
+            memcpy_optimized(data, &mBuffer[mTail], size);
         }
-
-        // No data available - check timeout first before blocking
-        if (timeout == 0u || tickCount >= stimeout)
+        else
         {
-            setInterruptMask(mask);
-            return CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
+            uint32_t firstPartSize = mBufferSize - mTail;
+            memcpy_optimized(data, &mBuffer[mTail], firstPartSize);
+            memcpy_optimized(&data[firstPartSize], mBuffer, size - firstPartSize);
         }
-
-        // Block this task and add to waiting list
-        sCurrentTCB->timeout = stimeout;
-        sCurrentTCB->state = TaskState::TASK_BLOCKED_BY_CIRC_BUFFER;
-        ListInsertAtEnd(listOfTasksWaitingToRecv, (uint32_t **)&sCurrentTCB);
-
+        mTail = (mTail + size) % mBufferSize;
+        mCurrentSize -= size;
         setInterruptMask(mask);
-
-        // Trigger context switch - when we resume, sender has either:
-        // 1. Sent data and woken us up, OR
-        // 2. Timeout occurred and scheduler woke us
-        *ICSR_REG = NVIC_PENDSV_BIT;
-        __DSB();
-        __ISB();
-
-        // When we get here, we've been woken up - loop back to check data/timeout
+        return CRTOS::Result::RESULT_SUCCESS;
     }
+
+    // 2. Immediate Failure: Polling only, no wait
+    if (timeout == 0u)
+    {
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
+    }
+
+    // 3. Blocking with Timeout
+    TaskControlBlock* currentTask = (TaskControlBlock*)sCurrentTCB;
+    
+    // Add task to buffer's waiting list
+    Node<uint32_t*> *newNode = reinterpret_cast<Node<uint32_t*>*>(HeapAllocator::Allocate(sizeof(Node<uint32_t*>)));
+    if (newNode != nullptr)
+    {
+        newNode->data = reinterpret_cast<uint32_t**>(currentTask);
+        newNode->next = listOfTasksWaitingToRecv;
+        newNode->prev = nullptr;
+        if (listOfTasksWaitingToRecv != nullptr)
+        {
+            listOfTasksWaitingToRecv->prev = newNode;
+        }
+        listOfTasksWaitingToRecv = newNode;
+        currentTask->blockingNode = newNode;
+    }
+    
+    // Set timeout
+    currentTask->timeout = (timeout == 0xFFFFFFFF) ? 0xFFFFFFFF : (tickCount + timeout);
+    currentTask->wokenByTimeout = false;
+    currentTask->state = TaskState::TASK_BLOCKED_BY_CIRC_BUFFER;
+    
+    setInterruptMask(mask);
+    
+    // Yield - give up CPU
+    *ICSR_REG = NVIC_PENDSV_BIT;
+    __DSB();
+    __ISB();
+    
+    // --- TASK RESUMES HERE ---
+    
+    mask = getInterruptMask();
+    
+    if (currentTask->wokenByTimeout)
+    {
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
+    }
+    
+    // We were woken by Send - data should be available
+    if (mCurrentSize >= size)
+    {
+        if (mTail + size <= mBufferSize)
+        {
+            memcpy_optimized(data, &mBuffer[mTail], size);
+        }
+        else
+        {
+            uint32_t firstPartSize = mBufferSize - mTail;
+            memcpy_optimized(data, &mBuffer[mTail], firstPartSize);
+            memcpy_optimized(&data[firstPartSize], mBuffer, size - firstPartSize);
+        }
+        mTail = (mTail + size) % mBufferSize;
+        mCurrentSize -= size;
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_SUCCESS;
+    }
+    
+    setInterruptMask(mask);
+    return CRTOS::Result::RESULT_CIRCULAR_BUFFER_TIMEOUT;
 }

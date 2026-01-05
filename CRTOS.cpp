@@ -63,7 +63,7 @@ uint32_t MAX_LOADED_MODULES = 16;
 
 // Constants and hardware register definitions moved to CRTOS_Internal.hpp
 
-extern "C" void SVC_Handler(void) __attribute__((naked));
+// SVC_Handler is now in Syscall/SVC_Handler.cpp
 extern "C" void PendSV_Handler(void) __attribute__((naked));
 extern "C" void SysTick_Handler(void);
 
@@ -92,9 +92,7 @@ static bool sTimeSliceExpired = false;     // Flag: was context switch triggered
 
 uint32_t MODULE_MAGIC = 0x4D4F4455u; // 'MODU'
 uint32_t DEFAULT_MODULE_LEN = 4096u;
-uint32_t DEFAULT_STACK_SIZE = 1024u;
-
-HeapAllocator mem;
+uint32_t DEFAULT_STACK_SIZE = 2048u;
 
 static bool isPendingTask(void);
 
@@ -165,57 +163,40 @@ uint32_t pStringLength(const char *buffer)
     return (tmp - buffer) + 1;
 }
 
-CRTOS::Result CRTOS::Config::InitMem(void *pool, uint32_t size)
-{
-    if (pool == nullptr || size == 0u)
-    {
-        return CRTOS::Result::RESULT_NO_MEMORY;
-    }
-
-    mem.init(pool, size);
-
-    return CRTOS::Result::RESULT_SUCCESS;
-}
-
 void *CRTOS::Config::Allocate(uint32_t size)
 {
-    return mem.allocate(size);
+    return HeapAllocator::Allocate(size);
 }
 
 void CRTOS::Config::Deallocate(void *ptr)
 {
-    mem.deallocate(ptr);
+    HeapAllocator::Free(ptr);
 }
 
 uint32_t CRTOS::Config::GetAllocatedMemory(void)
 {
-    return mem.getAllocatedMemory();
+    return HeapAllocator::GetTotalMemory() - HeapAllocator::GetFreeMemory();
 }
 
 uint32_t CRTOS::Config::GetFreeMemory(void)
 {
-    return mem.getFreeMemory();
+    return HeapAllocator::GetFreeMemory();
 }
 
 uint32_t CRTOS::Config::GetTotalHeapSize(void)
 {
-    void *pool = nullptr;
-    uint32_t size = 0;
-    mem.getMemoryPool(&pool, size);
-    return size;
+    return HeapAllocator::GetTotalMemory();
 }
 
 void CRTOS::Config::GetHeapInfo(CRTOS::HeapInfo &info)
 {
-    void *pool = nullptr;
-    uint32_t totalSize = 0;
-
-    mem.getMemoryPool(&pool, totalSize);
+    uint32_t totalSize = HeapAllocator::GetTotalMemory();
+    uint32_t freeMemory = HeapAllocator::GetFreeMemory();
 
     info.totalSize = totalSize;
-    info.freeMemory = mem.getFreeMemory();
+    info.freeMemory = freeMemory;
     // Calculate allocated as total minus free (this accounts for all metadata automatically)
-    info.allocatedMemory = (totalSize > info.freeMemory) ? (totalSize - info.freeMemory) : 0;
+    info.allocatedMemory = (totalSize > freeMemory) ? (totalSize - freeMemory) : 0;
 
     // Calculate utilization percentage
     if (totalSize > 0)
@@ -230,7 +211,8 @@ void CRTOS::Config::GetHeapInfo(CRTOS::HeapInfo &info)
 
 void CRTOS::Config::DefragmentHeap(void)
 {
-    mem.defragment();
+    // Defragmentation is handled internally by each region's allocator
+    // No single defragment call available in unified allocator
 }
 
 void CRTOS::Config::SetCoreClock(uint32_t clock)
@@ -284,7 +266,29 @@ void CRTOS::RegisterCurrentTaskIRQ(uint32_t irqNumber)
     uint32_t mask = getInterruptMask();
     if (sCurrentTCB != nullptr)
     {
-        const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = irqNumber;
+        TaskControlBlock* tcb = const_cast<TaskControlBlock*>(sCurrentTCB);
+        
+        // Check if already registered
+        RegisteredIRQNode* current = tcb->registeredIRQs;
+        while (current != nullptr)
+        {
+            if (current->irqNumber == irqNumber)
+            {
+                setInterruptMask(mask);
+                return; // Already registered
+            }
+            current = current->next;
+        }
+        
+        // Allocate new node and add to front of list
+        RegisteredIRQNode* newNode = reinterpret_cast<RegisteredIRQNode*>(HeapAllocator::Allocate(sizeof(RegisteredIRQNode)));
+        if (newNode != nullptr)
+        {
+            newNode->irqNumber = irqNumber;
+            newNode->next = tcb->registeredIRQs;
+            tcb->registeredIRQs = newNode;
+            tcb->registeredIRQCount++;
+        }
     }
     setInterruptMask(mask);
 }
@@ -294,11 +298,171 @@ void CRTOS::UnregisterCurrentTaskIRQ(void)
     uint32_t mask = getInterruptMask();
     if (sCurrentTCB != nullptr)
     {
-        const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = 0xFFFFFFFFu;
+        TaskControlBlock* tcb = const_cast<TaskControlBlock*>(sCurrentTCB);
+        
+        // Free all IRQ nodes in the list
+        RegisteredIRQNode* current = tcb->registeredIRQs;
+        while (current != nullptr)
+        {
+            RegisteredIRQNode* next = current->next;
+            HeapAllocator::Free(current);
+            current = next;
+        }
+        tcb->registeredIRQs = nullptr;
+        tcb->registeredIRQCount = 0;
     }
     setInterruptMask(mask);
 }
 
+void CRTOS::UnregisterCurrentTaskIRQ(uint32_t irqNumber)
+{
+    uint32_t mask = getInterruptMask();
+    if (sCurrentTCB != nullptr)
+    {
+        TaskControlBlock* tcb = const_cast<TaskControlBlock*>(sCurrentTCB);
+        
+        RegisteredIRQNode* current = tcb->registeredIRQs;
+        RegisteredIRQNode* prev = nullptr;
+        
+        while (current != nullptr)
+        {
+            if (current->irqNumber == irqNumber)
+            {
+                // Remove this node from the list
+                if (prev == nullptr)
+                {
+                    tcb->registeredIRQs = current->next;
+                }
+                else
+                {
+                    prev->next = current->next;
+                }
+                HeapAllocator::Free(current);
+                tcb->registeredIRQCount--;
+                break;
+            }
+            prev = current;
+            current = current->next;
+        }
+    }
+    setInterruptMask(mask);
+}
+
+void CRTOS::TrackTaskMemory(void* address, uint32_t size)
+{
+    if (address == nullptr || size == 0)
+        return;
+    
+    uint32_t mask = getInterruptMask();
+    if (sCurrentTCB != nullptr)
+    {
+        TaskControlBlock* tcb = const_cast<TaskControlBlock*>(sCurrentTCB);
+        
+        TaskMemoryNode* newNode = reinterpret_cast<TaskMemoryNode*>(HeapAllocator::Allocate(sizeof(TaskMemoryNode)));
+        if (newNode != nullptr)
+        {
+            newNode->address = address;
+            newNode->size = size;
+            newNode->next = tcb->memoryRegions;
+            newNode->useStaticAllocator = true;  // Uses HeapAllocator::Free()
+            tcb->memoryRegions = newNode;
+            tcb->memoryRegionCount++;
+        }
+    }
+    setInterruptMask(mask);
+}
+
+void CRTOS::TrackTaskMemory(const volatile void* tcbPtr, uint32_t address, uint32_t size, bool useStaticAllocator)
+{
+    if (tcbPtr == nullptr || address == 0 || size == 0)
+        return;
+    
+    uint32_t mask = getInterruptMask();
+    TaskControlBlock* tcb = const_cast<TaskControlBlock*>(reinterpret_cast<const volatile TaskControlBlock*>(tcbPtr));
+    
+    TaskMemoryNode* newNode = reinterpret_cast<TaskMemoryNode*>(HeapAllocator::Allocate(sizeof(TaskMemoryNode)));
+    if (newNode != nullptr)
+    {
+        newNode->address = reinterpret_cast<void*>(address);
+        newNode->size = size;
+        newNode->next = tcb->memoryRegions;
+        newNode->useStaticAllocator = useStaticAllocator;  // Use HeapAllocator::Free() if true
+        tcb->memoryRegions = newNode;
+        tcb->memoryRegionCount++;
+    }
+    setInterruptMask(mask);
+}
+
+void CRTOS::UntrackTaskMemory(void* address)
+{
+    if (address == nullptr)
+        return;
+    
+    uint32_t mask = getInterruptMask();
+    if (sCurrentTCB != nullptr)
+    {
+        TaskControlBlock* tcb = const_cast<TaskControlBlock*>(sCurrentTCB);
+        
+        TaskMemoryNode* current = tcb->memoryRegions;
+        TaskMemoryNode* prev = nullptr;
+        
+        while (current != nullptr)
+        {
+            if (current->address == address)
+            {
+                // Remove this node from the list
+                if (prev == nullptr)
+                {
+                    tcb->memoryRegions = current->next;
+                }
+                else
+                {
+                    prev->next = current->next;
+                }
+                HeapAllocator::Free(current);
+                tcb->memoryRegionCount--;
+                break;
+            }
+            prev = current;
+            current = current->next;
+        }
+    }
+    setInterruptMask(mask);
+}
+
+void CRTOS::UntrackTaskMemory(const volatile void* tcbPtr, uint32_t address)
+{
+    if (tcbPtr == nullptr || address == 0)
+        return;
+    
+    uint32_t mask = getInterruptMask();
+    TaskControlBlock* tcb = const_cast<TaskControlBlock*>(reinterpret_cast<const volatile TaskControlBlock*>(tcbPtr));
+    
+    TaskMemoryNode* current = tcb->memoryRegions;
+    TaskMemoryNode* prev = nullptr;
+    
+    while (current != nullptr)
+    {
+        if (current->address == reinterpret_cast<void*>(address))
+        {
+            // Remove this node from the list
+            if (prev == nullptr)
+            {
+                tcb->memoryRegions = current->next;
+            }
+            else
+            {
+                prev->next = current->next;
+            }
+            HeapAllocator::Free(current);
+            tcb->memoryRegionCount--;
+            break;
+        }
+        prev = current;
+        current = current->next;
+    }
+    setInterruptMask(mask);
+}
 static bool isPendingTask(void)
 {
     Node<TaskControlBlock> *temp = readyTaskList;
@@ -451,9 +615,8 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
     }
     case SVC_Commands::COMMAND_GET_TASK_COUNT:
     {
-        // Get total number of tasks in the system
-        CRTOS::TaskStackInfo stackInfo[20];
-        uint32_t count = CRTOS::Task::GetAllTasksStackInfo(stackInfo, 20);
+        // Get total number of tasks - first call with null buffer to get count
+        uint32_t count = CRTOS::Task::GetAllTasksStackInfo(nullptr, 0);
         callerStack[0u] = count;
         break;
     }
@@ -465,28 +628,33 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
         
         if (info != nullptr)
         {
-            CRTOS::TaskStackInfo stackInfo[20];
-            uint32_t count = CRTOS::Task::GetAllTasksStackInfo(stackInfo, 20);
+            // Allocate single TaskStackInfo for this query
+            CRTOS::TaskStackInfo stackInfo;
             
-            if (task_index < count)
+            // Get info for just this one task by index
+            uint32_t count = CRTOS::Task::GetTaskInfoByIndex(task_index, &stackInfo);
+            
+            if (count > 0)
             {
                 // Copy task information
-                strncpy(info->name, stackInfo[task_index].name, 23);
+                strncpy(info->name, stackInfo.name, 23);
                 info->name[23] = '\0';
-                info->stackSize = stackInfo[task_index].stackSize;
-                info->stackUsed = stackInfo[task_index].stackUsed;
-                info->stackFree = stackInfo[task_index].stackFree;
-                info->stackPercent = stackInfo[task_index].utilizationPercent;
-                info->heapAllocated = stackInfo[task_index].heapAllocated;
+                info->stackSize = stackInfo.stackSize;
+                info->stackUsed = stackInfo.stackUsed;
+                info->stackFree = stackInfo.stackFree;
+                info->stackPercent = stackInfo.utilizationPercent;
+                info->heapAllocated = stackInfo.heapAllocated;
                 
                 // Get priority, state, and runtime cycles from TCB
-                TaskControlBlock *tcb = (TaskControlBlock *)stackInfo[task_index].taskHandle;
+                TaskControlBlock *tcb = (TaskControlBlock *)stackInfo.taskHandle;
                 if (tcb != nullptr)
                 {
                     info->priority = tcb->priority;
                     info->state = (uint32_t)tcb->state;
                     info->runtimeCycles = tcb->executionTime;
-                    info->registeredIRQ = tcb->registeredIRQ;
+                    // Return first registered IRQ for backward compatibility
+                    info->registeredIRQ = (tcb->registeredIRQs != nullptr) 
+                        ? tcb->registeredIRQs->irqNumber : 0xFFFFFFFFu;
                 }
                 else
                 {
@@ -500,7 +668,7 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
             }
             else
             {
-                callerStack[0u] = (uint32_t)-1;  // Error: index out of range
+                callerStack[0u] = (uint32_t)-1;  // Error: index out of range or task not found
             }
         }
         else
@@ -529,18 +697,32 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
     case SVC_Commands::COMMAND_MODULE_MALLOC:
     {
         // Module memory allocation: R0 = size, returns pointer in R0
+        // Uses default hints - allocator will choose best region automatically
         uint32_t size = callerStack[0u];
-        void *ptr = mem.allocate(size);
+        void *ptr = HeapAllocator::Allocate(size);  // Default: fast memory first, fallback to large
+        
+        // Track this allocation for the current task (for cleanup on task delete)
+        if (ptr != nullptr && sCurrentTCB != nullptr)
+        {
+            CRTOS::TrackTaskMemory(sCurrentTCB, (uint32_t)ptr, size);
+        }
+        
         callerStack[0u] = (uint32_t)ptr;
         break;
     }
     case SVC_Commands::COMMAND_MODULE_FREE:
     {
         // Module memory deallocation: R0 = pointer
+        // Uses static Free which handles both SRAM and SDRAM
         void *ptr = (void *)callerStack[0u];
         if (ptr != nullptr)
         {
-            mem.deallocate(ptr);
+            // Untrack this memory from current task
+            if (sCurrentTCB != nullptr)
+            {
+                CRTOS::UntrackTaskMemory(sCurrentTCB, (uint32_t)ptr);
+            }
+            HeapAllocator::Free(ptr);
         }
         break;
     }
@@ -550,7 +732,8 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
         uint32_t irqNumber = callerStack[0u];
         if (sCurrentTCB != nullptr)
         {
-            const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = irqNumber;
+            // Use the linked list registration function
+            CRTOS::RegisterCurrentTaskIRQ(irqNumber);
             
             // Enable the interrupt in NVIC
             NVIC_SetPriority((int32_t)irqNumber, 5); // Set interrupt priority (lower number = higher priority)
@@ -560,10 +743,10 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
     }
     case SVC_Commands::COMMAND_UNREGISTER_TASK_IRQ:
     {
-        // Unregister current task from IRQ
+        // Unregister current task from all IRQs
         if (sCurrentTCB != nullptr)
         {
-            const_cast<TaskControlBlock*>(sCurrentTCB)->registeredIRQ = 0xFFFFFFFFu;
+            CRTOS::UnregisterCurrentTaskIRQ();
         }
         break;
     }
@@ -618,7 +801,7 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
             tcbToBlock->state = TaskState::TASK_BLOCKED_BY_SEMAPHORE;
             
             // Add to semaphore's waiting list
-            Node<uint32_t*>* newNode = reinterpret_cast<Node<uint32_t*>*>(mem.allocate(sizeof(Node<uint32_t*>)));
+            Node<uint32_t*>* newNode = reinterpret_cast<Node<uint32_t*>*>(HeapAllocator::Allocate(sizeof(Node<uint32_t*>)));
             if (newNode != nullptr)
             {
                 newNode->data = reinterpret_cast<uint32_t**>(tcbToBlock);
@@ -695,6 +878,190 @@ extern "C" void SVC_Handle_Subprocess(uint32_t *command)
         {
             CRTOS::GlobalDPCDispatcher.UnregisterHandler(irqNumber, sem);
         }
+        break;
+    }
+    case SVC_Commands::COMMAND_DPC_ENQUEUE_WORK:
+    {
+        // Enqueue work to DPC Worker: R0 = IRQ, R1 = handler, R2 = context, R3 = param
+        // Returns 0 on success, -1 on failure in R0
+        uint32_t irqNumber = callerStack[0u];
+        CRTOS::DPCWorkHandler handler = (CRTOS::DPCWorkHandler)callerStack[1u];
+        void* context = (void*)callerStack[2u];
+        uint32_t param = callerStack[3u];
+        
+        CRTOS::Result res = CRTOS::GlobalDPCWorker.EnqueueWork(irqNumber, handler, context, param);
+        callerStack[0u] = (res == CRTOS::Result::RESULT_SUCCESS) ? 0 : -1;
+        break;
+    }
+    case SVC_Commands::COMMAND_DPC_GET_STATS:
+    {
+        // Get DPC Worker statistics: R0 = stats pointer
+        CRTOS::DPCWorkerStats* stats = (CRTOS::DPCWorkerStats*)callerStack[0u];
+        if (stats != nullptr)
+        {
+            CRTOS::GlobalDPCWorker.GetStats(*stats);
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_GET_MEMORY_REGIONS:
+    {
+        // Get memory region info: R0 = regions array, R1 = maxRegions
+        // Returns number of regions in R0
+        ModuleMemoryRegion* regions = (ModuleMemoryRegion*)callerStack[0u];
+        uint32_t maxRegions = callerStack[1u];
+        
+        // Debug output
+        static uint32_t dbg_call_count = 0;
+        dbg_call_count++;
+        if (dbg_call_count <= 3)
+        {
+            printf("[SVC-DBG] COMMAND_GET_MEMORY_REGIONS called\r\n");
+            printf("[SVC-DBG] regions ptr=0x%08lX, maxRegions=%lu\r\n", 
+                   (uint32_t)regions, maxRegions);
+        }
+        
+        if (regions != nullptr && maxRegions > 0)
+        {
+            uint32_t regionCount = HeapAllocator::GetRegionCount();
+            
+            if (dbg_call_count <= 3)
+            {
+                printf("[SVC-DBG] HeapAllocator::GetRegionCount() = %lu\r\n", regionCount);
+            }
+            uint32_t toCopy = (regionCount < maxRegions) ? regionCount : maxRegions;
+            
+            if (dbg_call_count <= 3)
+            {
+                printf("[SVC-DBG] toCopy = %lu\\r\\n", toCopy);
+            }
+            
+            for (uint32_t i = 0; i < toCopy; i++)
+            {
+                const Memory::MemoryRegion* region = HeapAllocator::GetRegion(i);
+                
+                if (dbg_call_count <= 3)
+                {
+                    printf("[SVC-DBG] GetRegion(%lu) = 0x%08lX\\r\\n", i, (uint32_t)region);
+                    if (region != nullptr)
+                    {
+                        printf("[SVC-DBG]   name='%s', init=%d, size=%lu\\r\\n",
+                               region->name ? region->name : "NULL", 
+                               region->initialized, region->size);
+                    }
+                }
+                
+                if (region != nullptr && region->initialized)
+                {
+                    // Copy name (safely, ensure null termination)
+                    const char* srcName = region->name ? region->name : "UNKNOWN";
+                    uint32_t j = 0;
+                    while (j < MEMORY_REGION_NAME_LEN - 1 && srcName[j] != '\0')
+                    {
+                        regions[i].name[j] = srcName[j];
+                        j++;
+                    }
+                    regions[i].name[j] = '\0';
+                    
+                    regions[i].baseAddress = (uint32_t)region->baseAddress;
+                    regions[i].totalSize = region->size;
+                    regions[i].flags = region->flags;
+                    regions[i].initialized = 1;
+                    
+                    // Get per-region memory stats from the allocator
+                    regions[i].freeMemory = HeapAllocator::GetRegionFreeMemory(i);
+                    regions[i].allocatedMemory = HeapAllocator::GetRegionAllocatedMemory(i);
+                    
+                    if (dbg_call_count <= 3)
+                    {
+                        printf("[SVC-DBG]   copied: total=%lu, free=%lu, alloc=%lu\\r\\n",
+                               regions[i].totalSize, regions[i].freeMemory, regions[i].allocatedMemory);
+                    }
+                }
+                else
+                {
+                    // Clear uninitialised region entries
+                    regions[i].initialized = 0;
+                    regions[i].name[0] = '\0';
+                    if (dbg_call_count <= 3)
+                    {
+                        printf("[SVC-DBG]   region[%lu] NOT initialized\\r\\n", i);
+                    }
+                }
+            }
+            callerStack[0u] = toCopy;
+            
+            if (dbg_call_count <= 3)
+            {
+                printf("[SVC-DBG] returning toCopy=%lu in R0\\r\\n", toCopy);
+            }
+        }
+        else
+        {
+            callerStack[0u] = 0;
+            if (dbg_call_count <= 3)
+            {
+                printf("[SVC-DBG] returning 0 (null regions or maxRegions=0)\\r\\n");
+            }
+        }
+        break;
+    }
+    case SVC_Commands::COMMAND_MODULE_FIND:
+    {
+        // Find another module's shared memory by name
+        // R0 = pointer to module name string
+        // Returns: pointer to that module's shared memory, or NULL if not found
+        const char* targetName = (const char*)callerStack[0u];
+        ModuleSharedMemory* foundMem = nullptr;
+        
+        if (targetName != nullptr && loadedModules != nullptr && loadedModulesCount > 0)
+        {
+            for (uint32_t i = 0; i < loadedModulesCount; i++)
+            {
+                if (loadedModules[i].sharedMemory != nullptr)
+                {
+                    // Compare module names
+                    const char* modName = loadedModules[i].name;
+                    bool match = true;
+                    for (int j = 0; j < 24; j++)
+                    {
+                        if (modName[j] != targetName[j])
+                        {
+                            match = false;
+                            break;
+                        }
+                        if (modName[j] == '\0')
+                            break;
+                    }
+                    if (match)
+                    {
+                        foundMem = loadedModules[i].sharedMemory;
+                        break;
+                    }
+                }
+            }
+        }
+        callerStack[0u] = (uint32_t)foundMem;
+        break;
+    }
+    case SVC_Commands::COMMAND_MODULE_ALLOC_SHARED:
+    {
+        // Allocate named shared memory region
+        // R0 = pointer to name string (unused for now, just size-based)
+        // R1 = size in bytes
+        // Returns: pointer to allocated memory, or NULL on failure
+        // const char* name = (const char*)callerStack[0u];  // For future named registry
+        uint32_t size = callerStack[1u];
+        
+        void* ptr = nullptr;
+        if (size > 0 && size <= 1024 * 1024)  // Max 1MB allocation
+        {
+            // Allocate from SDRAM with DMA capability for display buffers
+            Memory::AllocHints hints;
+            hints.requiredFlags = Memory::MEM_DMA_CAPABLE | Memory::MEM_NON_CACHED;
+            hints.preferredFlags = Memory::MEM_LARGE;  // Prefer large memory region (SDRAM)
+            ptr = HeapAllocator::Allocate(size, hints);
+        }
+        callerStack[0u] = (uint32_t)ptr;
         break;
     }
     default:
@@ -836,19 +1203,26 @@ extern "C" void MemManage_PrintInfo(uint32_t *stack_frame)
     }
 }
 
-void SVC_Handler(void)
+// SVC_Handler moved to Syscall/SVC_Handler.cpp
+
+// Helper function to get CONTROL register value for current task
+// Called from PendSV_Handler assembly code
+// Returns: 0x02 for privileged (PSP), 0x03 for unprivileged (PSP + nPRIV)
+extern "C" uint32_t getTaskControlValue(void)
 {
-    __asm volatile(
-        ".syntax unified                              \n"
-        "tst lr, #4                                   \n"
-        "ite eq                                       \n"
-        "mrseq r0, msp                                \n"
-        "mrsne r0, psp                                \n"
-        "ldr r1, SVC_ISR_ADDR                         \n"
-        "bx r1                                        \n"
-        ".align 4                                     \n"
-        "SVC_ISR_ADDR:                                \n"
-        "\t.word SVC_Handle_Subprocess                \n");
+    // CONTROL register bits:
+    // Bit 0 (nPRIV): 0 = privileged, 1 = unprivileged
+    // Bit 1 (SPSEL): 1 = use PSP (always for threads)
+    // Bit 2 (FPCA): FPU context active (handled separately)
+    
+    if (sCurrentTCB->isPrivileged)
+    {
+        return 0x02;  // Use PSP, privileged mode
+    }
+    else
+    {
+        return 0x03;  // Use PSP, unprivileged mode
+    }
 }
 
 extern "C" void PendSV_Handler(void)
@@ -890,6 +1264,13 @@ extern "C" void PendSV_Handler(void)
         "vldmiaeq r0!, {s16-s31} \n"
         // set new PSP
         "msr psp, r0         \n"
+        // Set CONTROL register based on task privilege mode
+        // Must save LR before calling function
+        "push {lr}           \n"
+        "bl getTaskControlValue \n"
+        "msr control, r0     \n"
+        "isb                 \n"  // Barrier after changing CONTROL
+        "pop {lr}            \n"
         // Leave interrupt
         "bx lr               \n"
         "stackOverflow:      \n"
@@ -1001,24 +1382,26 @@ extern "C" void switchCtx(void)
                     }
                     
                     // Free the node
-                    mem.deallocate(nodeToFree);
+                    HeapAllocator::Free(nodeToFree);
                     temp->data->blockingNode = nullptr;
                 }
                 
-                // Set return value to -1 (failure)
-                ((volatile uint32_t*)(temp->data->stackTop))[0] = (uint32_t)(-1);
+                // Mark as woken by timeout (not by signal)
+                temp->data->wokenByTimeout = true;
                 temp->data->state = TaskState::TASK_READY;
             }
             break;
         case TaskState::TASK_BLOCKED_BY_QUEUE:
             if (tickCount >= temp->data->timeout)
             {
+                temp->data->wokenByTimeout = true;
                 temp->data->state = TaskState::TASK_READY;
             }
             break;
         case TaskState::TASK_BLOCKED_BY_CIRC_BUFFER:
             if (tickCount >= temp->data->timeout)
             {
+                temp->data->wokenByTimeout = true;
                 temp->data->state = TaskState::TASK_READY;
             }
             break;
@@ -1191,6 +1574,29 @@ uint32_t *initStack(volatile uint32_t *stackTop, volatile uint32_t *stackEnd, Ta
     return ((uint32_t *)stackTop);
 }
 
+uint32_t *initStackWithR9(volatile uint32_t *stackTop, volatile uint32_t *stackEnd, TaskFunction code, void *args, uint32_t r9Value)
+{
+    *(--stackTop) = (uint32_t)0x01000000lu; // xPSR
+    *(--stackTop) = (uint32_t)code;         // PC
+    *(--stackTop) = (uint32_t)dummyTask;    // LR
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R12
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R3
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R2
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R1
+    *(--stackTop) = (uint32_t)args;         // R0
+    *(--stackTop) = (uint32_t)0xFFFFFFFDul; // EXC_RETURN
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R11
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R10
+    *(--stackTop) = (uint32_t)r9Value;      // R09 - GOT base for PIC code
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R08
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R07
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R06
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R05
+    *(--stackTop) = (uint32_t)0xFEEDC0DEul; // R04
+
+    return ((uint32_t *)stackTop);
+}
+
 void TimerISR(void *)
 {
     while (1)
@@ -1236,18 +1642,25 @@ void idleTask(void *)
 CRTOS::Result CRTOS::Scheduler::Start(void)
 {
     CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-    void *pool = nullptr;
-    uint32_t poolSize = 0u;
+
+    // Initialize DWT cycle counter for precise timing measurements
+    DWT_Init();
 
     do
     {
-        mem.getMemoryPool(&pool, poolSize);
-
-        if ((pool == nullptr) || (poolSize == 0u))
+        if (HeapAllocator::GetRegionCount() == 0)
         {
             result = CRTOS::Result::RESULT_MEMORY_NOT_INITIALIZED;
             return result;
         }
+
+        // Initialize futex subsystem
+        Futex::Init();
+
+        // Initialize DWT cycle counter for execution time measurement
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;  // Enable trace
+        DWT->CYCCNT = 0;                                  // Reset cycle counter
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;             // Enable cycle counter
 
         *NVIC_SHPR3_REG |= NVIC_PENDSV_PRIO;
         *NVIC_SHPR3_REG |= NVIC_SYSTICK_PRIO;
@@ -1296,7 +1709,7 @@ CRTOS::Result CRTOS::CRC32::Init(void)
 
     if (sCrcTable == nullptr)
     {
-        sCrcTable = reinterpret_cast<uint32_t *>(mem.allocate(sCrcTableSize * sizeof(uint32_t)));
+        sCrcTable = reinterpret_cast<uint32_t *>(HeapAllocator::Allocate(sCrcTableSize * sizeof(uint32_t)));
     }
     else
     {
@@ -1368,7 +1781,7 @@ CRTOS::Result CRTOS::CRC32::Deinit(void)
     }
     else
     {
-        mem.deallocate(sCrcTable);
+        HeapAllocator::Free(sCrcTable);
     }
 
     return result;

@@ -23,144 +23,103 @@ extern "C" uint32_t getInterruptMask(void);
 extern "C" void setInterruptMask(uint32_t mask);
 extern volatile uint32_t tickCount;
 extern bool isHigherPrioTaskPending();
-extern HeapAllocator mem;
 
 CRTOS::Result CRTOS::BinarySemaphore::signal(void)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-
     uint32_t mask = getInterruptMask();
 
-    if (_val > 0)
+    if (listOfTasksWaitingToRecv != nullptr)
     {
-        result = CRTOS::Result::RESULT_SEMAPHORE_BUSY;
+        // Tasks are waiting: wake up the first one (FIFO order)
+        TaskControlBlock *waitingTask = reinterpret_cast<TaskControlBlock*>(listOfTasksWaitingToRecv->data);
+        
+        // Mark task as NOT timed out (it was woken by signal)
+        waitingTask->wokenByTimeout = false;
+        waitingTask->state = TaskState::TASK_READY;
+        waitingTask->blockingNode = nullptr;
+        
+        // Remove from waiting list
+        ListDeleteAtBeginning(listOfTasksWaitingToRecv);
+        
+        setInterruptMask(mask);
+        
+        // Trigger scheduler to potentially switch to woken task
+        *ICSR_REG = NVIC_PENDSV_BIT;
+        __DSB();
+        __ISB();
     }
     else
     {
-        if (listOfTasksWaitingToRecv != nullptr)
-        {
-            // The data field contains the TCB pointer directly (not pointer-to-pointer)
-            TaskControlBlock *tmp = reinterpret_cast<TaskControlBlock*>(listOfTasksWaitingToRecv->data);
-            if (tmp->state == TaskState::TASK_BLOCKED_BY_SEMAPHORE)
-            {
-                tmp->state = TaskState::TASK_READY;
-                tmp->blockingNode = nullptr; // Clear node pointer since it's being freed
-            }
-            ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-        }
-
+        // No tasks waiting: just set the semaphore
         _val = 1;
+        setInterruptMask(mask);
     }
 
-    setInterruptMask(mask);
-    
-    // Always trigger PendSV to let scheduler check for ready tasks
-    *ICSR_REG = NVIC_PENDSV_BIT;
-    __DSB();
-    __ISB();
-
-    return result;
+    return CRTOS::Result::RESULT_SUCCESS;
 }
 
 CRTOS::Result CRTOS::BinarySemaphore::wait(uint32_t ticks)
 {
-    CRTOS::Result result = CRTOS::Result::RESULT_SUCCESS;
-    uint32_t time = tickCount;
-    uint32_t timeout = time + ticks;
-    bool isBlocked = false;
+    uint32_t mask = getInterruptMask();
 
-    for (;;)
+    // 1. Success: Resource available immediately
+    if (_val > 0)
     {
-        uint32_t mask = getInterruptMask();
-
-        time = tickCount;
-
-        if (_val > 0u)
-        {
-            _val = 0u;
-            setInterruptMask(mask);
-            return result;
-        }
-        else
-        {
-            if (ticks == 0u)
-            {
-                setInterruptMask(mask);
-                result = CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
-                return result;
-            }
-
-            if (isBlocked == false)
-            {
-                // Save the current TCB pointer before changing state
-                TaskControlBlock* tcbToBlock = (TaskControlBlock*)sCurrentTCB;
-                
-                tcbToBlock->timeout = timeout;
-                tcbToBlock->state = TaskState::TASK_BLOCKED_BY_SEMAPHORE;
-                
-                // Manual insertion to avoid static tail pointer corruption
-                Node<uint32_t*> *newNode = reinterpret_cast<Node<uint32_t*> *>(mem.allocate(sizeof(Node<uint32_t*>)));
-                if (newNode != nullptr)
-                {
-                    // Store the TCB pointer value directly (not &sCurrentTCB which changes!)
-                    newNode->data = reinterpret_cast<uint32_t**>(tcbToBlock);
-                    newNode->next = listOfTasksWaitingToRecv;
-                    newNode->prev = nullptr;
-                    if (listOfTasksWaitingToRecv != nullptr)
-                    {
-                        listOfTasksWaitingToRecv->prev = newNode;
-                    }
-                    listOfTasksWaitingToRecv = newNode;
-                }
-                
-                isBlocked = true;
-            }
-        }
-
+        _val = 0;
         setInterruptMask(mask);
-
-        if (time < timeout)
-        {
-            if (_val > 0u)
-            {
-                mask = getInterruptMask();
-                if (listOfTasksWaitingToRecv != nullptr)
-                {
-                    TaskControlBlock *tmp = reinterpret_cast<TaskControlBlock*>(listOfTasksWaitingToRecv->data);
-                    if (tmp->state == TaskState::TASK_BLOCKED_BY_SEMAPHORE)
-                    {
-                        tmp->state = TaskState::TASK_READY;
-                    }
-                    ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-                }
-                setInterruptMask(mask);
-
-                if (isHigherPrioTaskPending() == true)
-                {
-                    *ICSR_REG = NVIC_PENDSV_BIT;
-
-                    __DSB();
-                    __ISB();
-                }
-            }
-        }
-        else
-        {
-            // Timeout occurred - remove ourselves from waiting list
-            mask = getInterruptMask();
-
-            // Find and remove current task from waiting list
-            Node<uint32_t *> *temp = listOfTasksWaitingToRecv;
-            if (temp != nullptr)
-            {
-                ListDeleteAtBeginning(listOfTasksWaitingToRecv);
-            }
-
-            sCurrentTCB->state = TaskState::TASK_READY;
-            setInterruptMask(mask);
-
-            result = CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
-            return result;
-        }
+        return CRTOS::Result::RESULT_SUCCESS;
     }
+    
+    // 2. Immediate Failure: Polling only, no wait
+    if (ticks == 0)
+    {
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
+    }
+    
+    // 3. Blocking with Timeout
+    TaskControlBlock* currentTask = (TaskControlBlock*)sCurrentTCB;
+    
+    // Add task to semaphore's waiting list
+    Node<uint32_t*> *newNode = reinterpret_cast<Node<uint32_t*>*>(HeapAllocator::Allocate(sizeof(Node<uint32_t*>)));
+    if (newNode != nullptr)
+    {
+        newNode->data = reinterpret_cast<uint32_t**>(currentTask);
+        newNode->next = listOfTasksWaitingToRecv;
+        newNode->prev = nullptr;
+        if (listOfTasksWaitingToRecv != nullptr)
+        {
+            listOfTasksWaitingToRecv->prev = newNode;
+        }
+        listOfTasksWaitingToRecv = newNode;
+        currentTask->blockingNode = newNode;
+    }
+    
+    // Set timeout (scheduler will wake us if timeout expires)
+    currentTask->timeout = (ticks == 0xFFFFFFFF) ? 0xFFFFFFFF : (tickCount + ticks);
+    currentTask->wokenByTimeout = false;
+    currentTask->state = TaskState::TASK_BLOCKED_BY_SEMAPHORE;
+    
+    setInterruptMask(mask);
+    
+    // Yield - give up CPU, scheduler will run next task
+    *ICSR_REG = NVIC_PENDSV_BIT;
+    __DSB();
+    __ISB();
+    
+    // --- TASK RESUMES HERE AFTER BEING WOKEN ---
+    
+    mask = getInterruptMask();
+    
+    // Check if we woke up because of signal or timeout
+    if (currentTask->wokenByTimeout)
+    {
+        // Timeout occurred - we were already removed from wait list by scheduler
+        setInterruptMask(mask);
+        return CRTOS::Result::RESULT_SEMAPHORE_TIMEOUT;
+    }
+    
+    // We got the semaphore!
+    setInterruptMask(mask);
+    return CRTOS::Result::RESULT_SUCCESS;
 }

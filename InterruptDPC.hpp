@@ -56,6 +56,7 @@ namespace CRTOS
         BinarySemaphore* semaphore;  // Semaphore to signal the task
         DPCCallback callback;         // Optional callback (runs in ISR context)
         void* context;                // Context passed to callback
+        uint32_t gotBase;             // GOT base for PIC modules (0 = kernel code)
         bool active;                  // Whether this handler is active
     };
 
@@ -88,10 +89,12 @@ namespace CRTOS
         //   semaphore  - Semaphore to signal when interrupt occurs
         //   callback   - Optional callback to run in ISR context (can be nullptr)
         //   context    - Context pointer passed to callback
+        //   gotBase    - GOT base for PIC modules (0 = kernel code, no r9 setup needed)
         Result RegisterHandler(uint32_t irqNumber, 
                               BinarySemaphore* semaphore,
                               DPCCallback callback = nullptr,
-                              void* context = nullptr);
+                              void* context = nullptr,
+                              uint32_t gotBase = 0);
 
         // Unregister a specific handler
         Result UnregisterHandler(uint32_t irqNumber, BinarySemaphore* semaphore);

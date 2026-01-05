@@ -37,6 +37,11 @@ enum SVC_Commands
     COMMAND_SEMAPHORE_DELETE,
     COMMAND_DPC_REGISTER_HANDLER,
     COMMAND_DPC_UNREGISTER_HANDLER,
+    COMMAND_DPC_ENQUEUE_WORK,
+    COMMAND_DPC_GET_STATS,
+    COMMAND_GET_MEMORY_REGIONS,
+    COMMAND_MODULE_FIND,           // Find another module's shared memory by name
+    COMMAND_MODULE_ALLOC_SHARED,   // Allocate named shared memory
 
     COMMAND_UNKNOWN = 0xFFFFFFFFu
 };
@@ -59,8 +64,6 @@ typedef struct ModuleSharedMemory
 #define MODULE_FLAG_HOST_ACK        (1 << 1)  // Host acknowledged data
 #define MODULE_FLAG_HOST_HAS_DATA   (1 << 2)  // Host has data for module
 #define MODULE_FLAG_MODULE_ACK      (1 << 3)  // Module acknowledged host data
-
-void delay(uint32_t ticks) __attribute__ ((naked));
 
 // Get pointer to shared memory (called from module)
 ModuleSharedMemory* module_get_shared_memory(void);
@@ -121,6 +124,22 @@ typedef struct ModuleHeapInfo
     uint32_t utilizationPercent;
 } ModuleHeapInfo;
 
+// Memory region information structure (for per-region display)
+#define MAX_MEMORY_REGIONS 8
+#define MEMORY_REGION_NAME_LEN 16
+
+typedef struct ModuleMemoryRegion
+{
+    char name[MEMORY_REGION_NAME_LEN];  // Region name (e.g., "KERNEL", "SDRAM")
+    uint32_t baseAddress;               // Start address of region
+    uint32_t totalSize;                 // Total size in bytes
+    uint32_t freeMemory;                // Available memory in bytes
+    uint32_t allocatedMemory;           // Used memory in bytes
+    uint32_t flags;                     // Memory flags (DMA capable, cached, etc.)
+    uint8_t initialized;                // 1 if region is active
+    uint8_t padding[3];                 // Alignment padding
+} ModuleMemoryRegion;
+
 // Get total number of tasks in system
 uint32_t module_get_task_count(void);
 
@@ -131,11 +150,36 @@ int32_t module_get_task_info(uint32_t task_index, ModuleTaskInfo* info);
 // Get heap information
 void module_get_heap_info(ModuleHeapInfo* info);
 
+// Get memory region information
+// Returns number of regions filled in the array
+uint32_t module_get_memory_regions(ModuleMemoryRegion* regions, uint32_t maxRegions);
+
 // Module memory allocation (uses kernel heap)
 void* module_malloc(uint32_t size);
 
 // Module memory deallocation
 void module_free(void* ptr);
+
+// ============================================================
+// Privilege Mode Operations
+// ============================================================
+
+/**
+ * @brief Drop privileges to user mode (one-way operation)
+ * 
+ * This is a security feature - once privileges are dropped, they cannot be
+ * regained. Use this for sandboxing untrusted code.
+ * 
+ * @return 0 on success
+ */
+int32_t module_drop_privileges(void);
+
+/**
+ * @brief Check if module is running in privileged mode
+ * 
+ * @return 1 if privileged, 0 if user mode
+ */
+int32_t module_is_privileged(void);
 
 // Register current task for an IRQ (for display in htop)
 void RegisterCurrentTaskIRQ(uint32_t irqNumber);
@@ -158,6 +202,60 @@ void module_semaphore_signal(SemaphoreHandle sem);
 
 // Delete a semaphore
 void module_semaphore_delete(SemaphoreHandle sem);
+
+// ============================================================
+// Futex (Fast Userspace Mutex) Operations
+// ============================================================
+// Futex provides efficient synchronization primitives that avoid
+// kernel transitions in the uncontended case.
+
+// Futex operation codes
+#define FUTEX_WAIT          0   // Wait if *uaddr == val
+#define FUTEX_WAKE          1   // Wake up to val waiters
+#define FUTEX_WAIT_BITSET   9   // Wait with bitmask matching
+#define FUTEX_WAKE_BITSET   10  // Wake with bitmask matching
+#define FUTEX_REQUEUE       3   // Requeue waiters to another futex
+
+/**
+ * @brief Wait on futex if value matches
+ * 
+ * If *uaddr == expected_val, the calling task is suspended until:
+ * - Another task calls module_futex_wake() on the same address
+ * - The timeout expires
+ * - A spurious wakeup occurs (caller should recheck condition)
+ * 
+ * @param uaddr     Pointer to the futex variable (must be word-aligned)
+ * @param expected_val Expected value - only wait if *uaddr == expected_val
+ * @param timeout   Timeout in system ticks (0xFFFFFFFF = infinite wait)
+ * @return 0 on success (woken by wake), -ETIMEDOUT on timeout, -EAGAIN if value mismatch
+ */
+int32_t module_futex_wait(volatile uint32_t* uaddr, uint32_t expected_val, uint32_t timeout);
+
+/**
+ * @brief Wake tasks waiting on a futex
+ * 
+ * Wakes up to num_wake tasks that are waiting on the futex at uaddr.
+ * 
+ * @param uaddr     Pointer to the futex variable
+ * @param num_wake  Maximum number of waiters to wake (1 for mutex, 0x7FFFFFFF for broadcast)
+ * @return Number of tasks actually woken (>= 0)
+ */
+int32_t module_futex_wake(volatile uint32_t* uaddr, uint32_t num_wake);
+
+/**
+ * @brief Requeue waiters from one futex to another
+ * 
+ * Atomically wakes num_wake waiters and moves num_requeue waiters
+ * to a different futex address. Used for efficient condition variable implementation.
+ * 
+ * @param uaddr       Source futex address
+ * @param uaddr2      Destination futex address
+ * @param num_wake    Number of waiters to wake
+ * @param num_requeue Number of waiters to move to uaddr2
+ * @return Number of affected waiters (woken + requeued)
+ */
+int32_t module_futex_requeue(volatile uint32_t* uaddr, volatile uint32_t* uaddr2,
+                              uint32_t num_wake, uint32_t num_requeue);
 
 // DPC operations
 typedef void (*DPCCallback)(void* context);

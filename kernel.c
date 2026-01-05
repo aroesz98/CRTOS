@@ -242,6 +242,42 @@ void module_free(void* ptr)
     );
 }
 
+// ============================================================
+// Privilege Mode Operations
+// ============================================================
+// These use the new syscall numbering (100+)
+
+#define SYS_DROP_PRIVILEGES 104
+#define SYS_GET_PRIVILEGE   105
+
+int32_t module_drop_privileges(void)
+{
+    register int32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "svc %1                        \n"
+        : "=r" (result)
+        : "i" (SYS_DROP_PRIVILEGES)
+        : "memory"
+    );
+    return result;
+}
+
+int32_t module_is_privileged(void)
+{
+    register int32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "svc %1                        \n"
+        : "=r" (result)
+        : "i" (SYS_GET_PRIVILEGE)
+        : "memory"
+    );
+    return result;
+}
+
 // IRQ registration functions - use syscalls to register with kernel
 void RegisterCurrentTaskIRQ(uint32_t irqNumber)
 {
@@ -356,4 +392,66 @@ void module_dpc_unregister_handler(uint32_t irqNumber, SemaphoreHandle sem)
         : "r" (irqNumber), "r" (sem), "i" (COMMAND_DPC_UNREGISTER_HANDLER)
         : "r0", "r1", "memory"
     );
+}
+
+// ============================================================
+// Futex (Fast Userspace Mutex) Operations
+// ============================================================
+// These use the new syscall numbering (100+) instead of old SVC commands
+
+// Syscall numbers for futex operations (must match SystemCall.hpp)
+#define SYS_FUTEX_WAIT      180
+#define SYS_FUTEX_WAKE      181
+#define SYS_FUTEX_REQUEUE   182
+
+int32_t module_futex_wait(volatile uint32_t* uaddr, uint32_t expected_val, uint32_t timeout)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* uaddr */
+        "mov r1, %2                    \n"  /* expected_val */
+        "mov r2, %3                    \n"  /* timeout */
+        "svc %4                        \n"
+        : "=r" (result)
+        : "r" (uaddr), "r" (expected_val), "r" (timeout), "i" (SYS_FUTEX_WAIT)
+        : "r1", "r2", "memory"
+    );
+    return (int32_t)result;
+}
+
+int32_t module_futex_wake(volatile uint32_t* uaddr, uint32_t num_wake)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* uaddr */
+        "mov r1, %2                    \n"  /* num_wake */
+        "svc %3                        \n"
+        : "=r" (result)
+        : "r" (uaddr), "r" (num_wake), "i" (SYS_FUTEX_WAKE)
+        : "r1", "memory"
+    );
+    return (int32_t)result;
+}
+
+int32_t module_futex_requeue(volatile uint32_t* uaddr, volatile uint32_t* uaddr2,
+                              uint32_t num_wake, uint32_t num_requeue)
+{
+    register uint32_t result __asm("r0");
+    __asm volatile
+    (
+        ".syntax unified               \n"
+        "mov r0, %1                    \n"  /* uaddr */
+        "mov r1, %2                    \n"  /* uaddr2 */
+        "mov r2, %3                    \n"  /* num_wake */
+        "mov r3, %4                    \n"  /* num_requeue */
+        "svc %5                        \n"
+        : "=r" (result)
+        : "r" (uaddr), "r" (uaddr2), "r" (num_wake), "r" (num_requeue), "i" (SYS_FUTEX_REQUEUE)
+        : "r1", "r2", "r3", "memory"
+    );
+    return (int32_t)result;
 }

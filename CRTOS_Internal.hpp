@@ -33,7 +33,24 @@ enum class TaskState : uint32_t
     TASK_PAUSED,
     TASK_BLOCKED_BY_SEMAPHORE,
     TASK_BLOCKED_BY_QUEUE,
-    TASK_BLOCKED_BY_CIRC_BUFFER
+    TASK_BLOCKED_BY_CIRC_BUFFER,
+    TASK_DELETED  // Task is being deleted / unknown state
+};
+
+// Linked list node for registered IRQs
+struct RegisteredIRQNode
+{
+    uint32_t irqNumber;           // IRQ number
+    RegisteredIRQNode* next;      // Next node in list
+};
+
+// Linked list node for memory regions (for cleanup on task delete)
+struct TaskMemoryNode
+{
+    void* address;                // Memory address
+    uint32_t size;                // Size in bytes
+    TaskMemoryNode* next;         // Next node in list
+    bool useStaticAllocator;      // True if allocated via HeapAllocator::Allocate (supports SDRAM)
 };
 
 struct TaskControlBlock
@@ -52,8 +69,20 @@ struct TaskControlBlock
     uint32_t exitCycles;
     uint64_t executionTime;
     uint32_t heapAllocated;      // Total heap memory allocated by this task
-    uint32_t registeredIRQ;      // IRQ number this task is registered for (0xFFFFFFFF if none)
+    
+    // Linked list of registered interrupts
+    RegisteredIRQNode* registeredIRQs;   // Head of registered IRQs list
+    uint32_t registeredIRQCount;          // Number of registered IRQs
+    
+    // Linked list of memory regions for proper deallocation on task delete
+    TaskMemoryNode* memoryRegions;        // Head of memory regions list
+    uint32_t memoryRegionCount;           // Number of tracked memory regions
+    
     void *blockingNode;          // Pointer to the Node in a waiting list (for cleanup on timeout)
+    bool wokenByTimeout;         // True if task was woken by timeout, not by signal
+    bool isModule;               // True if this task was created from a binary module
+    bool isPrivileged;           // True if task runs in privileged mode, false for user mode
+    uint32_t moduleIndex;        // Index in loadedModules array (if isModule is true)
     char name[24];
 };
 
@@ -68,7 +97,22 @@ typedef struct ProgramInfoBin
     uint32_t section_data_size;
     uint32_t section_bss_start_addr;
     uint32_t section_bss_size;
-    uint32_t reserved[22];
+    // GOT (Global Offset Table) section info for PIC relocation
+    uint32_t section_got_start_addr;  // offset from segment base to .got
+    uint32_t section_got_size;        // size of .got + .got.plt (in bytes)
+    // Read-only data section info
+    uint32_t section_rodata_start_addr; // offset from segment base to .rodata
+    uint32_t section_rodata_size;       // size of .rodata
+    // Read-only data with relocations (const structs with pointers)
+    uint32_t section_data_rel_ro_start_addr;  // offset from segment base to .data.rel.ro
+    uint32_t section_data_rel_ro_size;        // size of .data.rel.ro
+    // C++ constructor array (function pointers that need relocation)
+    uint32_t section_init_array_start_addr;   // offset from segment base to .init_array
+    uint32_t section_init_array_size;         // size of .init_array
+    // C++ destructor array (function pointers that need relocation)
+    uint32_t section_fini_array_start_addr;   // offset from segment base to .fini_array
+    uint32_t section_fini_array_size;         // size of .fini_array
+    uint32_t reserved[12];  // reduced from 16 to 12 to make room for init/fini arrays
     uint32_t vtor_offset;
     uint32_t msp_limit;
 } ProgramInfoBin;
@@ -124,6 +168,18 @@ typedef struct
     volatile uint32_t CYCCNT;
 } DWT_Type;
 
+typedef struct
+{
+    volatile uint32_t DHCSR;
+    volatile uint32_t DCRSR;
+    volatile uint32_t DCRDR;
+    volatile uint32_t DEMCR;
+} CoreDebug_Type;
+
+// DWT and CoreDebug bit masks
+#define DWT_CTRL_CYCCNTENA_Msk         (1ul << 0u)
+#define CoreDebug_DEMCR_TRCENA_Msk     (1ul << 24u)
+
 // Node template for linked lists
 // Note: Implementation is in CRTOS.cpp
 template <typename T>
@@ -148,14 +204,12 @@ public:
     }
 };
 
-// External reference to mem allocator (defined in CRTOS.cpp)
-extern HeapAllocator mem;
-
 // List function implementations - inline to avoid linking issues
+// Uses HeapAllocator::Allocate() and HeapAllocator::Free() for node management
 template <typename T>
 inline void ListInsertAtBeginning(Node<T> *&head, T *data)
 {
-    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(HeapAllocator::Allocate(sizeof(Node<T>)));
     if (__builtin_expect(newNode == nullptr, 0))
         return;
 
@@ -180,7 +234,7 @@ inline void ListInsertAtBeginning(Node<T> *&head, T *data)
 template <typename T>
 inline void ListInsertAtEnd(Node<T> *&head, T *data)
 {
-    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(HeapAllocator::Allocate(sizeof(Node<T>)));
     if (__builtin_expect(newNode == nullptr, 0))
         return;
 
@@ -226,7 +280,7 @@ inline void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
         return;
     }
 
-    Node<T> *newNode = reinterpret_cast<Node<T> *>(mem.allocate(sizeof(Node<T>)));
+    Node<T> *newNode = reinterpret_cast<Node<T> *>(HeapAllocator::Allocate(sizeof(Node<T>)));
     if (__builtin_expect(newNode == nullptr, 0))
         return;
 
@@ -242,7 +296,7 @@ inline void ListInsertAtPosition(Node<T> *&head, T *data, uint32_t position)
 
     if (__builtin_expect(current == nullptr, 0))
     {
-        mem.deallocate(newNode);
+        HeapAllocator::Free(newNode);
         return;
     }
 
@@ -285,7 +339,7 @@ inline void ListDeleteAtBeginning(Node<T> *&head)
         Node<T>::tail = head;
     }
 
-    mem.deallocate(nodeToDelete);
+    HeapAllocator::Free(nodeToDelete);
 }
 
 // O(1) delete at end using tail pointer
@@ -299,7 +353,7 @@ inline void ListDeleteAtEnd(Node<T> *&head)
 
     if (head->next == nullptr)
     {
-        mem.deallocate(head);
+        HeapAllocator::Free(head);
         head = nullptr;
         Node<T>::tail = nullptr;
         return;
@@ -323,7 +377,7 @@ inline void ListDeleteAtEnd(Node<T> *&head)
         Node<T>::tail->next = nullptr;
     }
 
-    mem.deallocate(nodeToDelete);
+    HeapAllocator::Free(nodeToDelete);
 }
 
 // Optimized delete at position
@@ -361,7 +415,7 @@ inline void ListDeleteAtPosition(Node<T> *&head, uint32_t position)
 
     current->prev->next = current->next;
     current->next->prev = current->prev;
-    mem.deallocate(current);
+    HeapAllocator::Free(current);
 }
 
 // Fast search function - no allocation needed
@@ -384,17 +438,20 @@ inline Node<T> *ListSearchByData(Node<T> *head, T *target)
 constexpr uint32_t NVIC_MIN_PRIO = 0xFFul;
 constexpr uint32_t NVIC_PENDSV_PRIO = NVIC_MIN_PRIO << 16u;
 constexpr uint32_t NVIC_SYSTICK_PRIO = NVIC_MIN_PRIO << 24u;
-constexpr uint32_t MAX_SYSCALL_IRQ_PRIO = 1ul << 5u;
+constexpr uint32_t NVIC_SVC_PRIO = 4ul << 4u;  // SVC priority = 4 (allows IRQs with priority 0-3 to preempt)
+constexpr uint32_t MAX_SYSCALL_IRQ_PRIO = 2ul << 4u;
 constexpr uint32_t NVIC_PENDSV_BIT = 1ul << 28u;
 
 // Hardware register definitions
 #define DWT_REG ((volatile uint32_t *)0xE0001000ul)
 #define ICSR_REG ((volatile uint32_t *)0xE000ED04ul)
 #define SYSTICK_REG ((volatile uint32_t *)0xE000E010ul)
+#define NVIC_SHPR2_REG ((volatile uint32_t *)0xE000ED1Cul)  // Contains SVC priority in bits 24-31
 #define NVIC_SHPR3_REG ((volatile uint32_t *)0xE000ED20ul)
 
 #define DWT ((DWT_Type *)DWT_REG)
 #define SysTick ((SysTick_Type *)SYSTICK_REG)
+#define CoreDebug ((CoreDebug_Type *)0xE000EDF0ul)
 
 #define SysTick_CTRL_CLKSOURCE (1ul << 2u)
 #define SysTick_CTRL_TICKINT (1ul << 1u)
@@ -409,6 +466,25 @@ static inline void __DSB(void)
 static inline void __ISB(void)
 {
     __asm volatile("isb 0xF" ::: "memory");
+}
+
+// Initialize DWT cycle counter for precise timing measurements
+static inline void DWT_Init(void)
+{
+    // Enable trace unit (required for DWT)
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    
+    // Reset cycle counter
+    DWT->CYCCNT = 0;
+    
+    // Enable cycle counter
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+// Get current DWT cycle count
+static inline uint32_t DWT_GetCycles(void)
+{
+    return DWT->CYCCNT;
 }
 
 #endif /* CRTOS_INTERNAL_HPP */
