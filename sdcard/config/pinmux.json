@@ -1,0 +1,503 @@
+{
+    "version": 1,
+    "description": "i.MX RT1052 Complete Pin Mux Configuration Database",
+    
+    "pins": {
+        "GPIO_AD_B0_00": {
+            "mux": "0x00BC", "pad": "0x02AC", "gpio_port": 1, "gpio_pin": 0,
+            "alt": ["FLEXPWM2_PWMA03", "XBAR1_INOUT14", "REF_CLK_32K", "USB_OTG2_ID", "LPI2C1_SCLS", "GPIO1_IO00", "USDHC1_RESET_B", "LPSPI3_SCK"]
+        },
+        "GPIO_AD_B0_01": {
+            "mux": "0x00C0", "pad": "0x02B0", "gpio_port": 1, "gpio_pin": 1,
+            "alt": ["FLEXPWM2_PWMB03", "XBAR1_INOUT15", "REF_CLK_24M", "USB_OTG1_ID", "LPI2C1_SDAS", "GPIO1_IO01", "EWM_OUT_B", "LPSPI3_SDO"]
+        },
+        "GPIO_AD_B0_02": {
+            "mux": "0x00C4", "pad": "0x02B4", "gpio_port": 1, "gpio_pin": 2,
+            "alt": ["FLEXCAN2_TX", "XBAR1_INOUT16", "LPUART6_TX", "USB_OTG1_PWR", "FLEXPWM1_PWMX00", "GPIO1_IO02", "LPI2C1_HREQ", "LPSPI3_SDI"]
+        },
+        "GPIO_AD_B0_03": {
+            "mux": "0x00C8", "pad": "0x02B8", "gpio_port": 1, "gpio_pin": 3,
+            "alt": ["FLEXCAN2_RX", "XBAR1_INOUT17", "LPUART6_RX", "USB_OTG1_OC", "FLEXPWM1_PWMX01", "GPIO1_IO03", "REF_CLK_24M", "LPSPI3_PCS0"]
+        },
+        "GPIO_AD_B0_04": {
+            "mux": "0x00CC", "pad": "0x02BC", "gpio_port": 1, "gpio_pin": 4,
+            "alt": ["SRC_BOOT_MODE00", "MQS_RIGHT", "ENET_TX_DATA03", "SAI2_TX_SYNC", "CSI_DATA09", "GPIO1_IO04", "PIT_TRIGGER00", "LPSPI3_PCS1"]
+        },
+        "GPIO_AD_B0_05": {
+            "mux": "0x00D0", "pad": "0x02C0", "gpio_port": 1, "gpio_pin": 5,
+            "alt": ["SRC_BOOT_MODE01", "MQS_LEFT", "ENET_TX_DATA02", "SAI2_TX_BCLK", "CSI_DATA08", "GPIO1_IO05", "XBAR1_INOUT17", "LPSPI3_PCS2"]
+        },
+        "GPIO_AD_B0_06": {
+            "mux": "0x00D4", "pad": "0x02C4", "gpio_port": 1, "gpio_pin": 6,
+            "alt": ["JTAG_TMS", "GPT2_COMPARE1", "ENET_RX_CLK", "SAI2_RX_BCLK", "CSI_DATA07", "GPIO1_IO06", "XBAR1_INOUT18", "LPSPI3_PCS3"]
+        },
+        "GPIO_AD_B0_07": {
+            "mux": "0x00D8", "pad": "0x02C8", "gpio_port": 1, "gpio_pin": 7,
+            "alt": ["JTAG_TCK", "GPT2_COMPARE2", "ENET_TX_ER", "SAI2_RX_SYNC", "CSI_DATA06", "GPIO1_IO07", "XBAR1_INOUT19", "ENET_1588_EVENT3_OUT"]
+        },
+        "GPIO_AD_B0_08": {
+            "mux": "0x00DC", "pad": "0x02CC", "gpio_port": 1, "gpio_pin": 8,
+            "alt": ["JTAG_MOD", "GPT2_COMPARE3", "ENET_RX_DATA03", "SAI2_RX_DATA", "CSI_DATA05", "GPIO1_IO08", "XBAR1_IN20", "ENET_1588_EVENT3_IN"]
+        },
+        "GPIO_AD_B0_09": {
+            "mux": "0x00E0", "pad": "0x02D0", "gpio_port": 1, "gpio_pin": 9,
+            "alt": ["JTAG_TDI", "FLEXPWM2_PWMA03", "ENET_RX_DATA02", "SAI2_TX_DATA", "CSI_DATA04", "GPIO1_IO09", "XBAR1_IN21", "GPT2_CLK"]
+        },
+        "GPIO_AD_B0_10": {
+            "mux": "0x00E4", "pad": "0x02D4", "gpio_port": 1, "gpio_pin": 10,
+            "alt": ["JTAG_TDO", "FLEXPWM1_PWMA03", "ENET_CRS", "SAI2_MCLK", "CSI_DATA03", "GPIO1_IO10", "XBAR1_IN22", "ENET_1588_EVENT0_OUT"]
+        },
+        "GPIO_AD_B0_11": {
+            "mux": "0x00E8", "pad": "0x02D8", "gpio_port": 1, "gpio_pin": 11,
+            "alt": ["JTAG_TRSTB", "FLEXPWM1_PWMB03", "ENET_COL", "WDOG1_WDOG_B", "CSI_DATA02", "GPIO1_IO11", "XBAR1_IN23", "ENET_1588_EVENT0_IN"]
+        },
+        "GPIO_AD_B0_12": {
+            "mux": "0x00EC", "pad": "0x02DC", "gpio_port": 1, "gpio_pin": 12,
+            "alt": ["LPI2C4_SCL", "CCM_PMIC_READY", "LPUART1_TX", "WDOG2_WDOG_B", "FLEXPWM1_PWMX02", "GPIO1_IO12", "ENET_1588_EVENT1_OUT", "NMI_GLUE_NMI"]
+        },
+        "GPIO_AD_B0_13": {
+            "mux": "0x00F0", "pad": "0x02E0", "gpio_port": 1, "gpio_pin": 13,
+            "alt": ["LPI2C4_SDA", "GPT1_CLK", "LPUART1_RX", "EWM_OUT_B", "FLEXPWM1_PWMX03", "GPIO1_IO13", "ENET_1588_EVENT1_IN", "REF_CLK_24M"]
+        },
+        "GPIO_AD_B0_14": {
+            "mux": "0x00F4", "pad": "0x02E4", "gpio_port": 1, "gpio_pin": 14,
+            "alt": ["USB_OTG2_OC", "XBAR1_IN24", "LPUART1_CTS_B", "ENET_1588_EVENT0_OUT", "CSI_VSYNC", "GPIO1_IO14", "FLEXCAN2_TX", "FLEXCAN3_TX"]
+        },
+        "GPIO_AD_B0_15": {
+            "mux": "0x00F8", "pad": "0x02E8", "gpio_port": 1, "gpio_pin": 15,
+            "alt": ["USB_OTG2_PWR", "XBAR1_IN25", "LPUART1_RTS_B", "ENET_1588_EVENT0_IN", "CSI_HSYNC", "GPIO1_IO15", "FLEXCAN2_RX", "WDOG1_WDOG_RST_B_DEB"]
+        },
+        "GPIO_AD_B1_00": {
+            "mux": "0x00FC", "pad": "0x02EC", "gpio_port": 1, "gpio_pin": 16,
+            "alt": ["USB_OTG2_ID", "TMR3_TIMER0", "LPUART2_CTS_B", "LPI2C1_SCL", "WDOG1_B", "GPIO1_IO16", "USDHC1_WP", "KPP_ROW07"]
+        },
+        "GPIO_AD_B1_01": {
+            "mux": "0x0100", "pad": "0x02F0", "gpio_port": 1, "gpio_pin": 17,
+            "alt": ["USB_OTG1_PWR", "TMR3_TIMER1", "LPUART2_RTS_B", "LPI2C1_SDA", "CCM_PMIC_READY", "GPIO1_IO17", "USDHC1_VSELECT", "KPP_COL07"]
+        },
+        "GPIO_AD_B1_02": {
+            "mux": "0x0104", "pad": "0x02F4", "gpio_port": 1, "gpio_pin": 18,
+            "alt": ["USB_OTG1_ID", "TMR3_TIMER2", "LPUART2_TX", "SPDIF_OUT", "ENET_1588_EVENT2_OUT", "GPIO1_IO18", "USDHC1_CD_B", "KPP_ROW06"]
+        },
+        "GPIO_AD_B1_03": {
+            "mux": "0x0108", "pad": "0x02F8", "gpio_port": 1, "gpio_pin": 19,
+            "alt": ["USB_OTG1_OC", "TMR3_TIMER3", "LPUART2_RX", "SPDIF_IN", "ENET_1588_EVENT2_IN", "GPIO1_IO19", "USDHC2_CD_B", "KPP_COL06"]
+        },
+        "GPIO_AD_B1_04": {
+            "mux": "0x010C", "pad": "0x02FC", "gpio_port": 1, "gpio_pin": 20,
+            "alt": ["FLEXSPIB_DATA03", "ENET_MDC", "LPUART3_CTS_B", "SPDIF_SR_CLK", "CSI_PIXCLK", "GPIO1_IO20", "USDHC2_DATA0", "KPP_ROW05"]
+        },
+        "GPIO_AD_B1_05": {
+            "mux": "0x0110", "pad": "0x0300", "gpio_port": 1, "gpio_pin": 21,
+            "alt": ["FLEXSPIB_DATA02", "ENET_MDIO", "LPUART3_RTS_B", "SPDIF_OUT", "CSI_MCLK", "GPIO1_IO21", "USDHC2_DATA1", "KPP_COL05"]
+        },
+        "GPIO_AD_B1_06": {
+            "mux": "0x0114", "pad": "0x0304", "gpio_port": 1, "gpio_pin": 22,
+            "alt": ["FLEXSPIB_DATA01", "LPI2C3_SDA", "LPUART3_TX", "SPDIF_LOCK", "CSI_VSYNC", "GPIO1_IO22", "USDHC2_DATA2", "KPP_ROW04"]
+        },
+        "GPIO_AD_B1_07": {
+            "mux": "0x0118", "pad": "0x0308", "gpio_port": 1, "gpio_pin": 23,
+            "alt": ["FLEXSPIB_DATA00", "LPI2C3_SCL", "LPUART3_RX", "SPDIF_EXT_CLK", "CSI_HSYNC", "GPIO1_IO23", "USDHC2_DATA3", "KPP_COL04"]
+        },
+        "GPIO_AD_B1_08": {
+            "mux": "0x011C", "pad": "0x030C", "gpio_port": 1, "gpio_pin": 24,
+            "alt": ["FLEXSPIA_SS1_B", "FLEXPWM4_PWMA00", "FLEXCAN1_TX", "CCM_PMIC_READY", "CSI_DATA09", "GPIO1_IO24", "USDHC2_CMD", "KPP_ROW03"]
+        },
+        "GPIO_AD_B1_09": {
+            "mux": "0x0120", "pad": "0x0310", "gpio_port": 1, "gpio_pin": 25,
+            "alt": ["FLEXSPIA_DQS", "FLEXPWM4_PWMA01", "FLEXCAN1_RX", "SAI1_MCLK", "CSI_DATA08", "GPIO1_IO25", "USDHC2_CLK", "KPP_COL03"]
+        },
+        "GPIO_AD_B1_10": {
+            "mux": "0x0124", "pad": "0x0314", "gpio_port": 1, "gpio_pin": 26,
+            "alt": ["FLEXSPIA_DATA03", "WDOG1_B", "LPUART8_TX", "SAI1_RX_SYNC", "CSI_DATA07", "GPIO1_IO26", "USDHC2_WP", "KPP_ROW02"]
+        },
+        "GPIO_AD_B1_11": {
+            "mux": "0x0128", "pad": "0x0318", "gpio_port": 1, "gpio_pin": 27,
+            "alt": ["FLEXSPIA_DATA02", "EWM_OUT_B", "LPUART8_RX", "SAI1_RX_BCLK", "CSI_DATA06", "GPIO1_IO27", "USDHC2_RESET_B", "KPP_COL02"]
+        },
+        "GPIO_AD_B1_12": {
+            "mux": "0x012C", "pad": "0x031C", "gpio_port": 1, "gpio_pin": 28,
+            "alt": ["FLEXSPIA_DATA01", "ACMP_OUT00", "LPSPI3_PCS0", "SAI1_RX_DATA00", "CSI_DATA05", "GPIO1_IO28", "USDHC2_DATA4", "KPP_ROW01"]
+        },
+        "GPIO_AD_B1_13": {
+            "mux": "0x0130", "pad": "0x0320", "gpio_port": 1, "gpio_pin": 29,
+            "alt": ["FLEXSPIA_DATA00", "ACMP_OUT01", "LPSPI3_SDI", "SAI1_TX_DATA00", "CSI_DATA04", "GPIO1_IO29", "USDHC2_DATA5", "KPP_COL01"]
+        },
+        "GPIO_AD_B1_14": {
+            "mux": "0x0134", "pad": "0x0324", "gpio_port": 1, "gpio_pin": 30,
+            "alt": ["FLEXSPIA_SCLK", "ACMP_OUT02", "LPSPI3_SDO", "SAI1_TX_BCLK", "CSI_DATA03", "GPIO1_IO30", "USDHC2_DATA6", "KPP_ROW00"]
+        },
+        "GPIO_AD_B1_15": {
+            "mux": "0x0138", "pad": "0x0328", "gpio_port": 1, "gpio_pin": 31,
+            "alt": ["FLEXSPIA_SS0_B", "ACMP_OUT03", "LPSPI3_SCK", "SAI1_TX_SYNC", "CSI_DATA02", "GPIO1_IO31", "USDHC2_DATA7", "KPP_COL00"]
+        },
+        "GPIO_B0_00": {
+            "mux": "0x013C", "pad": "0x032C", "gpio_port": 2, "gpio_pin": 0,
+            "alt": ["LCD_CLK", "TMR1_TIMER0", "MQS_RIGHT", "LPSPI4_PCS0", "FLEXIO2_D00", "GPIO2_IO00", "SEMC_CSX01", "-"]
+        },
+        "GPIO_B0_01": {
+            "mux": "0x0140", "pad": "0x0330", "gpio_port": 2, "gpio_pin": 1,
+            "alt": ["LCD_ENABLE", "TMR1_TIMER1", "MQS_LEFT", "LPSPI4_SDI", "FLEXIO2_D01", "GPIO2_IO01", "SEMC_CSX02", "-"]
+        },
+        "GPIO_B0_02": {
+            "mux": "0x0144", "pad": "0x0334", "gpio_port": 2, "gpio_pin": 2,
+            "alt": ["LCD_HSYNC", "TMR1_TIMER2", "FLEXCAN1_TX", "LPSPI4_SDO", "FLEXIO2_D02", "GPIO2_IO02", "SEMC_CSX03", "-"]
+        },
+        "GPIO_B0_03": {
+            "mux": "0x0148", "pad": "0x0338", "gpio_port": 2, "gpio_pin": 3,
+            "alt": ["LCD_VSYNC", "TMR2_TIMER0", "FLEXCAN1_RX", "LPSPI4_SCK", "FLEXIO2_D03", "GPIO2_IO03", "WDOG2_RESET_B_DEB", "-"]
+        },
+        "GPIO_B0_04": {
+            "mux": "0x014C", "pad": "0x033C", "gpio_port": 2, "gpio_pin": 4,
+            "alt": ["LCD_DATA00", "TMR2_TIMER1", "LPI2C2_SCL", "ARM_TRACE0", "FLEXIO2_D04", "GPIO2_IO04", "SRC_BOOT_CFG00", "-"]
+        },
+        "GPIO_B0_05": {
+            "mux": "0x0150", "pad": "0x0340", "gpio_port": 2, "gpio_pin": 5,
+            "alt": ["LCD_DATA01", "TMR2_TIMER2", "LPI2C2_SDA", "ARM_TRACE1", "FLEXIO2_D05", "GPIO2_IO05", "SRC_BOOT_CFG01", "-"]
+        },
+        "GPIO_B0_06": {
+            "mux": "0x0154", "pad": "0x0344", "gpio_port": 2, "gpio_pin": 6,
+            "alt": ["LCD_DATA02", "TMR3_TIMER0", "FLEXPWM2_PWMA00", "ARM_TRACE2", "FLEXIO2_D06", "GPIO2_IO06", "SRC_BOOT_CFG02", "-"]
+        },
+        "GPIO_B0_07": {
+            "mux": "0x0158", "pad": "0x0348", "gpio_port": 2, "gpio_pin": 7,
+            "alt": ["LCD_DATA03", "TMR3_TIMER1", "FLEXPWM2_PWMB00", "ARM_TRACE3", "FLEXIO2_D07", "GPIO2_IO07", "SRC_BOOT_CFG03", "-"]
+        },
+        "GPIO_B0_08": {
+            "mux": "0x015C", "pad": "0x034C", "gpio_port": 2, "gpio_pin": 8,
+            "alt": ["LCD_DATA04", "TMR3_TIMER2", "FLEXPWM2_PWMA01", "LPUART3_TX", "FLEXIO2_D08", "GPIO2_IO08", "SRC_BOOT_CFG04", "-"]
+        },
+        "GPIO_B0_09": {
+            "mux": "0x0160", "pad": "0x0350", "gpio_port": 2, "gpio_pin": 9,
+            "alt": ["LCD_DATA05", "TMR4_TIMER0", "FLEXPWM2_PWMB01", "LPUART3_RX", "FLEXIO2_D09", "GPIO2_IO09", "SRC_BOOT_CFG05", "-"]
+        },
+        "GPIO_B0_10": {
+            "mux": "0x0164", "pad": "0x0354", "gpio_port": 2, "gpio_pin": 10,
+            "alt": ["LCD_DATA06", "TMR4_TIMER1", "FLEXPWM2_PWMA02", "SAI1_TX_DATA03", "FLEXIO2_D10", "GPIO2_IO10", "SRC_BOOT_CFG06", "-"]
+        },
+        "GPIO_B0_11": {
+            "mux": "0x0168", "pad": "0x0358", "gpio_port": 2, "gpio_pin": 11,
+            "alt": ["LCD_DATA07", "TMR4_TIMER2", "FLEXPWM2_PWMB02", "SAI1_TX_DATA02", "FLEXIO2_D11", "GPIO2_IO11", "SRC_BOOT_CFG07", "-"]
+        },
+        "GPIO_B0_12": {
+            "mux": "0x016C", "pad": "0x035C", "gpio_port": 2, "gpio_pin": 12,
+            "alt": ["LCD_DATA08", "XBAR1_INOUT10", "ARM_TRACE_CLK", "SAI1_TX_DATA01", "FLEXIO2_D12", "GPIO2_IO12", "SRC_BOOT_CFG08", "-"]
+        },
+        "GPIO_B0_13": {
+            "mux": "0x0170", "pad": "0x0360", "gpio_port": 2, "gpio_pin": 13,
+            "alt": ["LCD_DATA09", "XBAR1_INOUT11", "ARM_TRACE_SWO", "SAI1_MCLK", "FLEXIO2_D13", "GPIO2_IO13", "SRC_BOOT_CFG09", "-"]
+        },
+        "GPIO_B0_14": {
+            "mux": "0x0174", "pad": "0x0364", "gpio_port": 2, "gpio_pin": 14,
+            "alt": ["LCD_DATA10", "XBAR1_INOUT12", "ARM_TXEV", "SAI1_RX_SYNC", "FLEXIO2_D14", "GPIO2_IO14", "SRC_BOOT_CFG10", "-"]
+        },
+        "GPIO_B0_15": {
+            "mux": "0x0178", "pad": "0x0368", "gpio_port": 2, "gpio_pin": 15,
+            "alt": ["LCD_DATA11", "XBAR1_INOUT13", "ARM_RXEV", "SAI1_RX_BCLK", "FLEXIO2_D15", "GPIO2_IO15", "SRC_BOOT_CFG11", "-"]
+        },
+        "GPIO_B1_00": {
+            "mux": "0x017C", "pad": "0x036C", "gpio_port": 2, "gpio_pin": 16,
+            "alt": ["LCD_DATA12", "XBAR1_INOUT14", "LPUART4_TX", "SAI1_RX_DATA00", "FLEXIO2_D16", "GPIO2_IO16", "FLEXPWM1_PWMA03", "-"]
+        },
+        "GPIO_B1_01": {
+            "mux": "0x0180", "pad": "0x0370", "gpio_port": 2, "gpio_pin": 17,
+            "alt": ["LCD_DATA13", "XBAR1_INOUT15", "LPUART4_RX", "SAI1_TX_DATA00", "FLEXIO2_D17", "GPIO2_IO17", "FLEXPWM1_PWMB03", "-"]
+        },
+        "GPIO_B1_02": {
+            "mux": "0x0184", "pad": "0x0374", "gpio_port": 2, "gpio_pin": 18,
+            "alt": ["LCD_DATA14", "XBAR1_INOUT16", "LPSPI4_PCS2", "SAI1_TX_BCLK", "FLEXIO2_D18", "GPIO2_IO18", "FLEXPWM2_PWMA03", "-"]
+        },
+        "GPIO_B1_03": {
+            "mux": "0x0188", "pad": "0x0378", "gpio_port": 2, "gpio_pin": 19,
+            "alt": ["LCD_DATA15", "XBAR1_INOUT17", "LPSPI4_PCS1", "SAI1_TX_SYNC", "FLEXIO2_D19", "GPIO2_IO19", "FLEXPWM2_PWMB03", "-"]
+        },
+        "GPIO_B1_04": {
+            "mux": "0x018C", "pad": "0x037C", "gpio_port": 2, "gpio_pin": 20,
+            "alt": ["LCD_DATA16", "LPSPI4_PCS0", "CSI_DATA15", "ENET_RX_DATA00", "FLEXIO2_D20", "GPIO2_IO20", "GPT1_CLK", "-"]
+        },
+        "GPIO_B1_05": {
+            "mux": "0x0190", "pad": "0x0380", "gpio_port": 2, "gpio_pin": 21,
+            "alt": ["LCD_DATA17", "LPSPI4_SDI", "CSI_DATA14", "ENET_RX_DATA01", "FLEXIO2_D21", "GPIO2_IO21", "GPT1_CAPTURE1", "-"]
+        },
+        "GPIO_B1_06": {
+            "mux": "0x0194", "pad": "0x0384", "gpio_port": 2, "gpio_pin": 22,
+            "alt": ["LCD_DATA18", "LPSPI4_SDO", "CSI_DATA13", "ENET_RX_EN", "FLEXIO2_D22", "GPIO2_IO22", "GPT1_CAPTURE2", "-"]
+        },
+        "GPIO_B1_07": {
+            "mux": "0x0198", "pad": "0x0388", "gpio_port": 2, "gpio_pin": 23,
+            "alt": ["LCD_DATA19", "LPSPI4_SCK", "CSI_DATA12", "ENET_TX_DATA00", "FLEXIO2_D23", "GPIO2_IO23", "GPT1_COMPARE1", "-"]
+        },
+        "GPIO_B1_08": {
+            "mux": "0x019C", "pad": "0x038C", "gpio_port": 2, "gpio_pin": 24,
+            "alt": ["LCD_DATA20", "TMR1_TIMER3", "CSI_DATA11", "ENET_TX_DATA01", "FLEXIO2_D24", "GPIO2_IO24", "FLEXCAN2_TX", "-"]
+        },
+        "GPIO_B1_09": {
+            "mux": "0x01A0", "pad": "0x0390", "gpio_port": 2, "gpio_pin": 25,
+            "alt": ["LCD_DATA21", "TMR2_TIMER3", "CSI_DATA10", "ENET_TX_EN", "FLEXIO2_D25", "GPIO2_IO25", "FLEXCAN2_RX", "-"]
+        },
+        "GPIO_B1_10": {
+            "mux": "0x01A4", "pad": "0x0394", "gpio_port": 2, "gpio_pin": 26,
+            "alt": ["LCD_DATA22", "TMR3_TIMER3", "CSI_DATA00", "ENET_TX_CLK", "FLEXIO2_D26", "GPIO2_IO26", "ENET_REF_CLK", "-"]
+        },
+        "GPIO_B1_11": {
+            "mux": "0x01A8", "pad": "0x0398", "gpio_port": 2, "gpio_pin": 27,
+            "alt": ["LCD_DATA23", "TMR4_TIMER3", "CSI_DATA01", "ENET_RX_ER", "FLEXIO2_D27", "GPIO2_IO27", "LPSPI4_PCS3", "-"]
+        },
+        "GPIO_B1_12": {
+            "mux": "0x01AC", "pad": "0x039C", "gpio_port": 2, "gpio_pin": 28,
+            "alt": ["-", "LPUART5_TX", "CSI_PIXCLK", "ENET_1588_EVENT0_IN", "FLEXIO2_D28", "GPIO2_IO28", "USDHC1_CD_B", "-"]
+        },
+        "GPIO_B1_13": {
+            "mux": "0x01B0", "pad": "0x03A0", "gpio_port": 2, "gpio_pin": 29,
+            "alt": ["WDOG1_B", "LPUART5_RX", "CSI_VSYNC", "ENET_1588_EVENT0_OUT", "FLEXIO2_D29", "GPIO2_IO29", "USDHC1_WP", "-"]
+        },
+        "GPIO_B1_14": {
+            "mux": "0x01B4", "pad": "0x03A4", "gpio_port": 2, "gpio_pin": 30,
+            "alt": ["ENET_MDC", "FLEXPWM4_PWMA02", "CSI_HSYNC", "XBAR1_IN02", "FLEXIO2_D30", "GPIO2_IO30", "USDHC1_VSELECT", "-"]
+        },
+        "GPIO_B1_15": {
+            "mux": "0x01B8", "pad": "0x03A8", "gpio_port": 2, "gpio_pin": 31,
+            "alt": ["ENET_MDIO", "FLEXPWM4_PWMA03", "CSI_MCLK", "XBAR1_IN03", "FLEXIO2_D31", "GPIO2_IO31", "USDHC1_RESET_B", "-"]
+        },
+        "GPIO_SD_B0_00": {
+            "mux": "0x01BC", "pad": "0x03AC", "gpio_port": 3, "gpio_pin": 12,
+            "alt": ["USDHC1_CMD", "FLEXPWM1_PWMA00", "LPI2C3_SCL", "XBAR1_INOUT04", "LPSPI1_SCK", "GPIO3_IO12", "FLEXSPIA_SS1_B", "ENET2_TX_EN"]
+        },
+        "GPIO_SD_B0_01": {
+            "mux": "0x01C0", "pad": "0x03B0", "gpio_port": 3, "gpio_pin": 13,
+            "alt": ["USDHC1_CLK", "FLEXPWM1_PWMB00", "LPI2C3_SDA", "XBAR1_INOUT05", "LPSPI1_PCS0", "GPIO3_IO13", "FLEXSPIB_SS1_B", "ENET2_TX_CLK"]
+        },
+        "GPIO_SD_B0_02": {
+            "mux": "0x01C4", "pad": "0x03B4", "gpio_port": 3, "gpio_pin": 14,
+            "alt": ["USDHC1_DATA0", "FLEXPWM1_PWMA01", "LPUART8_CTS_B", "XBAR1_INOUT06", "LPSPI1_SDO", "GPIO3_IO14", "ENET2_RX_ER", "SEMC_CLK5"]
+        },
+        "GPIO_SD_B0_03": {
+            "mux": "0x01C8", "pad": "0x03B8", "gpio_port": 3, "gpio_pin": 15,
+            "alt": ["USDHC1_DATA1", "FLEXPWM1_PWMB01", "LPUART8_RTS_B", "XBAR1_INOUT07", "LPSPI1_SDI", "GPIO3_IO15", "ENET2_RDATA00", "SEMC_CLK6"]
+        },
+        "GPIO_SD_B0_04": {
+            "mux": "0x01CC", "pad": "0x03BC", "gpio_port": 3, "gpio_pin": 16,
+            "alt": ["USDHC1_DATA2", "FLEXPWM1_PWMA02", "LPUART8_TX", "XBAR1_INOUT08", "FLEXSPIB_SS0_B", "GPIO3_IO16", "CCM_CLKO1", "ENET2_RDATA01"]
+        },
+        "GPIO_SD_B0_05": {
+            "mux": "0x01D0", "pad": "0x03C0", "gpio_port": 3, "gpio_pin": 17,
+            "alt": ["USDHC1_DATA3", "FLEXPWM1_PWMB02", "LPUART8_RX", "XBAR1_INOUT09", "FLEXSPIB_DQS", "GPIO3_IO17", "CCM_CLKO2", "ENET2_RX_EN"]
+        },
+        "GPIO_SD_B1_00": {
+            "mux": "0x01D4", "pad": "0x03C4", "gpio_port": 3, "gpio_pin": 0,
+            "alt": ["USDHC2_DATA3", "FLEXSPIB_DATA03", "FLEXPWM1_PWMA03", "SAI1_TX_DATA03", "LPUART4_TX", "GPIO3_IO00", "SAI3_RX_DATA", "-"]
+        },
+        "GPIO_SD_B1_01": {
+            "mux": "0x01D8", "pad": "0x03C8", "gpio_port": 3, "gpio_pin": 1,
+            "alt": ["USDHC2_DATA2", "FLEXSPIB_DATA02", "FLEXPWM1_PWMB03", "SAI1_TX_DATA02", "LPUART4_RX", "GPIO3_IO01", "SAI3_TX_DATA", "-"]
+        },
+        "GPIO_SD_B1_02": {
+            "mux": "0x01DC", "pad": "0x03CC", "gpio_port": 3, "gpio_pin": 2,
+            "alt": ["USDHC2_DATA1", "FLEXSPIB_DATA01", "FLEXPWM2_PWMA03", "SAI1_TX_DATA01", "FLEXCAN1_TX", "GPIO3_IO02", "CCM_WAIT", "SAI3_TX_SYNC"]
+        },
+        "GPIO_SD_B1_03": {
+            "mux": "0x01E0", "pad": "0x03D0", "gpio_port": 3, "gpio_pin": 3,
+            "alt": ["USDHC2_DATA0", "FLEXSPIB_DATA00", "FLEXPWM2_PWMB03", "SAI1_MCLK", "FLEXCAN1_RX", "GPIO3_IO03", "CCM_PMIC_READY", "SAI3_TX_BCLK"]
+        },
+        "GPIO_SD_B1_04": {
+            "mux": "0x01E4", "pad": "0x03D4", "gpio_port": 3, "gpio_pin": 4,
+            "alt": ["USDHC2_CLK", "FLEXSPIB_SCLK", "LPI2C1_SCL", "SAI1_RX_SYNC", "FLEXSPIA_SS1_B", "GPIO3_IO04", "CCM_STOP", "SAI3_MCLK"]
+        },
+        "GPIO_SD_B1_05": {
+            "mux": "0x01E8", "pad": "0x03D8", "gpio_port": 3, "gpio_pin": 5,
+            "alt": ["USDHC2_CMD", "FLEXSPIA_DQS", "LPI2C1_SDA", "SAI1_RX_BCLK", "FLEXSPIB_SS0_B", "GPIO3_IO05", "SAI3_RX_SYNC", "-"]
+        },
+        "GPIO_SD_B1_06": {
+            "mux": "0x01EC", "pad": "0x03DC", "gpio_port": 3, "gpio_pin": 6,
+            "alt": ["USDHC2_RESET_B", "FLEXSPIA_SS0_B", "LPUART7_CTS_B", "SAI1_RX_DATA00", "LPSPI2_PCS0", "GPIO3_IO06", "SAI3_RX_BCLK", "-"]
+        },
+        "GPIO_SD_B1_07": {
+            "mux": "0x01F0", "pad": "0x03E0", "gpio_port": 3, "gpio_pin": 7,
+            "alt": ["SEMC_CSX01", "FLEXSPIA_SCLK", "LPUART7_RTS_B", "SAI1_TX_DATA00", "LPSPI2_SCK", "GPIO3_IO07", "-", "-"]
+        },
+        "GPIO_SD_B1_08": {
+            "mux": "0x01F4", "pad": "0x03E4", "gpio_port": 3, "gpio_pin": 8,
+            "alt": ["USDHC2_DATA4", "FLEXSPIA_DATA00", "LPUART7_TX", "SAI1_TX_BCLK", "LPSPI2_SD0", "GPIO3_IO08", "SEMC_CSX02", "-"]
+        },
+        "GPIO_SD_B1_09": {
+            "mux": "0x01F8", "pad": "0x03E8", "gpio_port": 3, "gpio_pin": 9,
+            "alt": ["USDHC2_DATA5", "FLEXSPIA_DATA01", "LPUART7_RX", "SAI1_TX_SYNC", "LPSPI2_SDI", "GPIO3_IO09", "-", "-"]
+        },
+        "GPIO_SD_B1_10": {
+            "mux": "0x01FC", "pad": "0x03EC", "gpio_port": 3, "gpio_pin": 10,
+            "alt": ["USDHC2_DATA6", "FLEXSPIA_DATA02", "LPUART2_RX", "LPI2C2_SDA", "LPSPI2_PCS2", "GPIO3_IO10", "-", "-"]
+        },
+        "GPIO_SD_B1_11": {
+            "mux": "0x0200", "pad": "0x03F0", "gpio_port": 3, "gpio_pin": 11,
+            "alt": ["USDHC2_DATA7", "FLEXSPIA_DATA03", "LPUART2_TX", "LPI2C2_SCL", "LPSPI2_PCS3", "GPIO3_IO11", "-", "-"]
+        },
+        "GPIO_EMC_00": {
+            "mux": "0x0014", "pad": "0x0204", "gpio_port": 4, "gpio_pin": 0,
+            "alt": ["SEMC_DATA00", "FLEXPWM4_PWMA00", "LPSPI2_SCK", "XBAR1_XBAR_IN02", "FLEXIO1_D00", "GPIO4_IO00", "-", "-"]
+        },
+        "GPIO_EMC_01": {
+            "mux": "0x0018", "pad": "0x0208", "gpio_port": 4, "gpio_pin": 1,
+            "alt": ["SEMC_DATA01", "FLEXPWM4_PWMB00", "LPSPI2_PCS0", "XBAR1_IN03", "FLEXIO1_D01", "GPIO4_IO01", "-", "-"]
+        },
+        "GPIO_EMC_02": {
+            "mux": "0x001C", "pad": "0x020C", "gpio_port": 4, "gpio_pin": 2,
+            "alt": ["SEMC_DATA02", "FLEXPWM4_PWMA01", "LPSPI2_SDO", "XBAR1_INOUT04", "FLEXIO1_D02", "GPIO4_IO02", "-", "-"]
+        },
+        "GPIO_EMC_03": {
+            "mux": "0x0020", "pad": "0x0210", "gpio_port": 4, "gpio_pin": 3,
+            "alt": ["SEMC_DATA03", "FLEXPWM4_PWMB01", "LPSPI2_SDI", "XBAR1_INOUT05", "FLEXIO1_D03", "GPIO4_IO03", "-", "-"]
+        },
+        "GPIO_EMC_04": {
+            "mux": "0x0024", "pad": "0x0214", "gpio_port": 4, "gpio_pin": 4,
+            "alt": ["SEMC_DATA04", "FLEXPWM4_PWMA02", "SAI2_TX_DATA", "XBAR1_INOUT06", "FLEXIO1_D04", "GPIO4_IO04", "-", "-"]
+        },
+        "GPIO_EMC_05": {
+            "mux": "0x0028", "pad": "0x0218", "gpio_port": 4, "gpio_pin": 5,
+            "alt": ["SEMC_DATA05", "FLEXPWM4_PWMB02", "SAI2_TX_SYNC", "XBAR1_INOUT07", "FLEXIO1_D05", "GPIO4_IO05", "-", "-"]
+        },
+        "GPIO_EMC_06": {
+            "mux": "0x002C", "pad": "0x021C", "gpio_port": 4, "gpio_pin": 6,
+            "alt": ["SEMC_DATA06", "FLEXPWM2_PWMA00", "SAI2_TX_BCLK", "XBAR1_INOUT08", "FLEXIO1_D06", "GPIO4_IO06", "-", "-"]
+        },
+        "GPIO_EMC_07": {
+            "mux": "0x0030", "pad": "0x0220", "gpio_port": 4, "gpio_pin": 7,
+            "alt": ["SEMC_DATA07", "FLEXPWM2_PWMB00", "SAI2_MCLK", "XBAR1_INOUT09", "FLEXIO1_D07", "GPIO4_IO07", "-", "-"]
+        },
+        "GPIO_EMC_08": {
+            "mux": "0x0034", "pad": "0x0224", "gpio_port": 4, "gpio_pin": 8,
+            "alt": ["SEMC_DM00", "FLEXPWM2_PWMA01", "SAI2_RX_DATA", "XBAR1_INOUT17", "FLEXIO1_D08", "GPIO4_IO08", "-", "-"]
+        },
+        "GPIO_EMC_09": {
+            "mux": "0x0038", "pad": "0x0228", "gpio_port": 4, "gpio_pin": 9,
+            "alt": ["SEMC_ADDR00", "FLEXPWM2_PWMB01", "SAI2_RX_SYNC", "FLEXCAN2_TX", "FLEXIO1_D09", "GPIO4_IO09", "-", "-"]
+        },
+        "GPIO_EMC_10": {
+            "mux": "0x003C", "pad": "0x022C", "gpio_port": 4, "gpio_pin": 10,
+            "alt": ["SEMC_ADDR01", "FLEXPWM2_PWMA02", "SAI2_RX_BCLK", "FLEXCAN2_RX", "FLEXIO1_D10", "GPIO4_IO10", "-", "-"]
+        },
+        "GPIO_EMC_11": {
+            "mux": "0x0040", "pad": "0x0230", "gpio_port": 4, "gpio_pin": 11,
+            "alt": ["SEMC_ADDR02", "FLEXPWM2_PWMB02", "LPI2C4_SDA", "USDHC2_RESET_B", "FLEXIO1_D11", "GPIO4_IO11", "-", "-"]
+        },
+        "GPIO_EMC_12": {
+            "mux": "0x0044", "pad": "0x0234", "gpio_port": 4, "gpio_pin": 12,
+            "alt": ["SEMC_ADDR03", "XBAR1_IN24", "LPI2C4_SCL", "USDHC1_WP", "FLEXPWM1_PWMA03", "GPIO4_IO12", "-", "-"]
+        },
+        "GPIO_EMC_13": {
+            "mux": "0x0048", "pad": "0x0238", "gpio_port": 4, "gpio_pin": 13,
+            "alt": ["SEMC_ADDR04", "XBAR1_IN25", "LPUART3_TX", "MQS_RIGHT", "FLEXPWM1_PWMB03", "GPIO4_IO13", "-", "-"]
+        },
+        "GPIO_EMC_14": {
+            "mux": "0x004C", "pad": "0x023C", "gpio_port": 4, "gpio_pin": 14,
+            "alt": ["SEMC_ADDR05", "XBAR1_INOUT19", "LPUART3_RX", "MQS_LEFT", "LPSPI2_PCS1", "GPIO4_IO14", "-", "-"]
+        },
+        "GPIO_EMC_15": {
+            "mux": "0x0050", "pad": "0x0240", "gpio_port": 4, "gpio_pin": 15,
+            "alt": ["SEMC_ADDR06", "XBAR1_IN20", "LPUART3_CTS_B", "SPDIF_OUT", "TMR3_TIMER0", "GPIO4_IO15", "-", "-"]
+        },
+        "GPIO_EMC_16": {
+            "mux": "0x0054", "pad": "0x0244", "gpio_port": 4, "gpio_pin": 16,
+            "alt": ["SEMC_ADDR07", "XBAR1_IN21", "LPUART3_RTS_B", "SPDIF_IN", "TMR3_TIMER1", "GPIO4_IO16", "-", "-"]
+        },
+        "GPIO_EMC_17": {
+            "mux": "0x0058", "pad": "0x0248", "gpio_port": 4, "gpio_pin": 17,
+            "alt": ["SEMC_ADDR08", "FLEXPWM4_PWMA03", "LPUART4_CTS_B", "FLEXCAN1_TX", "TMR3_TIMER2", "GPIO4_IO17", "-", "-"]
+        },
+        "GPIO_EMC_18": {
+            "mux": "0x005C", "pad": "0x024C", "gpio_port": 4, "gpio_pin": 18,
+            "alt": ["SEMC_ADDR09", "FLEXPWM4_PWMB03", "LPUART4_RTS_B", "FLEXCAN1_RX", "TMR3_TIMER3", "GPIO4_IO18", "-", "-"]
+        },
+        "GPIO_EMC_19": {
+            "mux": "0x0060", "pad": "0x0250", "gpio_port": 4, "gpio_pin": 19,
+            "alt": ["SEMC_ADDR11", "FLEXPWM2_PWMA03", "LPUART4_TX", "ENET_RDATA01", "TMR2_TIMER0", "GPIO4_IO19", "-", "-"]
+        },
+        "GPIO_EMC_20": {
+            "mux": "0x0064", "pad": "0x0254", "gpio_port": 4, "gpio_pin": 20,
+            "alt": ["SEMC_ADDR12", "FLEXPWM2_PWMB03", "LPUART4_RX", "ENET_RDATA00", "TMR2_TIMER1", "GPIO4_IO20", "-", "-"]
+        },
+        "GPIO_EMC_21": {
+            "mux": "0x0068", "pad": "0x0258", "gpio_port": 4, "gpio_pin": 21,
+            "alt": ["SEMC_BA0", "FLEXPWM3_PWMA03", "LPI2C3_SDA", "ENET_TDATA01", "TMR2_TIMER2", "GPIO4_IO21", "-", "-"]
+        },
+        "GPIO_EMC_22": {
+            "mux": "0x006C", "pad": "0x025C", "gpio_port": 4, "gpio_pin": 22,
+            "alt": ["SEMC_BA1", "FLEXPWM3_PWMB03", "LPI2C3_SCL", "ENET_TDATA00", "TMR2_TIMER3", "GPIO4_IO22", "-", "-"]
+        },
+        "GPIO_EMC_23": {
+            "mux": "0x0070", "pad": "0x0260", "gpio_port": 4, "gpio_pin": 23,
+            "alt": ["SEMC_ADDR10", "FLEXPWM1_PWMA00", "LPUART5_TX", "ENET_RX_EN", "GPT1_CAPTURE2", "GPIO4_IO23", "-", "-"]
+        },
+        "GPIO_EMC_24": {
+            "mux": "0x0074", "pad": "0x0264", "gpio_port": 4, "gpio_pin": 24,
+            "alt": ["SEMC_CAS", "FLEXPWM1_PWMB00", "LPUART5_RX", "ENET_TX_EN", "GPT1_CAPTURE1", "GPIO4_IO24", "-", "-"]
+        },
+        "GPIO_EMC_25": {
+            "mux": "0x0078", "pad": "0x0268", "gpio_port": 4, "gpio_pin": 25,
+            "alt": ["SEMC_RAS", "FLEXPWM1_PWMA01", "LPUART6_TX", "ENET_TX_CLK", "ENET_REF_CLK", "GPIO4_IO25", "-", "-"]
+        },
+        "GPIO_EMC_26": {
+            "mux": "0x007C", "pad": "0x026C", "gpio_port": 4, "gpio_pin": 26,
+            "alt": ["SEMC_CLK", "FLEXPWM1_PWMB01", "LPUART6_RX", "ENET_RX_ER", "FLEXIO1_D12", "GPIO4_IO26", "-", "-"]
+        },
+        "GPIO_EMC_27": {
+            "mux": "0x0080", "pad": "0x0270", "gpio_port": 4, "gpio_pin": 27,
+            "alt": ["SEMC_CKE", "FLEXPWM1_PWMA02", "LPUART5_RTS_B", "LPSPI1_SCK", "FLEXIO1_D13", "GPIO4_IO27", "-", "-"]
+        },
+        "GPIO_EMC_28": {
+            "mux": "0x0084", "pad": "0x0274", "gpio_port": 4, "gpio_pin": 28,
+            "alt": ["SEMC_WE", "FLEXPWM1_PWMB02", "LPUART5_CTS_B", "LPSPI1_SDO", "FLEXIO1_D14", "GPIO4_IO28", "-", "-"]
+        },
+        "GPIO_EMC_29": {
+            "mux": "0x0088", "pad": "0x0278", "gpio_port": 4, "gpio_pin": 29,
+            "alt": ["SEMC_CS0", "FLEXPWM3_PWMA00", "LPUART6_RTS_B", "LPSPI1_SDI", "FLEXIO1_D15", "GPIO4_IO29", "-", "-"]
+        },
+        "GPIO_EMC_30": {
+            "mux": "0x008C", "pad": "0x027C", "gpio_port": 4, "gpio_pin": 30,
+            "alt": ["SEMC_DATA08", "FLEXPWM3_PWMB00", "LPUART6_CTS_B", "LPSPI1_PCS0", "CSI_DATA23", "GPIO4_IO30", "-", "-"]
+        },
+        "GPIO_EMC_31": {
+            "mux": "0x0090", "pad": "0x0280", "gpio_port": 4, "gpio_pin": 31,
+            "alt": ["SEMC_DATA09", "FLEXPWM3_PWMA01", "LPUART7_TX", "LPSPI1_PCS1", "CSI_DATA22", "GPIO4_IO31", "-", "-"]
+        },
+        "GPIO_EMC_32": {
+            "mux": "0x0094", "pad": "0x0284", "gpio_port": 3, "gpio_pin": 18,
+            "alt": ["SEMC_DATA10", "FLEXPWM3_PWMB01", "LPUART7_RX", "CCM_PMIC_RDY", "CSI_DATA21", "GPIO3_IO18", "-", "-"]
+        },
+        "GPIO_EMC_33": {
+            "mux": "0x0098", "pad": "0x0288", "gpio_port": 3, "gpio_pin": 19,
+            "alt": ["SEMC_DATA11", "FLEXPWM3_PWMA02", "USDHC1_RESET_B", "SAI3_RX_DATA", "CSI_DATA20", "GPIO3_IO19", "-", "-"]
+        },
+        "GPIO_EMC_34": {
+            "mux": "0x009C", "pad": "0x028C", "gpio_port": 3, "gpio_pin": 20,
+            "alt": ["SEMC_DATA12", "FLEXPWM3_PWMB02", "USDHC1_VSELECT", "SAI3_RX_SYNC", "CSI_DATA19", "GPIO3_IO20", "-", "-"]
+        },
+        "GPIO_EMC_35": {
+            "mux": "0x00A0", "pad": "0x0290", "gpio_port": 3, "gpio_pin": 21,
+            "alt": ["SEMC_DATA13", "XBAR1_INOUT18", "GPT1_COMPARE1", "SAI3_RX_BCLK", "CSI_DATA18", "GPIO3_IO21", "USDHC1_CD_B", "-"]
+        },
+        "GPIO_EMC_36": {
+            "mux": "0x00A4", "pad": "0x0294", "gpio_port": 3, "gpio_pin": 22,
+            "alt": ["SEMC_DATA14", "XBAR1_IN22", "GPT1_COMPARE2", "SAI3_TX_DATA", "CSI_DATA17", "GPIO3_IO22", "USDHC1_WP", "-"]
+        },
+        "GPIO_EMC_37": {
+            "mux": "0x00A8", "pad": "0x0298", "gpio_port": 3, "gpio_pin": 23,
+            "alt": ["SEMC_DATA15", "XBAR1_IN23", "GPT1_COMPARE3", "SAI3_MCLK", "CSI_DATA16", "GPIO3_IO23", "USDHC2_WP", "-"]
+        },
+        "GPIO_EMC_38": {
+            "mux": "0x00AC", "pad": "0x029C", "gpio_port": 3, "gpio_pin": 24,
+            "alt": ["SEMC_DM01", "FLEXPWM1_PWMA03", "LPUART8_TX", "SAI3_TX_BCLK", "CSI_FIELD", "GPIO3_IO24", "USDHC2_VSELECT", "-"]
+        },
+        "GPIO_EMC_39": {
+            "mux": "0x00B0", "pad": "0x02A0", "gpio_port": 3, "gpio_pin": 25,
+            "alt": ["SEMC_DQS", "FLEXPWM1_PWMB03", "LPUART8_RX", "SAI3_TX_SYNC", "WDOG1_WDOG_B", "GPIO3_IO25", "USDHC2_CD_B", "-"]
+        },
+        "GPIO_EMC_40": {
+            "mux": "0x00B4", "pad": "0x02A4", "gpio_port": 3, "gpio_pin": 26,
+            "alt": ["SEMC_RDY", "GPT2_CAPTURE2", "LPSPI1_PCS2", "USB_OTG2_OC", "ENET_MDC", "GPIO3_IO26", "USDHC2_RESET_B", "-"]
+        },
+        "GPIO_EMC_41": {
+            "mux": "0x00B8", "pad": "0x02A8", "gpio_port": 3, "gpio_pin": 27,
+            "alt": ["SEMC_CSX00", "GPT2_CAPTURE1", "LPSPI1_PCS3", "USB_OTG2_PWR", "ENET_MDIO", "GPIO3_IO27", "USDHC1_VSELECT", "-"]
+        }
+    }
+}
