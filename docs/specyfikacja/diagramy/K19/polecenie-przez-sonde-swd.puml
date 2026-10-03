@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "crtos kmon ps\n(tools/swdcon.py)" as H
+participant "sonda DAPLink\n(SWD, rdzeń działa)" as P
+participant "g_swd_chan\n(DTCM)" as C
+participant "wątek kmon-swd\n(prio 21)" as K
+H -> P : odczyt DTCM: szukanie magii 0x57535243
+H -> C : zapis "ps\\n" do down[], potem down_head
+K -> C : swd_getc(): down_head != down_tail (co 10 ms)
+K -> K : readline, split_args, find_cmd("ps"), cmd_ps
+K -> C : swd_write(): dane do up[], dmb, up_head
+H -> C : odczyt up[] od up_tail do up_head, zapis up_tail
+H -> H : wypis do "kmon> "
+@enduml

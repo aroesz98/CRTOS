@@ -1,0 +1,125 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "tools/crtos.py" {
+  class crtos_cli <<CLI>> {
+    +main()
+    +cmd_build(targets)
+    +cmd_flash(path, net)
+    +cmd_deploy(how, full)
+    +cmd_run(name, args)
+    +cmd_kmon(cmds)
+    +cmd_shot(path)
+    +cmd_crash()
+    +cmd_bench()
+    +cmd_doctor()
+    +cmd_scp(paths, recursive)
+    +cmd_desktop(zoom, fullscreen, password, shot)
+    +cmd_wallpaper(picture, name, size, fit, set_it)
+  }
+  class BuildLock
+  class upload <<funkcja>> {
+    sieć -> sonda -> konsola
+  }
+}
+class Net <<netdeploy.py>> {
+  +resolve()
+  +upload(pairs)
+  +flash(bin) : bool
+  +session() : Session
+}
+class Session <<netdeploy.py>> {
+  +put(data, remote)
+  +get(remote) : bytes
+  +stat(remote)
+  +list(remote)
+  +mkdir(remote)
+  +crc(remote)
+}
+class Rfb <<vnc.py>> {
+  +width, height, fb
+  +request(incremental)
+  +message() : (rodzaj, dane)
+  +pointer(mask, x, y)
+  +key(down, keysym)
+  +cut(text)
+}
+class view <<vnc.py, funkcja>> {
+  {field} okno Tk: zmaksymalizowane / pełny ekran (F11)
+  mysz nad obrazem, kółko, klawisze, schowek
+}
+class "_Picture" as Picture <<vnc.py>> {
+  +fw, fh : obraz w oknie
+  +resize(szer, wys, zoom) : (fw, fh)
+  +update(x0, y0, x1, y1)
+  +board(x, y) : piksel płytki
+  --
+  Pillow: NEAREST do n-krotności, BOX do okna
+  bez Pillow: całkowite copy -zoom
+}
+class swdcon <<swdcon.py>> {
+  +find_probe()
+  +upload_files(axf, pairs)
+  +reset(probe, how)
+}
+class modcheck <<modcheck.py>>
+class dtc <<dtc.py>>
+class appsym <<appsym.py>>
+class stackcheck <<stackcheck.py>>
+class icon_py <<icon.py>> {
+  PNG -> PAM (share/icons)
+}
+class fontconv <<fontconv.py>> {
+  +convert(ttf, pixels) : glify
+  +write_fnt(path, glyphs, data, ...)
+}
+class fonts_py <<fonts.py>> {
+  TTF (SHA-256) -> share/fonts/*.fnt
+}
+class thirdparty_py <<thirdparty.py>> {
+  +run(grupy, build)
+  +sync(źródło) : bool
+  +status()
+  +save(katalogi)
+  --
+  third_party/sources.txt: repozytorium, commit
+  patches/<katalog>.patch (kopia w .git/crtos.patch)
+}
+package "CMake" {
+  class crtos_cmake <<crtos.cmake>> {
+    +crtos_module()
+    +crtos_sdk_drivers()
+    +crtos_dtb()
+    +crtos_finish()
+  }
+  class crtos_app_cmake <<crtos-app.cmake>> {
+    +crtos_app()
+    +crtos_icon()
+    +crtos_file()
+    +crtos_rootfs()
+  }
+}
+crtos_cli --> BuildLock
+crtos_cli --> upload
+upload --> Net
+Net --> Session
+crtos_cli --> Session : scp, hasło VNC
+crtos_cli --> view : desktop
+crtos_cli --> Rfb : desktop --shot
+view --> Rfb
+view --> Picture
+Picture --> Rfb : fb
+upload --> swdcon
+crtos_cli --> crtos_cmake : cmake + ninja
+crtos_cli --> appsym : crash
+crtos_cli --> Session : wallpaper (PPM)
+crtos_cli --> swdcon : wallpaper (appearance)
+fonts_py --> fontconv
+crtos_cmake --> dtc
+crtos_cmake --> modcheck
+crtos_app_cmake --> modcheck
+crtos_app_cmake --> icon_py : ICON
+crtos_cmake --> stackcheck : kernel/CMakeLists.txt
+crtos_cmake --> thirdparty_py : każda konfiguracja (--build)
+crtos_cli --> thirdparty_py : setup [--netsurf]
+@enduml

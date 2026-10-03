@@ -1,0 +1,23 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "con_irq" as U
+participant "tty.cpp" as T
+participant "kmon" as K
+participant "kworker" as W
+participant "powłoka (read /dev/console)" as S
+    U -> U : znak z FIFO odbiornika
+    alt fokus = terminal i znak = Ctrl-]
+        U -> U : fokus = kmon, porzucenie nieprzeczytanego wejścia
+        U -> K : komunikat [kmon ...], wake
+    else fokus = terminal i Ctrl-C przy fg_pid
+        U -> T : tty_rx_filter: ^C
+        T -> W : kworker_queue(kill_fg_work)
+        W -> W : proc_kill(fg_pid, -EINTR)
+    else pozostałe
+        U -> U : znak do pierścienia 4 KB, wake czytających, tty_rx_notify (poll)
+    end
+    S -> T : read(): canon_input (echo, Backspace, Ctrl-U, Ctrl-D)
+    T --> S : cała linia po Enter
+    K -> K : exit: console_set_focus(CON_TTY)
+@enduml

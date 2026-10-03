@@ -1,0 +1,80 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "program .app" {
+  class "main()" as main
+}
+package "libcrtos" {
+  class crt0 <<crt0.c>> {
+    +_start(s : crtos_startup*)
+  }
+  class syscalls <<syscalls.c>> {
+    +crtos_sys(id, a0..a3) : long
+    +_read(), _write(), _open(), _sbrk(), _exit(), ...
+  }
+  class crtos_api <<crtos.c>> {
+    +crtos_spawn(sp) : int
+    +crtos_wait(pid, status, t) : int
+    +crtos_port_*(), crtos_msg_*(), crtos_shm_*()
+    +crtos_proc_info(), crtos_sys_info()
+    +crtos_cache_sync(addr, len) : int
+  }
+  class thread <<thread.c>> {
+    +crtos_thread_start(fn, arg, stack, prio)
+    +crtos_mutex_lock/unlock()
+    +__retarget_lock_*()
+  }
+  class pthread <<pthread.c>> {
+    +pthread_create(), pthread_join()
+    +pthread_mutex_*(), pthread_cond_*()
+  }
+  class socket <<socket.c>> {
+    +socket(), connect(), send(), recv()
+    +getaddrinfo()
+  }
+  class posix <<posix.c, dirent.c>> {
+    +select(), uname(), opendir()
+  }
+  class cxxrt <<cxxrt.cpp>> {
+    +operator new/delete
+  }
+  class crtosheap <<heap.c, libcrtosheap.a>> {
+    +malloc(), free(), realloc(), calloc(), memalign()
+    +_malloc_r() ... _mallinfo_r()
+    +__crtos_heap_check() : int
+    -pools[8] : pula (sterta areny, okna)
+    -heads[20][32] : wolne bloki TLSF
+  }
+  class crtos_startup <<struct, ABI>> {
+    +int32_t argc
+    +char** argv, envp
+    +init_array, fini_array
+    +void* arena
+    +uint32_t arena_size
+    +int32_t pid
+  }
+  class crtos_mutex_t <<struct>> {
+    +volatile uint32_t state
+    +volatile int owner
+    +int count
+  }
+}
+package "newlib-nano" {
+  class "malloc, stdio, string, time" as newlib
+}
+class "__crtos_syscall()\nsvc #0" as svc <<inline, syscall.h>>
+crt0 --> main
+crt0 ..> crtos_startup
+newlib --> syscalls : _read/_write/_sbrk
+newlib --> thread : __retarget_lock_*
+pthread --> thread
+thread *-- crtos_mutex_t
+syscalls --> svc
+crtos_api --> svc
+crtosheap --> syscalls : _sbrk
+crtosheap --> crtos_api : crtos_shm_create/map
+newlib ..> crtosheap : _malloc_r (z -lcrtosheap)
+thread --> svc
+socket --> svc
+posix --> svc
+@enduml

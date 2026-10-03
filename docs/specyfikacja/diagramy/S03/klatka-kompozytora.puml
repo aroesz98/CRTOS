@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "gfxd (U03)" as G
+participant "/dev/gpu2d\n(gpu2d.cpp)" as A
+participant "pxp-imxrt (D03)" as P
+participant "/dev/fb0\n(fb.cpp)" as F
+participant "lcdif-imxrt (D03)" as L
+G -> F : FB_IOC_GET_SHM(0), (1): uchwyty buforów
+G -> A : GPU2D_IOC_HBATCH (tło, okna, dekoracje)
+loop każda operacja
+  A -> A : resolve: shm_lookup(uchwyt), powierzchnia w obiekcie?
+  A -> P : fill / blit (mutex; bez sterownika: procesor)
+  P --> A : przerwanie końca operacji
+end
+A --> G : 0
+G -> F : FB_IOC_SHOW(ukryty bufor)
+F -> L : show(ctx, bufor): rejestr następnego bufora
+L -> F : przerwanie ramki: fb_vsync(0, bufor)
+F -> G : poll: POLLIN (nowa ramka)
+G -> F : FB_IOC_GET_FRAME, FB_IOC_GET_SHOWN
+@enduml

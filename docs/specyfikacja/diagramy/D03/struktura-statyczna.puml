@@ -1,0 +1,63 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class lcdif <<struct, lcdif-imxrt>> {
+  +device* dev
+  +LCDIF_Type* base
+  +int irq
+  +int fb
+  +event vsync
+  +gpio_desc* enable
+  +gpio_desc* backlight
+  +clk* pix
+  +clk* pix_gate
+  +device_node* timings
+  +device_node* mode
+  +uint8_t* buf[2]
+  +uint32_t buf_size
+  +uint32_t frames
+  +int shown
+  +int pending
+  +fb_info info
+  -find_mode(w, h) : device_node*
+  -start_mode(t, first)
+  -soft_reset()
+  -stop()
+}
+class pxp <<struct, pxp-imxrt>> {
+  +device* dev
+  +PXP_Type* base
+  +int irq
+  +semaphore done
+  +uint32_t jobs
+}
+interface fb_ops <<S03>> {
+  +show(ctx, index) : int
+  +wait_vsync(ctx, timeout) : int
+  +blank(ctx, blank) : int
+  +set_size(ctx, w, h, info) : int
+}
+interface gpu2d_ops <<S03>> {
+  +fill(ctx, dst, r, argb) : int
+  +blit(ctx, dst, dx, dy, src, sr, flags) : int
+}
+class panel <<węzeł DT>> {
+  enable-gpios (LCD_RST: reset dotyku)
+  backlight-gpios
+}
+class display_timings <<węzeł DT>> {
+  native-mode (tryb domyślny)
+}
+class timing <<węzeł DT, jeden na panel>> {
+  clock-frequency
+  hactive, vactive
+  h/v front, back porch, sync-len
+  polaryzacje
+}
+lcdif ..|> fb_ops
+pxp ..|> gpu2d_ops
+lcdif ..> panel : phandle "display"
+panel *-- display_timings
+display_timings *-- "1..*" timing
+lcdif --> timing : mode
+@enduml

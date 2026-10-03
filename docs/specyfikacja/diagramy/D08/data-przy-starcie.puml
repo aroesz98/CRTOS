@@ -1,0 +1,16 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "rtc-snvs probe" as D
+participant "K09 rtc_register" as K
+participant "netmgr (NTP) / settings" as N
+D -> K : rtc_register(srtc_ops)
+K -> D : read(&us)
+alt licznik działa i data >= 2020
+  K -> K : przesunięcie zegara ściennego = us - time_us()
+else
+  K -> K : rtc: not set yet
+end
+N -> K : SYS_TIME_SET (CAP_SYS)
+K -> D : set(us): SRTC_ENV = 0, LPSRTCMR/LR, SRTC_ENV = 1
+@enduml

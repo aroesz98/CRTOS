@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+title Warstwy CRTOS
+
+rectangle "**L3 aplikacje** (nieuprzywilejowane, osobne areny)\nwm, term, files, sysmon, settings, paint, NetSurf, sh, ping, ..." as L3 #E8F1FB
+rectangle "porty IPC, pamięć współdzielona, pliki /dev" as IPC #F4F4F4
+rectangle "**L2 usługi** (nieuprzywilejowane, osobne areny)\ninit, devmgr, gfxd, inputd, osk, netmgr, httpd, deployd, vncd, getty" as L2 #E8F1FB
+rectangle "ABI wywołań systemowych (svc #0), uchwyty, uprawnienia" as ABI #F4F4F4
+rectangle "**L1 sterowniki .ko** (uprzywilejowane, ładowane wg drzewa urządzeń)\npinctrl, clk, gpio, lpi2c, lpspi, lpuart, lcdif, pxp, gt911, ft5406, gpio-keys,\nenet + net-lwip, usb-imxrt, flexspi-mtd, trng, rtc-snvs" as L1 #FDF1E4
+rectangle "frameworki podsystemów: clk, pinctrl, gpio, irq, i2c, spi, fb, gpu2d, input, net, tty" as FW #F4F4F4
+rectangle "**L0 jądro: część OS** (kernel/os, CONFIG_OS)\nprocesy, wywołania systemowe, IPC, pamięć współdzielona, VFS, loader ELF,\ndrzewo urządzeń, pamięć emulowana; start: karta SD, FAT, moduły, init" as L0OS #FDF1E4
+rectangle "**L0 jądro: rdzeń RTOS** (kernel/rtos, HyperFlash)\nscheduler, synchronizacja, kolejki, timery, przerwania, wyjątki, MPU, sterty,\nkonsola LPUART1, printk, kmon; profil rtos: + aplikacja (app_main)" as L0 #FDF1E4
+
+L3 -down- IPC
+IPC -down- L2
+L2 -down- ABI
+ABI -down- L1
+L1 -down- FW
+FW -down- L0OS
+L0OS -down- L0
+@enduml

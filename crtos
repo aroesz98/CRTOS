@@ -1,0 +1,9 @@
+#!/bin/sh
+# crtos: build CRTOS and work with the board ("crtos --help", README.md)
+dir=$(cd "$(dirname "$0")" && pwd)
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) py=python ;;   # python3 there may be the Microsoft Store stub
+  *) py=python3 ;;
+esac
+command -v "$py" >/dev/null 2>&1 || py=python
+exec "$py" "$dir/tools/crtos.py" "$@"

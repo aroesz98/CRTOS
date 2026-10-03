@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "/dev/event1 (GT911)" as T
+participant "/dev/event2 (mysz USB)" as M
+participant "inputd" as I
+participant "gfxd" as G
+T -> I : ABS_MT_SLOT 0, TRACKING_ID 7, POSITION_X/Y, BTN_TOUCH 1, SYN
+I -> I : slot 0: nowy palec, numer 0 (najniższy wolny), skalowanie do 480x272
+I -> G : GFX_INPUT(PTR_DOWN, palec 0, x, y)
+T -> I : ABS_MT_SLOT 1, TRACKING_ID 8, POSITION_X/Y, SYN
+I -> G : GFX_INPUT(PTR_DOWN, palec 1, x, y)
+T -> I : ABS_MT_SLOT 0, POSITION_X/Y, SYN
+I -> G : GFX_INPUT(PTR_MOVE, palec 0, x, y)
+T -> I : ABS_MT_SLOT 0, TRACKING_ID -1, SYN
+I -> G : GFX_INPUT(PTR_UP, palec 0, x, y)
+T -> I : ABS_MT_SLOT 1, TRACKING_ID -1, BTN_TOUCH 0, SYN
+I -> G : GFX_INPUT(PTR_UP, palec 1, x, y)
+M -> I : REL_X, REL_Y, SYN
+I -> I : kursor += ruch (w granicach ekranu), okno kursora przesunięte
+M -> I : BTN_LEFT 1, SYN
+I -> G : GFX_INPUT(PTR_DOWN, palec 0, pozycja kursora, value GFX_PTR_MOUSE)
+M -> I : REL_WHEEL +1, SYN
+I -> G : GFX_INPUT(GFX_WHEEL, GFX_WHEEL_VERTICAL, pozycja kursora, value +1)
+G -> G : okno pod kursorem dostaje GFX_EV_WHEEL
+@enduml

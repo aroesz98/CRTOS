@@ -1,0 +1,14 @@
+/*
+ * UART2 carries the controller state to the emulator board.
+ *
+ * The board files already give uart2 its pins (GPIO17 = TX, GPIO16 = RX on a
+ * DevKitC, both free on a WROOM-32 - unlike uart1's default GPIO9/GPIO10, which
+ * belong to the SPI flash), so only the speed and the status are set here.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&uart2 {
+	status = "okay";
+	current-speed = <460800>;
+};

@@ -1,0 +1,19 @@
+@startuml
+!include ../styl.iuml
+participant "sterownik" as D
+participant "device_get_irq (K17)" as DV
+participant "of_irq_parse (K17)" as OF
+participant "xlate kontrolera (np. gpio_xlate)" as X
+    D -> DV : device_get_irq(dev, i)
+    DV -> OF : interrupts / interrupt-parent
+    OF --> DV : kontroler + argumenty
+    alt kontroler arm,armv7m-nvic
+        DV --> D : args[0]
+    else domena zarejestrowana
+        DV -> X : xlate(ctx, args)
+        X --> DV : irq_base + pin (ustawia też zbocze)
+        DV --> D : numer wirtualny
+    else kontroler bez sterownika
+        DV --> D : -EPROBE_DEFER
+    end
+@enduml

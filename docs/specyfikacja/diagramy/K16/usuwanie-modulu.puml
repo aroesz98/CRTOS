@@ -1,0 +1,9 @@
+@startuml
+!include ../styl.iuml
+[*] --> LOADED : module_load OK
+LOADED --> LOADED : module_get_addr (plik otwarty, refs++) / module_put
+LOADED --> BUSY : rmmod przy refs > 0
+BUSY --> LOADED : -EBUSY zwrócone
+LOADED --> GOING : rmmod przy refs == 0 (going = true)
+GOING --> [*] : exit(), driver_unregister_owner, destruktory, drop_deps, kfree
+@enduml

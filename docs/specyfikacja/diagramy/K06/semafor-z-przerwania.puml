@@ -1,0 +1,14 @@
+@startuml
+!include ../styl.iuml
+participant "wątek sterownika" as T
+participant "semaphore" as S
+participant "ISR" as I
+    T -> S : sem_take(s, timeout): count == 0
+    S -> S : sched_block na s.wq
+    I -> S : sem_give(s)
+    alt są czekający
+        S -> T : sched_wake(T, 0) (jednostka przekazana)
+    else brak
+        S -> S : count++ (najwyżej max)
+    end
+@enduml

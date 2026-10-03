@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "netmgr" as M
+participant "S05 / net-lwip" as N
+participant "serwer NTP" as T
+M -> M : network.cfg (albo domyślnie eth0 dhcp)
+loop do utworzenia gniazda (stos ładuje się w tle)
+  M -> N : socket(UDP), co 500 ms
+end
+loop co 1 s
+  M -> N : NET_IOC_IFINFO (każdy interfejs z konfiguracji)
+  alt interfejs nowy
+    M -> N : NET_IOC_IFCONF(DHCP albo statyczny), DNS
+  else adres się zmienił
+    M -> M : log: adres, brama, DNS
+  end
+  opt łącze i adres, termin NTP
+    M -> N : getaddrinfo(pool.ntp.org) (NET_IOC_RESOLVE)
+    M -> T : zapytanie NTP (UDP 123, znacznik w polu czasu wysłania)
+    T --> M : odpowiedź (znacznik odesłany, ten sam adres)
+    M -> M : czas serwera + połowa czasu obiegu
+    M -> M : settimeofday (CAP_SYS) -> K09 -> RTC
+  end
+end
+@enduml

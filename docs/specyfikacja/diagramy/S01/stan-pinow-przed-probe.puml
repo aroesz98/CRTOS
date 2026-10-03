@@ -1,0 +1,19 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "K17 really_probe" as K
+participant "pinctrl.cpp" as C
+participant "pinctrl-imxrt (D01)" as P
+K -> C : pinctrl_select_state(dev, "default")
+C -> C : pinctrl-names -> indeks, pinctrl-N -> grupy (phandle)
+loop każda grupa
+  C -> C : kontroler = najbliższy zarejestrowany przodek grupy
+  alt brak
+    C --> K : -EPROBE_DEFER (nic nie zmienione)
+  end
+end
+loop każda grupa
+  C -> P : apply(ctx, grupa): fsl,pins -> MUX, daisy, PAD
+end
+C --> K : 0
+@enduml

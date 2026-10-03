@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek A programu" as A
+participant "wątek B programu" as B
+participant "jądro (sys_futex_*)" as K
+    A -> A : atomowo state 0 -> 1 (bez jądra)
+    B -> B : state != 0: ustaw 2 (czekający)
+    B -> K : futex_wait(&state, 2, timeout)
+    K -> K : irq_lock, *addr == 2? tak: futex_key = addr, sched_block
+    A -> A : unlock: state -> 0, było 2
+    A -> K : futex_wake(&state, 1)
+    K -> B : sched_wake(B, 0) (tylko wątki z futex_key == addr)
+    B -> B : ponowna próba zajęcia
+@enduml

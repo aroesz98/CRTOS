@@ -1,0 +1,15 @@
+# NetSurf options for CRTOS - installed as /sd/crtos/share/netsurf/Choices
+#
+# The browser runs in an 8.25 MB heap on a 480x272 touch screen with no keyboard,
+# so the memory cache is small (a quarter of it holds decoded images), few
+# connections run at once and the on-screen keyboard button is in the corner.
+# Cookies are kept in /sd/crtos/var/netsurf. JavaScript is on (Duktape; 0 turns
+# it off); a script may run for script_timeout seconds at most (default 10).
+memory_cache_size:3145728
+max_fetchers:8
+max_fetchers_per_host:4
+max_cached_fetch_handles:4
+fb_osk:1
+cookie_file:/sd/crtos/var/netsurf/Cookies
+cookie_jar:/sd/crtos/var/netsurf/Cookies
+enable_javascript:1

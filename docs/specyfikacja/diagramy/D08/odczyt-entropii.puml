@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (TLS)" as P
+participant "trng_read" as R
+participant "TRNG" as H
+participant "trng_irq" as I
+P -> R : read(/dev/random, 32 B)
+R -> R : mutex
+alt pula pusta
+  R -> H : generacja zakończona? (ENT_VAL / ERR)
+  alt nie
+    R -> H : INT_MASK = ENT_VAL | HW_ERR
+    R -> R : sem_take(ready, 200 ms)
+    H -> I : przerwanie
+    I -> R : maska 0, kasowanie statusu, sem_give
+  end
+  alt błąd testu własnego
+    R -> H : kasowanie ERR, nowa generacja (do 4 prób)
+  else entropia ważna
+    R -> H : ENT0..ENT15 do puli (odczyt ENT15 startuje kolejną generację)
+  end
+end
+R -> R : kopia z puli, zerowanie wydanych bajtów
+R --> P : 32 B
+@enduml

@@ -1,0 +1,39 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "przeglądarka VNC (crtos desktop)" as V
+participant "vncd" as D
+participant "gfxd (U03)" as G
+participant "wm / program" as P
+V -> D : TCP 5900
+D -> G : gfx_open, shm z pamięcią podręczną, GFX_SCREEN_WATCH (CAP_SYS)
+G -> G : cały ekran uszkodzony
+D -> V : "RFB 003.008"
+V -> D : "RFB 003.008"
+D -> V : typ bezpieczeństwa 2 (VNC)
+D -> V : wyzwanie 16 B (/dev/urandom)
+V -> D : DES(wyzwanie, hasło)
+D -> D : porównanie z DES(wyzwanie, vnc.passwd)
+D -> V : SecurityResult 0, ServerInit (480x272 albo 800x480, RGB565)
+V -> D : SetPixelFormat (RGB565 LE), SetEncodings (Zlib, Raw, Hextile)
+V -> D : FramebufferUpdateRequest (pełne)
+G -> G : klatka: złożenie, FB_IOC_SHOW
+G -> G : zmienione prostokąty -> kopia vncd (osobna paczka PXP)
+G -> D : GFX_EV_SCREEN
+D -> G : GFX_SCREEN_TAKE
+G --> D : prostokąty
+D -> D : porównanie kafelków 16x16 z własną kopią
+D -> V : FramebufferUpdate (prostokąty Zlib; szczegóły: aktualizacja-zlib)
+V -> D : FramebufferUpdateRequest (przyrostowe)
+V -> D : PointerEvent (przycisk 1, x, y)
+D -> G : GFX_INPUT(PTR_DOWN, GFX_PTR_MOUSE)
+G -> P : GFX_EV_POINTER
+V -> D : KeyEvent (Super_L)
+D -> G : GFX_INPUT(KEY_LEFTMETA)
+G -> P : GFX_EV_KEY do wm (menu programów)
+V -> D : ClientCutText "tekst"
+D -> G : GFX_CLIP_PUT
+G -> D : GFX_EV_CLIP (pominięty: własny)
+V -> D : zamknięcie połączenia
+D -> G : gfx_close (koniec kopii ekranu)
+@enduml

@@ -1,0 +1,10 @@
+@startuml
+!include ../styl.iuml
+[*] --> SUSPENDED : task_create_raw()
+SUSPENDED --> READY : sched_ready() (kthread_create, proc_thread_create)
+READY --> READY : tick (kwant), yield, wywłaszczenie
+READY --> BLOCKED : sched_block() (mutex, sem, event, sleep, IPC, poll...)
+BLOCKED --> READY : sched_wake(wynik), limit czasu (-ETIMEDOUT), task_kill (-EINTR)
+READY --> DEAD : task_exit()
+DEAD --> [*] : sched_reap() w kworker
+@enduml

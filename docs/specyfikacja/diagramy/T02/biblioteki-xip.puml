@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Programista" as D
+participant "crtos build\n(T01)" as C
+participant "CMake\n(konfiguracja)" as M
+participant "thirdparty.py\n(T01)" as T
+participant "xiplibs.cmake" as X
+participant "Ninja +\narm-none-eabi-gcc" as N
+participant "crtos_app(... XIP)" as A
+D -> C : crtos build
+C -> M : konfiguracja
+M -> T : --build
+T -> T : third_party/newlib, third_party/gcc\n(commity źródeł Arm 14.3.Rel1, pobrane gdy brak)
+M -> X : crtos_xiplibs(lib/xip)
+X -> X : toolchain/xiplibs/recipe.txt: linia version = wersja GCC?
+alt inna wersja GCC
+  X --> M : ostrzeżenie, CRTOS_XIP_OK = OFF (programy XIP pominięte)
+else ta sama
+  X -> X : copy: drzewo nagłówków libstdc++, nagłówki newlib,\npliki gen/, plugin/include toolchainu -> build/xiplibs
+  X -> X : reguły: gen (tzdata.zi.h, asembler ios_failure),\ncc dla każdego z ok. 3000 obiektów, ar, aliasy _nano
+  X --> M : CRTOS_XIP_FILES
+end
+C -> N : ninja
+N -> N : gen: tools/xiplibs.py
+N -> N : arm-none-eabi-gcc <zestaw opcji z %> -fmacro-prefix-map\n-MD -c źródło -o build/xiplibs/obj/<lib>/<obiekt>
+N -> N : ar rcsD lib/xip/<lib>.a @lista obiektów
+N -> A : link programu XIP czeka na CRTOS_XIP_FILES
+A --> D : flash0/bin/<program>.app
+@enduml

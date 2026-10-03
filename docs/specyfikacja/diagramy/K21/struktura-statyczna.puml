@@ -1,0 +1,67 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class queue <<struct, crtos/queue.h>> {
+  +uint8_t* buf
+  +uint32_t item_size, count
+  +uint32_t head, tail
+  +wait_queue rx, tx
+  +uint8_t allocated
+  --
+  +queue_init(q, buf, item_size, count) : int
+  +queue_create(item_size, count) : queue*
+  +queue_delete(q)
+  +queue_send(q, item, timeout) : int
+  +queue_recv(q, item, timeout) : int
+  +queue_count(q) : uint32_t
+}
+class timer <<struct, crtos/timer.h>> {
+  +list_head node
+  +uint32_t due
+  +uint32_t period
+  +timer_fn_t fn
+  +void* arg
+  +bool armed
+  --
+  +timer_init(t, fn, arg)
+  +timer_start(t, delay_ms, period_ms)
+  +timer_stop(t) : bool
+  +timer_active(t) : bool
+}
+class timer_cpp <<moduł, kernel/rtos>> {
+  -list_head s_armed
+  -uint32_t s_next
+  -bool s_any
+  -semaphore s_due
+  +timers_start()
+  +timer_tick(now)
+  -insert(t)
+  -timer_thread(arg)
+}
+class init_cpp <<moduł, kernel/rtos>> {
+  +kernel_main()
+  -app_thread(arg)
+  +app_main() [weak]
+}
+class aplikacja <<examples/rtos/blinky>> {
+  +app_main()
+  -led_task(arg)
+  -report_task(arg)
+  -tick(arg)
+}
+class wait_queue <<struct, K06>>
+class sched <<K05>> {
+  +sched_block(wq, timeout, key) : int
+  +wq_wake_one(wq, result) : int
+  +sched_tick()
+  +kthread_create(...) : task_t*
+}
+queue *-- "2" wait_queue
+queue ..> sched : czekanie, budzenie
+timer_cpp o-- "0..*" timer : uzbrojone, wg terminu
+timer_cpp ..> sched : wątek ktimer
+sched ..> timer_cpp : timer_tick w tyknięciu
+init_cpp ..> aplikacja : zadanie app: app_main()
+aplikacja ..> queue
+aplikacja ..> timer
+@enduml

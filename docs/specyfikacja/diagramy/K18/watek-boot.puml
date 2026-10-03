@@ -1,0 +1,24 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek boot (prio 18)" as B
+participant "K13 VFS" as V
+participant "K14 SD/FAT" as S
+participant "K17 drzewo" as O
+participant "K16 loader" as L
+    B -> V : vfs_init (devfs), tty_init, uevent_init, gpu2d_init, ramfs /ram
+    B -> S : sdcard_init, fat_mount("/sd")
+    B -> B : SW8 (GPIO5_IO00) wciśnięty? -> tryb awaryjny
+    B -> O : vfs_load_file(board.dtb), of_init
+    B -> O : driver_register: builtin-bus, builtin-usdhc, earlycon
+    B -> O : device_populate
+    opt nie tryb awaryjny
+        B -> B : modules.alias -> pary (compatible, moduł)
+        loop dopóki są urządzenia bez sterownika z modułem nie próbowanym
+            B -> L : module_load(/sd/crtos/drivers/moduł.ko)
+            L -> O : driver_register -> probe (może tworzyć nowe urządzenia)
+        end
+        B -> L : app_spawn(/sd/crtos/sbin/init.app, CAP_ALL, prio 11, stdio = /dev/console)
+    end
+    B -> B : boot: done in N ms, koniec wątku
+@enduml

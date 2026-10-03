@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "SW8 (GPIO5_IO00)" as P
+participant "key_irq" as I
+participant "wątek gpio-keys" as T
+participant "S04 input" as N
+P -> I : zbocze (oba zbocza)
+I -> T : sem_give
+T -> T : task_sleep_ms(debounce)
+loop klawisze
+  T -> T : gpiod_get_value
+  opt zmiana stanu
+    T -> N : EV_KEY (kod, 0/1)
+  end
+end
+T -> N : SYN (gdy coś się zmieniło)
+@enduml

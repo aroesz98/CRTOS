@@ -1,0 +1,37 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program\n(cc1plus)" as P
+participant "MemManage\n(fault.cpp)" as F
+participant "vmem.cpp" as V
+participant "emulate.cpp" as E
+participant "wątek programu\nw jądrze" as K
+participant "karta SD\n(fat_raw_io)" as SD
+    P -> F : ldr r0, [r5, #8]  (0x9000xxxx: region 0 MPU)
+    F -> V : vmem_fault(): region procesu?
+    V -> E : emulate_access()
+    E -> V : page(): strona w pamięci podręcznej?
+    alt jest (trafienie)
+        V --> E : wskaźnik w ramce, bit użycia
+        E -> E : r0 = słowo z ramki, PC += 4, blok IT dalej
+        F --> P : powrót za instrukcję (ok. 1 µs)
+    else brak
+        V --> E : EMU_MISS (nic nie zmienione)
+        V -> K : syscall_enter_fault(TF_PAGEIN)
+        F --> K : powrót do wątku w trybie uprzywilejowanym
+        K -> V : vmem_pagein_call(adres): muteks
+        V -> V : frame_get(): zegar, ramka nieużywana
+        opt ramka zmieniona
+            V -> SD : zapis strony (8 bloków) do pliku swap
+        end
+        alt strona w pliku
+            V -> SD : odczyt strony do ramki
+        else nigdy niezapisana
+            V -> V : ramka wyzerowana
+        end
+        V -> V : map[strona] = ramka (irq_lock)
+        K --> P : SVC #1: powrót do tej samej instrukcji, R0/R1 bez zmian
+        P -> F : ldr r0, [r5, #8] ponownie
+        F --> P : trafienie
+    end
+@enduml

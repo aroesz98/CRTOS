@@ -1,0 +1,29 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "NetSurf (html)" as H
+participant "dukky.c" as D
+participant "Duktape" as J
+participant "libdom" as L
+H -> D : js_newthread (pierwszy element strony)
+D -> J : duk_push_thread_new_globalenv (własne obiekty wbudowane)
+D -> J : dukky_create_prototypes (własne prototypy DOM)
+D -> J : Window jako obiekt globalny, generics.js
+H -> D : js_exec (pierwszy skrypt strony)
+D -> D : dukky_polyfill (raz na stronę)
+alt pierwsza strona w procesie
+  D -> J : kompilacja skryptów przygotowujących
+  D -> D : duk_dump_function -> polyfill_code (bajtkod)
+else każda następna
+  D -> J : duk_load_function(polyfill_code)
+end
+D -> J : polyfill.js NetSurf, prelude.js, biblioteka polyfilli,\nnewer.js, dom.js (każdy osobno)
+D -> J : skrypt strony
+H -> D : js_fire_event("DOMContentLoaded") (raz)
+D -> L : dom_event_target_dispatch_event(dokument)
+L -> D : dukky_event_handler (faza celu, bez powtórki w bąbelkowaniu)
+D -> D : dukky_window_listeners (słuchacze okna)
+H -> D : js_fire_event("load") -> onload, słuchacze okna
+H -> D : html_close (okno przechodzi na inną stronę)
+D -> J : js_closethread + js_destroythread (pamięć strony wraca)
+@enduml

@@ -1,0 +1,19 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "sched_switch (K05, BASEPRI)" as S
+participant "mpu_switch" as M
+participant "rejestry MPU" as R
+    S -> M : mpu_switch(prev, next)
+    M -> R : RBAR/RASR = next.guard (region 14)
+    M -> R : RBAR/RASR = next.kguard (region 15)
+    M -> M : task_stack_limit = next.stack_limit
+    alt next.proc != NULL i != s_mpu_proc
+        M -> M : s_mpu_proc = next.proc
+        M -> R : region_load(arena): RASR = 0, potem RBAR, RASR
+        loop okna 0..2
+            M -> R : region_load(win[i])
+        end
+    end
+    M -> R : DSB, ISB
+@enduml

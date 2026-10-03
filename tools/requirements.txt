@@ -1,0 +1,5 @@
+# Python packages for tools/crtos.py ("crtos setup" installs them)
+pyocd>=0.36         # the debug probe: flashing, SWD console, screenshots
+pyserial>=3.5       # the serial console
+pillow>=9           # screenshots, crtos desktop's picture at any size; NetSurf's images at build time
+pyelftools>=0.29   # tools/appsym.py: addresses of a crash report -> source lines

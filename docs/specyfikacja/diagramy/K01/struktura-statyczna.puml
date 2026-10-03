@@ -1,0 +1,46 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class context_cpp <<moduł>> {
+  +PendSV_Handler()
+  +SVC_Handler()
+  +sched_start_asm()
+  +syscall_fast(frame)
+  +syscall_enter(frame, exc_return, r4, r5) : uint32_t
+  +syscall_exit(kframe) : uint64_t
+  -syscall_thread()
+  -syscall_thread_c(a0, a1, a2, a3) : uint64_t
+  -kill_in_kernel(code)
+  -set_npriv(npriv)
+}
+class task <<struct>> {
+  +uint32_t* sp
+  +uint32_t flags
+  +uint8_t* kstack
+  +uint32_t kstack_size
+  +uint8_t* ustack
+  +uint32_t* usp
+  +uint32_t uexc_return
+  +uint32_t sc_id
+  +uint32_t sc_a4
+  +uint32_t sc_a5
+  +uint32_t fp_save[16]
+  +uint32_t stack_limit
+}
+class saved_context <<ramka na stosie>> {
+  +uint32_t CONTROL
+  +uint32_t R4_R11[8]
+  +uint32_t EXC_RETURN
+  +uint32_t S16_S31[16] opcjonalnie
+  +hw_frame R0_R3_R12_LR_PC_xPSR
+}
+class globals <<zmienne>> {
+  +task_t* g_current
+  +uint32_t task_stack_limit
+}
+context_cpp ..> task : czyta i zapisuje
+context_cpp ..> globals
+task "1" --> "1" saved_context : sp wskazuje
+context_cpp ..> sched_switch : woła (K05)
+context_cpp ..> syscall_dispatch : woła (K09)
+@enduml

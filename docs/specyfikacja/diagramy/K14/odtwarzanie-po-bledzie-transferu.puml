@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+title rw(): ponawianie transferu bloków
+
+start
+repeat
+  :xfer_chunk(): transfer (DMA, przerwanie, limit czasu);
+  if (sukces?) then (tak)
+    :statystyka, następna porcja;
+    stop
+  endif
+  :errors++;
+  if (to była 3. próba albo karta niegotowa?) then (tak)
+    :błąd do FatFs (-EIO / -ETIMEDOUT);
+    stop
+  endif
+  if (tryb UHS i 3. porażka w tym trybie?) then (tak)
+    :max_mode = tryb - 1, wynik -ETIMEDOUT;
+  elseif (-ETIMEDOUT i 3. zawieszenie karty powyżej 25 MHz?) then (tak)
+    :max_hz = 25 MHz;
+  endif
+  if (-ETIMEDOUT albo kolejna próba\nalbo recover_card() nieudane?) then (tak)
+    :reinit(): reset hosta, wyłączenie zasilania gniazda,\ninicjalizacja karty od nowa (najwyżej max_mode);
+  else (nie)
+    :recover_card(): CMD13 (stan), CMD12 gdy karta w transmisji;
+  endif
+repeat while (ponowienie)
+@enduml

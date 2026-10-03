@@ -1,0 +1,69 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "zegary (clk.cpp)" {
+  class clk_provider <<struct>> {
+    +device_node* np
+    +const clk_ops* ops
+    +void* ctx
+  }
+  class clk <<struct, uchwyt>> {
+    +clk_provider* prov
+    +uint32_t id
+    +uint32_t enabled
+  }
+  class clk_ref <<struct, s_refs[48]>> {
+    +clk_provider* prov
+    +uint32_t id
+    +uint32_t count
+  }
+  interface clk_ops <<interfejs>> {
+    +enable(ctx, id) : int
+    +disable(ctx, id)
+    +get_rate(ctx, id) : uint32_t
+    +set_rate(ctx, id, rate) : int
+  }
+}
+package "piny (pinctrl.cpp)" {
+  class pinctrl_ctl <<struct, s_ctl[4]>> {
+    +device_node* np
+    +const pinctrl_ops* ops
+    +void* ctx
+  }
+  interface pinctrl_ops <<interfejs>> {
+    +apply(ctx, group) : int
+  }
+}
+package "GPIO (gpio.cpp)" {
+  class gpio_chip <<struct, s_chips[8]>> {
+    +device_node* np
+    +unsigned npins
+    +const gpio_chip_ops* ops
+    +void* ctx
+  }
+  class gpio_desc <<struct, uchwyt>> {
+    +gpio_chip* chip
+    +unsigned pin
+    +bool active_low
+  }
+  interface gpio_chip_ops <<interfejs>> {
+    +get(ctx, pin) : int
+    +set(ctx, pin, value)
+    +direction_input(ctx, pin) : int
+    +direction_output(ctx, pin, value) : int
+    +to_irq(ctx, pin) : int
+  }
+}
+clk --> clk_provider
+clk_ref --> clk_provider
+clk_provider --> clk_ops
+pinctrl_ctl --> pinctrl_ops
+gpio_desc --> gpio_chip
+gpio_chip --> gpio_chip_ops
+class clk_imxrt <<D01>>
+class pinctrl_imxrt <<D01>>
+class gpio_imxrt <<D01>>
+clk_imxrt ..|> clk_ops
+pinctrl_imxrt ..|> pinctrl_ops
+gpio_imxrt ..|> gpio_chip_ops
+@enduml

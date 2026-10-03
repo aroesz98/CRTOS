@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek programu" as T
+participant "fault_common / fault_handle" as F
+participant "log (K15)" as L
+participant "proc_kill (K08)" as P
+participant "task_exit (K05)" as X
+    T -> F : MemManage (np. zapis pod 0x20000000)
+    F -> F : CFSR, MMFAR, kasowanie flag
+    F -> L : ~*** MemManage: memory access violation at 20000000, task, process, arena, rejestry
+    F -> P : proc_kill(p, -EFAULT)
+    P -> P : TF_KILLED pozostałych wątków
+    F -> F : task_redirect_to_exit(t, -EFAULT): nowa ramka na szczycie stosu jądra
+    F -> F : mpu_switch(t, t), CONTROL.nPRIV = 0
+    F --> X : EXC_RETURN 0xFFFFFFFD, PSP = ramka kill_trampoline
+    X -> X : proc_thread_exited, mutex_release_all, TASK_DEAD
+@enduml

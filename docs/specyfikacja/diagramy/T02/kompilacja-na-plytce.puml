@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "sh / make" as S
+participant "gcc.app\n(/flash0/bin, XIP)" as G
+participant "cc1 / cc1plus\n(XIP, kod z flasha)" as C1
+participant "as" as AS
+participant "collect2 -> ld" as LD
+participant "/sd/crtos/tmp\n(GCC_TMPDIR)" as R
+S -> G : gcc -O2 x.c -o x.app (posix_spawnp, L01)
+G -> G : specs z /sd/crtos/usr/lib/gcc/arm-none-eabi/14.3.1\n(reguły crtos.specs, ścieżki płytki)
+G -> C1 : posix_spawn(cc1 -E x.c -isystem ... -o ccNNN.i)\n(-no-integrated-cpp ze specs płytki)
+C1 -> R : wynik preprocesora
+C1 --> G : waitpid: 0 (pamięć procesu wraca)
+G -> C1 : posix_spawn(cc1 -fpreprocessed ccNNN.i -o ccNNN.s)
+C1 -> R : kod asemblera
+C1 --> G : waitpid: 0
+G -> AS : posix_spawn(as, ccNNN.s, -o ccNNN.o)
+AS -> R : obiekt
+G -> LD : posix_spawn(collect2, ... -r -T crtos-app.ld crt0 ... -lcrtos -lc_nano -lm -lgcc)
+LD -> LD : collect2 znajduje ld w COMPILER_PATH (libexec)
+LD --> G : x.app (ELF relokowalny, jak z arm-crtos-gcc)
+G -> R : usuwa pliki tymczasowe
+G --> S : kod wyjścia
+note over C1 : arena 3 MB (dane, bss, stos 1 MB); sterta libcrtosheap w oknie\nz prawie całej wolnej SDRAM (K11, do 3 regionów MPU);\nkod 15 MB zostaje we flashu (K16)
+@enduml

@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "SysTick_Handler" as ST
+participant "sched_tick" as S
+    ST -> S : co 1 ms
+    S -> S : irq_lock, DWT włączony? (po odłączeniu debugera)
+    S -> S : n = okresy od ostatniego tyknięcia (SysTick VAL + CYCCNT)
+    alt n > 1
+        S -> S : tick_stats: late++, lost += n-1, najdłuższa przerwa
+    end
+    S -> S : g_ticks += n
+    loop czoło kolejki uśpionych z wake_tick <= g_ticks
+        S -> S : sched_wake(t, -ETIMEDOUT)
+    end
+    S -> S : rozliczenie cykli bieżącego wątku
+    alt bieżący wątek gotowy: slice-- wyczerpany
+        S -> S : slice = CONFIG_TIMESLICE_TICKS
+        opt inny wątek o tym priorytecie gotowy
+            S -> S : na koniec kolejki, PendSV
+        end
+    end
+    note right of S
+      wznowienie po wywłaszczeniu przez wyższy
+      priorytet nie odnawia kwantu (sched_switch)
+    end note
+@enduml

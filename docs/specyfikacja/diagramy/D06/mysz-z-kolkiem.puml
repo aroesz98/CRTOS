@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "TinyUSB (wątek usb2)" as T
+participant "usb-hid.c" as U
+participant "input (S04)" as I
+T -> U : tuh_hid_mount_cb(mysz, deskryptor raportu)
+U -> U : parse_mouse: X, Y, Wheel, AC Pan, przyciski (id, bit, rozmiar, znak)
+U -> I : input_register("usb-mouse")
+U -> U : kółko jest: PROTO_WANT_REPORT (bez odbioru raportów)
+T -> T : konfiguracja pozostałych interfejsów urządzenia
+loop co 10 ms: usb_hid_repeat()
+  U -> U : switch_protocols: tuh_mounted(urządzenie)?
+end
+U -> T : tuh_hid_set_protocol(REPORT)
+T -> U : tuh_hid_set_protocol_complete_cb(REPORT)
+U -> T : tuh_hid_receive_report
+T -> U : tuh_hid_report_received_cb(id 2, dane)
+U -> U : pola raportu o id 2: przyciski, dx, dy, kółko
+U -> I : EV_KEY BTN_*, EV_REL REL_X/REL_Y/REL_WHEEL, SYN
+U -> T : tuh_hid_receive_report
+@enduml

@@ -1,0 +1,29 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class "program z oknem" as app <<program .app>> {
+  -gfx* g
+  -gfx_win* w
+  +main() : int
+  -draw()
+  -pointer(ev)
+  -key(ev)
+  -resize(w, h)
+}
+class gfx <<L02: połączenie z gfxd>>
+class gfx_win <<L02: okno>> {
+  +int id
+  +gfx_surface s
+  +bool frame_pending
+}
+class gfx_surface <<L02>> {
+  +void* pix
+  +int w, h, stride
+  +uint32_t format
+}
+class "ui_list / ui_keyboard / ui_button" as ui <<L02: gfx_ui>>
+app --> gfx : gfx_open()
+app --> gfx_win : gfx_win_create()
+gfx_win *-- gfx_surface
+app ..> ui
+@enduml

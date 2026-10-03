@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek programu (nPRIV=1, PSP = stos użytkownika)" as P
+participant "SVC_Handler (ITCM)" as SVC
+participant "syscall_thread (nPRIV=0, PSP = stos jądra wątku)" as T
+participant "syscall_dispatch" as D
+    P -> SVC : svc #0, R12 = numer, R0-R5 = argumenty
+    alt getpid, gettid, time_us
+        SVC -> SVC : syscall_fast(): wynik w ramce
+        SVC --> P : powrót (ok. 146 ns)
+    else pozostałe
+        SVC -> SVC : syscall_enter(): zapis ramki, ramka na stosie jądra, nPRIV=0
+        SVC --> T : powrót wyjątku do syscall_thread
+        T -> D : syscall_dispatch(id, a0..a5)
+        D --> T : wynik (może blokować, wywłaszczalne)
+        T -> SVC : svc #1
+        SVC -> SVC : syscall_exit(): wynik do ramki użytkownika, nPRIV=1
+        SVC --> P : powrót do programu (ok. 548 ns bez pracy)
+    end
+@enduml

@@ -1,0 +1,29 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "kernel_main\n(CONFIG_OS 0)" as K
+participant "zadanie app" as A
+participant "SysTick\n(sched_tick)" as T
+participant "ktimer" as KT
+participant "kolejka\ns_samples" as Q
+participant "zadanie report" as R
+participant "zadanie led" as L
+K -> KT : timers_start: wątek ktimer (prio 21)
+K -> A : kthread_create("app")
+K -> K : sched_start
+A -> A : app_main(): pin diody (fsl_gpio), queue_init
+A -> L : kthread_create("led", prio 11)
+A -> R : kthread_create("report", prio 10)
+A -> T : timer_start(tick, 100, 100): lista uzbrojonych, s_next
+A -> A : powrót z app_main: zadanie app się kończy
+R -> Q : queue_recv(WAIT_FOREVER): pusta, sched_block na rx
+loop co 1 ms
+  T -> T : timer_tick(now): now >= s_next?
+end
+T -> KT : sem_give(s_due)
+KT -> KT : zdejmuje zaległe timery, okresowy: due += 100, insert
+KT -> Q : tick(): queue_send(próbka, NO_WAIT)
+Q -> R : wq_wake_one(rx): próbka skopiowana
+R -> R : odchyłka okresu; co 10 próbek printk (mutex wokół licznika diody)
+L -> L : co 250 ms GPIO_PinWrite, mutex_lock / licznik / mutex_unlock
+@enduml

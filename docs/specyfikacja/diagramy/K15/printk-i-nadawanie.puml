@@ -1,0 +1,17 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wołający (wątek albo ISR)" as C
+participant "printk.cpp" as P
+participant "con_irq (LPUART1)" as U
+    C -> P : printk("sd: mounted\n")
+    P -> P : format do bufora 120 B na stosie z czasem [s.us]
+    P -> P : log_write: irq_lock, kopia do pierścienia, head += n
+    alt konsola zalegała o > 16 KB
+        P -> P : s_con_tail przesunięty, s_log_lost += różnica
+    end
+    P -> U : console_kick: TIE = 1
+    U -> P : przerwanie TDRE: log_console_read_locked(4 znaki)
+    U -> U : LF -> CR LF, zapis do FIFO nadajnika
+    U -> U : nic więcej: TIE = 0
+@enduml

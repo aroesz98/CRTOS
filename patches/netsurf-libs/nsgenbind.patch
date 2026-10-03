@@ -1,0 +1,79 @@
+diff --git a/src/duk-libdom-interface.c b/src/duk-libdom-interface.c
+index 46436c4..20e956f 100644
+--- a/src/duk-libdom-interface.c
++++ b/src/duk-libdom-interface.c
+@@ -242,18 +242,24 @@ output_add_method(struct opctx *outc,
+                 "\tduk_push_c_function(ctx, %s_%s_%s, DUK_VARARGS);\n",
+                 DLPFX, class_name, method);
+         output_dump_stack(outc);
++        /* CRTOS: writable and configurable, as Web IDL has operations, so that scripts which
++         * complete what the browser only declares (polyfills) can replace them */
+         outputf(outc,
+                 "\tduk_def_prop(ctx, -3,\n");
+         outputf(outc,
+                 "\t\t     DUK_DEFPROP_HAVE_VALUE |\n");
+         outputf(outc,
+                 "\t\t     DUK_DEFPROP_HAVE_WRITABLE |\n");
++        outputf(outc,
++                "\t\t     DUK_DEFPROP_WRITABLE |\n");
+         outputf(outc,
+                 "\t\t     DUK_DEFPROP_HAVE_ENUMERABLE |\n");
+         outputf(outc,
+                 "\t\t     DUK_DEFPROP_ENUMERABLE |\n");
+         outputf(outc,
+-                "\t\t     DUK_DEFPROP_HAVE_CONFIGURABLE);\n");
++                "\t\t     DUK_DEFPROP_HAVE_CONFIGURABLE |\n");
++        outputf(outc,
++                "\t\t     DUK_DEFPROP_CONFIGURABLE);\n");
+         outputf(outc,
+                 "\tduk_pop(ctx);\n\n");
+ 
+@@ -281,6 +287,7 @@ output_populate_rw_property(struct opctx *outc,
+                 "\tduk_push_c_function(ctx, %s_%s_%s_setter, 1);\n",
+                 DLPFX, class_name, property);
+         output_dump_stack(outc);
++        /* CRTOS: configurable, as Web IDL has attributes (see output_add_method) */
+         outputf(outc,
+                 "\tduk_def_prop(ctx, -4, DUK_DEFPROP_HAVE_GETTER |\n");
+         outputf(outc,
+@@ -288,7 +295,7 @@ output_populate_rw_property(struct opctx *outc,
+         outputf(outc,
+                 "\t\tDUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |\n");
+         outputf(outc,
+-                "\t\tDUK_DEFPROP_HAVE_CONFIGURABLE);\n");
++                "\t\tDUK_DEFPROP_HAVE_CONFIGURABLE | DUK_DEFPROP_CONFIGURABLE);\n");
+         outputf(outc,
+                 "\tduk_pop(ctx);\n\n");
+ 
+@@ -314,12 +321,13 @@ output_populate_ro_property(struct opctx *outc,
+                 "\tduk_push_c_function(ctx, %s_%s_%s_getter, 0);\n",
+                 DLPFX, class_name, property);
+         output_dump_stack(outc);
++        /* CRTOS: configurable, as Web IDL has attributes (see output_add_method) */
+         outputf(outc,
+                 "\tduk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER |\n");
+         outputf(outc,
+                 "\t\tDUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |\n");
+         outputf(outc,
+-                "\t\tDUK_DEFPROP_HAVE_CONFIGURABLE);\n");
++                "\t\tDUK_DEFPROP_HAVE_CONFIGURABLE | DUK_DEFPROP_CONFIGURABLE);\n");
+         outputf(outc,
+                 "\tduk_pop(ctx);\n\n");
+ 
+diff --git a/src/utils.c b/src/utils.c
+index 85d26f2..f5004da 100644
+--- a/src/utils.c
++++ b/src/utils.c
+@@ -35,7 +35,11 @@ static char *genb_fpath_tmp(const char *fname)
+         char *fpath;
+         int fpathl;
+ 
+-        fpathl = strlen(options->outdirname) + strlen(fname) + 3;
++        /* CRTOS: room for the process number too (it was cut off, and on
++         * Windows a name ending in "." is the name without it: the
++         * temporary file was the target, removed at the end)
++         */
++        fpathl = strlen(options->outdirname) + strlen(fname) + 3 + 12;
+         fpath = malloc(fpathl);
+         snprintf(fpath, fpathl, "%s/%s.%d", options->outdirname, fname, getpid());
+ 

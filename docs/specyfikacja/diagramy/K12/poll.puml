@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek w sys_poll" as P
+participant "obiekty (plik, port, gniazdo)" as O
+participant "budzący (wątek albo ISR)" as N
+    P -> P : kopia listy, handle_ref każdego uchwytu (odwołania)
+    loop do gotowości albo limitu czasu
+        P -> P : poll_hit = 0
+        P -> O : obj_poll(obj, e) (pierwszy raz: poll_add wpisu)
+        O --> P : maska POLL*
+        alt coś gotowe albo NO_WAIT
+            P -> P : koniec pętli
+        else 
+            P -> P : irq_lock: poll_hit ustawione w międzyczasie? wtedy od nowa
+            P -> P : poll_armed = 1, sched_block(NULL, pozostały czas)
+            N -> O : zmiana stanu
+            O -> P : poll_notify(h): poll_hit = 1, wake gdy armed i BLOCKED
+        end
+    end
+    P -> P : usunięcie wpisów z głów, obj_put, wynik
+@enduml

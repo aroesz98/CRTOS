@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "proces rodzica" as P
+participant "K09 sys_spawn" as K9
+participant "K16 app_spawn" as L
+participant "K08 proc_create" as K8
+participant "nowy proces" as C
+    P -> K9 : crtos_spawn(path, argv, caps)
+    K9 -> K9 : CAP_SPAWN? kopia ścieżki i argumentów do jądra
+    K9 -> L : app_spawn(caps & caps rodzica, prio ograniczony)
+    L -> L : nagłówki ELF: rozmiar obrazu, stos, sterta
+    L -> K8 : proc_create(): arena w SDRAM, region MPU, tablica uchwytów
+    L -> L : plik do przyszłej sterty, relokacja, obraz na dnie areny
+    L -> L : blok startowy (argv, envp, konstruktory) na szczycie areny
+    L -> K8 : proc_thread_create(_start, stos z areny)
+    K8 -> C : wątek gotowy (nPRIV=1)
+    K9 --> P : pid
+    C -> C : _start(): konstruktory, main(), exit()
+@enduml

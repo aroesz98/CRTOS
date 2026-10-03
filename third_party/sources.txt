@@ -1,0 +1,72 @@
+# Third-party sources. They are not in the repository: tools/thirdparty.py fetches each one into
+# third_party/<directory> as a git checkout of the listed commit (shallow) and applies CRTOS'
+# changes from patches/<directory>.patch. The build runs it on every CMake configure: the
+# "base" sources are fetched when they are missing, and any checkout whose commit or patch
+# changed here is brought up to date. The other groups are fetched on request
+# ("crtos setup --netsurf" or "python tools/thirdparty.py netsurf").
+#
+# An entry may go on over lines that end with a backslash (joined as they are).
+#
+# Options after the commit:
+#   only=A,B    sparse checkout of these paths alone (files are fetched only for them)
+#   skip=A,B    leave out these directories (test files whose names Windows does not allow)
+#   group=G     fetched on request (default: base, which every build needs)
+#
+# directory                  repository                                              commit                                   options
+
+# lwIP 2.2.1 (NXP's fork, MCUXpresso SDK 25.06): drivers/net (lwip.ko)
+lwip                         https://github.com/nxp-mcuxpresso/lwip                  fcfb4a7503733cd7f00047fd4ee74298eec5490a only=src,COPYING,README
+# TinyUSB 0.21.0: drivers/usb (usb-imxrt.ko, host and device)
+tinyusb                      https://github.com/hathach/tinyusb                      dae3f9a366bfcddbf9dcf1b48d7500286a849539 only=src,LICENSE,README.rst
+# pdpmake (2026-08-28, public domain): system/commands/make
+pdpmake                      https://github.com/rmyorston/pdpmake                    02f03e299ac141817675e2b0d876741ceef136a4
+
+# MCUXpresso SDK 25.06 (the commits of mcuxsdk-manifests v25.06.00): peripheral drivers fsl_*
+# (cmake/crtos.cmake lists the directories of the i.MX RT1052's IP versions), the Ethernet PHY
+nxp-sdk/core                 https://github.com/nxp-mcuxpresso/mcuxsdk-core          2893c6df8c59f5763476300b584907c4d59ff2e2 only=drivers,COPYING-BSD-3
+nxp-sdk/devices-rt           https://github.com/nxp-mcuxpresso/mcux-devices-rt       57a58f6951e2d44f2e7a7f665d9de1a86d40c640 only=RT1050/MIMXRT1052/drivers
+nxp-sdk/components           https://github.com/nxp-mcuxpresso/mcux-component        2a884681d3fd3c8d13ea54204208b31513a36c03 only=phy
+
+# newlib and GCC's runtime libraries (the commits of the Arm GNU Toolchain 14.3.Rel1 sources, newlib
+# 4.5.0 and GCC 14.3.1): the build compiles lib/xip/libc.a, libm.a, libgcc.a, libstdc++.a and
+# libsupc++.a from them - position independent, for programs that run in place
+# (toolchain/xiplibs, cmake/xiplibs.cmake). Only the files of those libraries for this CPU.
+newlib                       https://sourceware.org/git/newlib-cygwin.git            364226a4caaa277d86fcc0c58ef862cb23a50603 \
+    only=COPYING.NEWLIB,include/arm-acle-compat.h,newlib/libc/argz,newlib/libc/ctype,newlib/libc/errno,\
+newlib/libc/include,newlib/libc/locale,newlib/libc/misc,newlib/libc/reent,newlib/libc/search,newlib/libc/signal,\
+newlib/libc/ssp,newlib/libc/stdio,newlib/libc/stdlib,newlib/libc/string,newlib/libc/syscalls,newlib/libc/time,\
+newlib/libc/machine/arm,newlib/libc/sys/arm,newlib/libm/common,newlib/libm/complex,newlib/libm/fenv,\
+newlib/libm/math,newlib/libm/machine/arm
+gcc                          https://github.com/gcc-mirror/gcc                       b588d028e85c879452aad962de7d3b71a6b524f0 \
+    only=COPYING3,COPYING.RUNTIME,gcc/*.h,gcc/*.def,gcc/config/*.h,gcc/config/arm/*.h,include,\
+libgcc/*.c,libgcc/*.h,libgcc/*.inc,libgcc/config/arm,libiberty/cp-demangle.c,libiberty/cp-demangle.h,\
+libstdc++-v3/include,libstdc++-v3/libsupc++,libstdc++-v3/src,libstdc++-v3/config/abi/compatibility.h,\
+libstdc++-v3/config/allocator,libstdc++-v3/config/cpu/arm,libstdc++-v3/config/cpu/generic,libstdc++-v3/config/io,\
+libstdc++-v3/config/locale/generic,libstdc++-v3/config/locale/newlib,libstdc++-v3/config/os/generic,\
+libstdc++-v3/config/os/newlib
+
+# NetSurf (apps/netsurf) and its libraries; TLS: Mbed TLS 3.6.3 and JPEG: libjpeg 9b from the
+# same SDK release
+nxp-sdk/middleware/mbedtls   https://github.com/NXP/nxp_mbedtls                      92ca4f03e369594723635bc1a10db624f8bb7f0d only=include,library,3rdparty,LICENSE,README.md group=netsurf
+nxp-sdk/middleware/libjpeg   https://github.com/nxp-mcuxpresso/mcux-libjpeg          a1897a51ce31153efdb3ab42428ec5c472094729 only=inc,src,template,LICENSE,README group=netsurf
+netsurf                      https://github.com/netsurf-browser/netsurf              39da3c3a40af4566d86500ff3052dfdc7f9a0378 group=netsurf
+netsurf-libs/curl            https://github.com/curl/curl.git                        75a2079d5c28debb2eaa848ca9430f1fe0d7844c group=netsurf
+netsurf-libs/libcss          https://github.com/netsurf-browser/libcss.git           499f1c4601ad39942fd1b2204053a387bec9b989 group=netsurf
+netsurf-libs/libdom          https://github.com/netsurf-browser/libdom.git           f69781e1f062444b5af3f62d431d7d94018da53b group=netsurf
+netsurf-libs/libexpat        https://github.com/libexpat/libexpat.git                2691aff4304a6d7e053199c205620136481b9dd1 group=netsurf
+netsurf-libs/libhubbub       https://github.com/netsurf-browser/libhubbub.git        6651b8cf87a4aa87bcdb2ff024a02659cd3f9402 group=netsurf
+netsurf-libs/libnsbmp        https://github.com/netsurf-browser/libnsbmp.git         ea063c9f46acb43e90208da14073332b505ef7e7 group=netsurf skip=test
+netsurf-libs/libnsfb         https://github.com/netsurf-browser/libnsfb.git          b701cdce7241c3747ccd78658a365db0983ebe24 group=netsurf
+netsurf-libs/libnsgif        https://github.com/netsurf-browser/libnsgif.git         22e99eb6818b1284d0f3ff1b7f46159e87221220 group=netsurf skip=test
+netsurf-libs/libnslog        https://github.com/netsurf-browser/libnslog.git         bedff2146270a8a73cc265bab46ec39f9c170d07 group=netsurf
+netsurf-libs/libnspsl        https://github.com/netsurf-browser/libnspsl.git         82815c2bc7fd70d1b6afccfa89a9a0f3fa73db8a group=netsurf
+netsurf-libs/nsgenbind       https://github.com/netsurf-browser/nsgenbind.git        44c6736937ae17d4065d02959b82813b8f06a51e group=netsurf
+netsurf-libs/polyfill        https://github.com/inexorabletash/polyfill.git          716a3f36ca10fad032083014faf1a47c638e2502 group=netsurf
+netsurf-libs/libnsutils      https://github.com/netsurf-browser/libnsutils.git       0bd39060740b6163bd50875326654a722df97eb2 group=netsurf
+netsurf-libs/libparserutils  https://github.com/netsurf-browser/libparserutils.git   6b0cbf086ca8eb8fe74b69f0c9ecf274eb2397ca group=netsurf
+netsurf-libs/libpng          https://github.com/pnggroup/libpng.git                  f5e92d76973a7a53f517579bc95d61483bf108c0 group=netsurf
+netsurf-libs/libsvgtiny      https://github.com/netsurf-browser/libsvgtiny.git       073283b29dd800e4d938db42af7e131db848bf3b group=netsurf
+netsurf-libs/libutf8proc     https://github.com/JuliaStrings/utf8proc.git            79cdd5ab40c79afa559f689ffc13b76812dee1ac group=netsurf
+netsurf-libs/libwapcaplet    https://github.com/netsurf-browser/libwapcaplet.git     c7c128d3eb3223b216c974471f82e9337fbcf4ba group=netsurf
+netsurf-libs/libwebp         https://github.com/webmproject/libwebp.git              a4d7a715337ded4451fec90ff8ce79728e04126c group=netsurf
+netsurf-libs/zlib            https://github.com/madler/zlib.git                      51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf group=netsurf

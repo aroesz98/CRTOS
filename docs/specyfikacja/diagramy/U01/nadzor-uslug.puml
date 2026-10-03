@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "jądro (K18)" as K
+participant "init" as I
+participant "usługa (np. gfxd)" as S
+K -> I : app_spawn(init.app, CAP_ALL, konsola)
+I -> I : wczytanie etc/init.cfg, chdir /sd/crtos
+loop wpisy w kolejności
+  I -> S : crtos_spawn(program, caps)
+  opt wait
+    I -> I : crtos_wait(pid) do końca
+  end
+  opt console
+    I -> I : TTY_IOC_SET_FG(0), TTY_IOC_FOCUS
+  end
+end
+loop zawsze
+  I -> I : crtos_wait(-1, najbliższy termin restartu)
+  S --> I : koniec (kod)
+  alt respawn / console
+    I -> I : żył < 2 s? opóźnienie 0,5 s .. 30 s (podwajane)
+    I -> S : restart po opóźnieniu
+  end
+end
+@enduml

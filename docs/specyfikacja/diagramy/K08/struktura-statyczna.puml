@@ -1,0 +1,65 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class proc <<struct>> {
+  +int pid
+  +uint8_t state
+  +uint8_t released
+  +uint32_t caps
+  +char name[16]
+  +uint8_t* arena
+  +uint32_t arena_size
+  +uint32_t arena_rbar
+  +uint32_t arena_rasr
+  +uint32_t brk
+  +uint32_t heap_start
+  +uint32_t stack_floor
+  +list_head threads
+  +int32_t nthreads
+  +int32_t exit_code
+  +uint32_t refs
+  +wait_queue exit_wq
+  +proc* parent
+  +list_head children
+  +wait_queue child_wq
+  +handle* htab
+  +shm_window win[3]
+  +int default_prio
+  +char cwd[128]
+  +uint32_t sb
+  +uint32_t text
+  +uint32_t text_size
+  +file* xip_file
+}
+class handle <<struct>> {
+  +uint8_t type
+  +uint8_t rights
+  +void* obj
+}
+enum handle_type {
+  H_FREE
+  H_FILE
+  H_PORT
+  H_SHM
+}
+class task <<struct, K05>> {
+  +uint8_t* ustack
+  +uint32_t ustack_size
+  +uint8_t* kstack
+  +proc* proc
+  +list_head proc_node
+}
+class file <<struct, K13>> {
+}
+class port <<struct, K10>> {
+}
+class shm <<struct, K11>> {
+}
+proc "1" *-- "128" handle : htab
+proc "1" o-- "0..*" task : threads
+proc "0..1" o-- "0..*" proc : children
+handle --> handle_type
+handle ..> file : H_FILE
+handle ..> port : H_PORT
+handle ..> shm : H_SHM
+@enduml

@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "jądro: sterownik DT" as K
+participant "flashfs" as F
+participant "flexspi-mtd" as M
+participant "VFS" as V
+K -> F : probe(węzeł "crtos,flashfs")
+F -> M : mtd_part_of_node(partition), mtd_part_geometry
+F -> M : mtd_part_claim("flashfs") — /dev/mtdN nie zapisze już tej partycji
+F -> F : replay(): nagłówki bloków 0 i 1 (magia, wersja, CRC)
+alt żaden nagłówek poprawny
+  F -> K : "no file system" — /dev/flashfs0 czeka na FORMAT
+else aktywny = wyższa generacja
+  F -> F : rekordy od szczeliny 1 do pierwszej pustej;\nbłędne CRC pomijane
+  F -> F : wpisy, mapa bloków
+  F -> V : vfs_mount("/flash0")
+end
+F -> K : devfs_register("flashfs0")
+@enduml

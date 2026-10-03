@@ -1,0 +1,64 @@
+# crtos.specs - how arm-none-eabi-gcc (Arm GNU Toolchain 14) builds programs for CRTOS.
+#
+#   arm-none-eabi-gcc -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
+#       -specs=<toolchain>/lib/crtos.specs -B<toolchain>/lib/ -L<toolchain>/lib
+#       -isystem <toolchain>/include hello.c -o hello.app
+#
+# arm-crtos-gcc adds exactly these options, and the CRTOS build (cmake/crtos-app.cmake) uses
+# the same file, so a program comes out the same either way. The CPU options stay on the
+# command line: the driver picks the library variant (multilib) from them before it reads
+# these specs.
+#
+# An ordinary program (.app) is an ELF relocatable file (ld -r) with everything linked in -
+# libcrtos, newlib-nano, libm, libgcc: the kernel places it in the process's arena, resolves
+# its relocations, and the program talks to the kernel only by system calls. The kernel reads
+# the stack and heap sizes from the section .crtos_app (__crtos_app_info; libcrtos has a
+# default, CRTOS_APP() in crtos.h sets them). From nano.specs: the newlib-nano headers
+# (newlib.h matching libc_nano) and the library names (-lc -> -lc_nano, -lstdc++ ->
+# -lstdc++_nano).
+#
+# -mxip: a program that runs in place (from the flash file system /flash0): position-
+# independent code that reaches all data through the GOT in r9, linked (ld -pie) with
+# crtos-xip.ld into a text and a data segment, with the libraries of <toolchain>/lib/xip
+# (full newlib: -L there first - arm-crtos-gcc adds it); see crtos-xip.ld.
+
+%include <nano.specs>
+
+# Every compilation: CRTOS_USER selects the program side of the kernel headers; the POSIX
+# clocks (clock_gettime, CLOCK_MONOTONIC) are there (libcrtos), which newlib declares only when
+# told so; a section per function and variable lets the link drop what is unused (and
+# appfast.py move single functions to the on-chip memory). -mxip becomes the options of
+# position-independent code with the data base in r9.
+*self_spec:
+-DCRTOS_USER=1 -D__CRTOS__=1 -D_POSIX_TIMERS=1 -D_POSIX_MONOTONIC_CLOCK=1 %{!fno-function-sections:-ffunction-sections} %{!fno-data-sections:-fdata-sections} %{!fcommon:-fno-common} %{mxip:-fPIC -msingle-pic-base -mpic-register=r9 -mno-pic-data-is-text-relative -D__CRTOS_XIP__=1} %<mxip
+
+# the newlib-nano headers for ordinary programs, the full newlib's for programs in place
+*cpp_unique_options:
+%{!msingle-pic-base:-isystem =/include/newlib-nano} %(nano_cpp_unique_options)
+
+# C++ without exceptions, RTTI and thread-safe statics unless they are asked for
+*cc1plus:
+%{!fexceptions:-fno-exceptions} %{!frtti:-fno-rtti} %{!fthreadsafe-statics:-fno-threadsafe-statics}
+
+%rename link crtos_base_link
+
+# A program: a partial link rooted at the entry point and the program header, printf with
+# floating point, constructors merged in priority order (crtos-app.ld); in place: a
+# position-independent executable whose text needs no relocation (crtos-xip.ld). With -r it
+# is an ordinary partial link (an object to link into programs later).
+*link:
+%(crtos_base_link) %{!r:%{msingle-pic-base:-pie --no-dynamic-linker -z text -z max-page-size=4096 --gc-sections -e _start -u __crtos_app_info -u _printf_float -T crtos-xip.ld%s;:-r --gc-sections -e _start -u __crtos_app_info -u _printf_float -T crtos-app.ld%s}}
+
+# crt0 (the entry point), the kernel's word-wise memcpy/memset, and the C++ runtime whose
+# operator new must win over libstdc++'s (it is always linked; unused parts are dropped)
+*startfile:
+%{msingle-pic-base:xip/crtos-crt0.o%s xip/crtos-memops.o%s xip/crtos-cxxrt.o%s;:crtos-crt0.o%s crtos-memops.o%s crtos-cxxrt.o%s}
+
+*endfile:
+
+
+*lib:
+%{msingle-pic-base:-lcrtos -lc -lm;:-lcrtos -lc_nano -lm}
+
+*link_gcc_c_sequence:
+--start-group %G %L --end-group

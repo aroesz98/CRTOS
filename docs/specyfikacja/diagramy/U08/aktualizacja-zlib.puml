@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "gfxd (U03) + PXP (D03)" as G
+participant "vncd: wątek serve\n(priorytet 11)" as D
+participant "deflate.c" as Z
+participant "crtos desktop:\nwątek sieci" as N
+participant "crtos desktop:\nokno Tk (co 5 ms)" as T
+G -> G : klatka złożona; zmienione prostokąty kopiowane PXP\ndo pamięci vncd (z cache: unieważnienie przed i po)
+G -> D : GFX_EV_SCREEN
+D -> G : GFX_SCREEN_TAKE
+G --> D : prostokąty (do GFX_SCREEN_RECTS)
+D -> D : take_screen: wiersz po wierszu, linie 4 kafelki dalej\nwczytywane z wyprzedzeniem (PLD); 32 B wiersza kafelka\nporównane z własną kopią; różne -> kopia i znacznik
+alt przeglądarka czeka (V.want)
+  D -> D : due_rects: kafelki -> prostokąty
+  loop prostokąt, kawałki do 64 KB pikseli (ZMAX)
+    D -> Z : zdef_rect(piksele, długość, 2 B, wiersz)\n(własne wiersze wprost, bez kopii)
+    Z -> Z : dopasowania: piksel wcześniej, wiersz wyżej,\nhash 4 B (8 KB wstecz); stałe kody Huffmana;\nsync flush (00 00 FF FF)
+    Z --> D : dane strumienia zlib
+    D -> N : nagłówek prostokąta (kodowanie 6), długość, dane
+  end
+end
+N -> D : FramebufferUpdateRequest (przyrostowe) zaraz po\nnagłówku aktualizacji: następna klatka jest kodowana,\ngdy ta jeszcze płynie i jest rozpakowywana
+N -> N : zlib.decompressobj -> bufor RGB565, lista prostokątów
+T -> N : zmienione prostokąty (pod blokadą)
+T -> T : łączenie bliskich (do 16 px, najwyżej 12 obszarów);\nPillow "BGR;16", skalowanie ostre, PhotoImage
+@enduml

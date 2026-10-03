@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "komputer (terminal)" as H
+participant "/dev/ttyACM0" as T
+participant "getty" as G
+participant "sh" as S
+G -> T : open, TTY_IOC_WAIT_CARRIER
+H -> T : otwarcie portu (DTR)
+T --> G : 0
+G -> G : dwa potoki PIPE_TTY
+G -> S : crtos_spawn(sh, stdio = potoki, caps getty)
+loop do zamknięcia terminala albo końca powłoki
+  H -> T : znaki
+  T -> G : read
+  G -> G : edycja linii, echo (CR LF)
+  G -> S : cała linia po Enter (tryb kanoniczny)
+  S -> G : wyjście (potok)
+  G -> T : LF -> CR LF
+end
+H -> T : zamknięcie portu
+T --> G : read = 0 / POLLHUP
+G -> S : crtos_kill(proces pierwszoplanowy), crtos_kill(sh), crtos_wait(1 s)
+G -> T : TTY_IOC_WAIT_CARRIER (następna sesja)
+@enduml

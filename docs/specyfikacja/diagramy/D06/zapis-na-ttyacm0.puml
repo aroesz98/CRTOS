@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (getty)" as P
+participant "acm_write" as W
+participant "wątek usb" as T
+participant "TinyUSB CDC" as C
+participant "komputer" as H
+P -> W : write(dane)
+alt brak terminala (DTR = 0)
+  W --> P : dane odrzucone
+else
+  W -> W : kopia do pierścienia TX (pod irq_lock, po 512 B)
+  W -> T : usbd_defer_func(acm_work) (raz)
+  T -> C : tud_cdc_write z pierścienia, tud_cdc_write_flush
+  C -> H : pakiety IN (High Speed)
+  alt pierścień pełny
+    W -> W : event_wait(EV_TX)
+    T -> W : miejsce: event_set(EV_TX)
+  end
+end
+@enduml

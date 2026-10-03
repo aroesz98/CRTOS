@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "gfxd" as G
+participant "wm (menedżer)" as W
+P -> G : GFX_WIN_CREATE (shm, x = -1)
+G --> P : id (okno ukryte do ramki)
+G -> W : GFX_EV_WM_CREATE(id, pid, rozmiar, tytuł)
+W -> G : GFX_WIN_CREATE (ramka z paskiem tytułu)
+W -> G : GFX_WM_ATTACH(id, ramka, dx, dy)
+G -> G : okno w ramce: przesuwane, układane i ukrywane razem
+alt menedżer nie odpowiedział w 500 ms
+  G -> G : okno pokazane bez ramki
+end
+W -> G : GFX_WM_CONFIGURE(id, nowy rozmiar)
+G -> P : GFX_EV_CONFIGURE
+P -> G : GFX_WIN_RESIZE (nowy shm)
+G -> W : GFX_EV_WM_RESIZE
+@enduml

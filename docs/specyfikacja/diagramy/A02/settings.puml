@@ -1,0 +1,52 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class settings_c <<program settings.app>> {
+  -gfx* g
+  -gfx_win* w
+  -int s_tab
+  -ui_settings s_set
+  -int s_laid_scale
+  -hit s_hits[96]
+  -wall s_walls[24]
+  -int s_scroll, s_page_h
+  +main() : int
+  -draw()
+  -page_look(s, x, y, cw), page_wall(...) : int
+  -page_clock(...), page_system(...) : int
+  -pointer(ev), hit_at(x, y)
+  -activate(id, arg)
+  -apply()
+  -walls_scan()
+  -thumbs_pending() : bool
+  -restyle()
+}
+class hit <<struct>> {
+  +ui_rect r
+  +int id
+  +int arg
+}
+class wall <<struct>> {
+  +char spec[96]
+  +char name[32]
+  +uint16_t* thumb
+  +bool file
+  +bool failed
+}
+class "ui_settings / ui_theme" as set <<L02: settings.c>> {
+  +ui_settings_save(s) : int
+  +ui_px(px) : int
+  +ui_font_families(ids, names, max) : int
+  +ui_family_font(id) : GFXfont*
+}
+class "ui_choice / ui_switch / ui_slider / ui_panel" as widgets <<L02: gfx_ui>>
+class wallpaper <<L02: wallpaper.c>> {
+  +gfx_wallpaper_builtin(i) : char*
+  +gfx_wallpaper_draw(s, spec, fit) : int
+}
+settings_c *-- "0..96" hit : kontrolki strony
+settings_c *-- "0..24" wall : tapety
+settings_c ..> set : ui.cfg, gfx_settings_changed
+settings_c ..> widgets
+wall ..> wallpaper : miniatura
+@enduml

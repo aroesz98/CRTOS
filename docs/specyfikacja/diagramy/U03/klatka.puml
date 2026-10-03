@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "klient (libgfx)" as C
+participant "gfxd" as G
+participant "/dev/gpu2d" as A
+participant "/dev/fb0" as F
+C -> G : GFX_WIN_DAMAGE(id, prostokąt)
+G -> G : region += prostokąt okna na ekranie, frame_wanted
+G -> G : compose_time: następna ramka - margines (2 x średni czas + 1,5 ms, 3 ms .. 2/3 ramki)
+G -> G : poll(port, limit do chwili składania)
+G -> G : region = uszkodzenia + poprzednia klatka
+loop prostokąty regionu
+  G -> G : widoczne części okien (od góry), reszta pulpitu
+end
+G -> A : GPU2D_IOC_HBATCH (do 64 operacji)
+G -> F : FB_IOC_SHOW(ukryty bufor), flip_pending
+F -> G : poll POLLIN: nowa ramka, GET_SHOWN == ukryty?
+G -> G : zamiana buforów, statystyka (opóźniona klatka?)
+G -> C : GFX_EV_FRAME (okna z in_flip)
+@enduml

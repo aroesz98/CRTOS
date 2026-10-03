@@ -1,0 +1,72 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class net_cpp <<moduł>> {
+  -list_head s_devs
+  -mutex s_lock
+  -const net_stack_ops* s_stack
+  -void* s_stack_ctx
+  -int s_nsocks
+  +netdev_register(nd) : int
+  +netdev_rx(nd, frame, len)
+  +netdev_set_link(nd, up, speed, fd)
+  +net_stack_register(ops, ctx) : int
+  +net_sock_event(ks)
+  +sys_socket(domain, type, proto) : int64_t
+  +sys_connect(h, addr, len) : int64_t
+  -sock_recv(f, ks, buf, len, flags, from) : int
+  -sock_send(f, ks, buf, len, flags, to) : int
+  -sock_wait(ks, seen, deadline) : int
+}
+class netdev <<struct>> {
+  +const netdev_ops* ops
+  +void* priv
+  +uint8_t mac[6]
+  +uint16_t mtu
+  +uint32_t features <<NETDEV_F_TX_CSUM, NETDEV_F_RX_CSUM>>
+  +char name[8]
+  +bool link_up
+  +bool full_duplex
+  +uint32_t speed
+  +uint32_t rx_packets, tx_packets
+  +uint32_t rx_errors, rx_dropped
+  +void* stack
+}
+class net_sock <<struct>> {
+  +int s
+  +int type
+  +uint32_t events
+  +wait_queue wq
+  +poll_head ph
+  +uint32_t rcvtimeo
+  +uint32_t sndtimeo
+}
+interface netdev_ops <<interfejs>> {
+  +open(nd) : int
+  +stop(nd)
+  +xmit(nd, frame, len) : int
+}
+interface net_stack_ops <<interfejs>> {
+  +attach(ctx, nd)
+  +rx(ctx, nd, frame, len)
+  +socket(ctx, domain, type, proto, ks) : int
+  +connect(ctx, s, a) : int
+  +send(ctx, s, buf, len, flags, to) : int
+  +recv(ctx, s, buf, len, flags, from) : int
+  +poll(ctx, s) : int
+  +ioctl(ctx, s, cmd, arg) : int
+}
+class file <<struct, K13>> {
+  +ops = sock_ops
+  +priv = net_sock
+}
+net_cpp o-- "0..*" netdev
+netdev --> netdev_ops
+net_cpp --> net_stack_ops : jeden stos
+file --> net_sock
+class enet_imxrt <<D05>>
+class net_lwip <<D05>>
+enet_imxrt ..|> netdev_ops
+net_lwip ..|> net_stack_ops
+net_lwip ..> net_sock : net_sock_event
+@enduml

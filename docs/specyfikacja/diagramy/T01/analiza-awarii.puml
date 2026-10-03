@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Programista" as D
+participant "crtos crash" as C
+participant "swdcon" as W
+participant "kmon (K19)" as K
+participant "appsym.py" as A
+D -> C : crtos crash
+C -> W : konsola SWD (bez zatrzymania rdzenia)
+W -> K : dmesg 16000
+K --> C : log jądra
+C -> C : ostatni raport: przyczyna, proces, arena, PC, LR
+alt adres w arenie programu
+  C -> A : build/.../program.debug.app, arena, PC, LR
+  A --> D : funkcje i linie źródła
+else adres w jądrze
+  C -> C : addr2line na jądrze (.axf)
+else adres w module
+  C --> D : wskazówka: lsmod + appsym.py na .debug.ko
+end
+@enduml

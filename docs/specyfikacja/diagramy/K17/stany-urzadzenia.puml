@@ -1,0 +1,11 @@
+@startuml
+!include ../styl.iuml
+[*] --> DEV_UNBOUND : device_create_of()
+DEV_UNBOUND --> DEV_BOUND : probe = 0
+DEV_UNBOUND --> DEV_DEFERRED : probe = -EPROBE_DEFER
+DEV_UNBOUND --> DEV_FAILED : probe < 0 (inny błąd)
+DEV_DEFERRED --> DEV_BOUND : retry_deferred, probe = 0
+DEV_FAILED --> DEV_BOUND : nowy pasujący sterownik
+DEV_BOUND --> DEV_UNBOUND : driver_unregister (remove, devres)
+DEV_BOUND --> [*] : device_destroy
+@enduml

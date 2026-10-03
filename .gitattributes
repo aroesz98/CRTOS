@@ -1,0 +1,6 @@
+# line endings that matter: the shell script keeps LF, the cmd script CRLF, patches stay as
+# they are (they must apply byte for byte)
+/crtos      text eol=lf
+*.sh        text eol=lf
+*.cmd       text eol=crlf
+*.patch     -text

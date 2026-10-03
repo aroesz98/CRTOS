@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "libgfx" as L
+participant "gfxd (U03)" as G
+G -> L : GFX_EV_CONFIGURE(w, h)
+L --> P : gfx_next_event
+P -> L : gfx_win_resize(w, nw, nh)
+L -> L : nowe piksele (pula albo nowy shm); stare zostają (old_pix)
+P -> P : rysowanie całego okna w nowym rozmiarze
+P -> L : gfx_present(w)
+L -> G : GFX_WIN_RESIZE (+ nowy uchwyt), potem GFX_WIN_DAMAGE
+L -> L : zwolnienie starych pikseli
+== gfxd kończy się ==
+L -> G : crtos_msg_send
+G --> L : EPIPE (albo POLLHUP na porcie)
+L -> P : funkcja z gfx_on_server_lost (jeśli ustawiona)
+L -> L : exit(1) (init restartuje usługi; programy trzeba uruchomić ponownie)
+@enduml

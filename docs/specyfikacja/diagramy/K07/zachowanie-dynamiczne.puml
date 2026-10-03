@@ -1,0 +1,29 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wołający" as C
+participant "kmalloc_bounded" as K
+participant "TLSF puli" as T
+    C -> K : kmalloc_bounded(size, align, boundary, flags)
+    loop pule wg pool_order(flags)
+        K -> K : irq_lock()
+        alt align > 8 albo boundary
+            K -> T : tlsf_memalign_bounded()
+        else 
+            K -> T : tlsf_malloc()
+        end
+        T -> T : klasa (fl, sl) z rozmiaru, bitmapy, CTZ
+        T -> T : podział bloku, reszta do listy wolnych
+        K -> K : irq_unlock()
+    end
+    opt KM_ZERO
+        K -> K : memset(0)
+    end
+    K --> C : wskaźnik albo NULL
+    C -> K : kfree(ptr)
+    K -> K : pula, która posiada ptr (tlsf_owns: zakres adresów)
+    K -> T : tlsf_free: kontrola nagłówka, scalenie z sąsiadami
+    alt błąd
+        K -> K : panic(invalid pointer or heap corruption)
+    end
+@enduml

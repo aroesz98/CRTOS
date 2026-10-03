@@ -1,0 +1,34 @@
+diff --git a/src/api/sockets.c b/src/api/sockets.c
+index d5dacf4..61a2d2d 100644
+--- a/src/api/sockets.c
++++ b/src/api/sockets.c
+@@ -2606,6 +2606,14 @@ event_callback(struct netconn *conn, enum netconn_evt evt, u16_t len)
+   } else {
+     SYS_ARCH_UNPROTECT(lev);
+   }
++#ifdef LWIP_HOOK_CRTOS_SOCKET_EVENT
++  /* CRTOS change: the kernel waits for sockets itself (and wakes poll()) - told only of the
++   * events that can let a waiting call go on (data or room after none, an error), like the
++   * select() waiters above; the others (one at every segment) cost a tenth of the processor */
++  if (check_waiters) {
++    LWIP_HOOK_CRTOS_SOCKET_EVENT(s);
++  }
++#endif
+   done_socket(sock);
+ }
+ 
+diff --git a/src/core/tcp.c b/src/core/tcp.c
+index 9260a4e..93c3338 100644
+--- a/src/core/tcp.c
++++ b/src/core/tcp.c
+@@ -1003,8 +1003,9 @@ tcp_recved(struct tcp_pcb *pcb, u16_t len)
+     tcp_output(pcb);
+   }
+ 
++  /* CRTOS change: tcpwnd_size_t, not u16_t (32 bits with LWIP_WND_SCALE, as the format says) */
+   LWIP_DEBUGF(TCP_DEBUG, ("tcp_recved: received %"U16_F" bytes, wnd %"TCPWNDSIZE_F" (%"TCPWNDSIZE_F").\n",
+-                          len, pcb->rcv_wnd, (u16_t)(TCP_WND_MAX(pcb) - pcb->rcv_wnd)));
++                          len, pcb->rcv_wnd, (tcpwnd_size_t)(TCP_WND_MAX(pcb) - pcb->rcv_wnd)));
+ }
+ 
+ /**

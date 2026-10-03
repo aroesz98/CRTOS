@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Użytkownik" as U
+participant "inputd (U04)\nalbo vncd (U08)" as I
+participant "gfxd (U03)" as G
+participant "wm" as W
+U -> I : ruch myszy bez przycisku
+I -> G : GFX_INPUT(GFX_PTR_HOVER, x, y)
+G -> G : window_at(x, y): pasek zadań ma GFX_WIN_HOVER
+G -> W : GFX_EV_POINTER(GFX_PTR_HOVER, pozycja w pasku)
+W -> W : bar_hit(): ikona okna k; bar_hover(k): podświetlenie,\npodpowiedź za 450 ms
+W -> G : GFX_WIN_DAMAGE(pasek)
+... mysz stoi 450 ms (pętla czeka do s_tip_due_us) ...
+W -> G : GFX_WIN_CREATE(podpowiedź: tytuł okna,\nTOPMOST | NOFOCUS | NOFRAME | NOINPUT)
+alt mysz na następnej ikonie
+  G -> W : GFX_EV_POINTER(GFX_PTR_HOVER)
+  W -> G : podpowiedź następnego okna od razu
+else kursor nad innym oknem
+  G -> W : GFX_EV_POINTER(GFX_PTR_LEAVE)
+  W -> G : GFX_WIN_DESTROY(podpowiedź)
+else kliknięcie
+  G -> W : GFX_EV_POINTER(DOWN, GFX_PTR_MOUSE)
+  W -> G : GFX_WIN_DESTROY(podpowiedź); cisza do opuszczenia ikony
+end
+@enduml

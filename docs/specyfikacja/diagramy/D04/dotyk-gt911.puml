@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "linia INT (GPIO)" as P
+participant "gt_irq" as I
+participant "wątek gt911 (prio 20)" as T
+participant "GT911 (I2C 0x5D)" as H
+participant "S04 input" as N
+== probe ==
+T -> H : odczyt konfiguracji 0x8047 (184 B)
+opt liczba punktów (0x804C) < 5 i suma kontrolna zgodna
+  T -> H : zapis konfiguracji z 5 punktami, nowa suma, Config_Fresh = 1
+end
+== dotyk ==
+P -> I : zbocze (przez kaskadę GPIO)
+I -> T : sem_give
+T -> H : odczyt 0x814E (status)
+alt bit 7 = 0 (brak nowych danych)
+  T -> N : sloty brakujące od 40 ms: ABS_MT_SLOT, ABS_MT_TRACKING_ID = -1
+else dane
+  T -> H : odczyt n x 8 B od 0x814F, zapis 0 do 0x814E
+  T -> T : skalowanie, zamiana osi, slot według identyfikatora palca
+  T -> N : zmienione palce: ABS_MT_SLOT, ABS_MT_TRACKING_ID (nowy), ABS_MT_POSITION_X/Y
+  T -> N : palce bez punktu od 40 ms: ABS_MT_TRACKING_ID = -1
+end
+T -> N : ABS_X/Y (najniższy slot), BTN_TOUCH przy zmianie, SYN (gdy coś zgłoszono)
+note over T : gdy palec na ekranie: odpytywanie co 20 ms (bez przerwania)
+@enduml

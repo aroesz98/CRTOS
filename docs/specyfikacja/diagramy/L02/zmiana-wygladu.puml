@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "Settings\n(albo appearance)" as S
+participant "/sd/crtos/etc/ui.cfg" as F
+participant "gfxd (U03)" as G
+participant "libgfx w programie\n(gfx.c, settings.c)" as L
+participant "wm (A01)" as W
+participant "program z oknem\n(sysmon, files, term...)" as P
+S -> F : ui_settings_save (scale, font, accent,\ntransparency, opacity, rounded, wallpaper, fit)
+S -> G : gfx_settings_changed: GFX_SETTINGS
+G -> F : ui_settings_load
+G -> G : gfx_wallpaper_draw do pamięci pulpitu\n(wbudowana: obliczona, z ditheringiem;\nplik PPM/PAM: wiersz po wierszu)
+G -> G : cały ekran uszkodzony
+G -> L : GFX_EV_SETTINGS do każdego klienta (serial)
+L -> F : ui_settings_load
+L -> L : ui_settings_apply: czcionki skali i rodziny\n(pliki .fnt, raz na program), akcent,\npromień rogów, krycie (ui_theme)
+L -> W : GFX_EV_SETTINGS (motyw już nowy)
+W -> W : metrics() (ui_px), nowy pasek zadań\n(ARGB przy przezroczystości), nowe ramki\n(ARGB przy zaokrągleniach), klient\nprzyłączony do nowej ramki, stara usunięta
+L -> P : GFX_EV_SETTINGS
+P -> P : układ od nowa (ui_px, czcionki motywu);\nnowa skala: gfx_win_resize
+P -> G : nowe piksele (GFX_WIN_RESIZE), gfx_present
+G -> W : GFX_EV_WM_RESIZE
+W -> W : resized(): ramka do rozmiaru; okno,\nktóre wyszło poza ekran, wraca na niego
+G -> G : następna klatka: tapeta, okna, pasek\n(ARGB mieszane przez PXP)
+@enduml

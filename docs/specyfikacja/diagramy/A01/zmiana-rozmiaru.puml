@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Użytkownik" as U
+participant "wm" as W
+participant "gfxd (U03)" as G
+participant "program (libgfx)" as P
+U -> G : dotyk uchwytu
+G -> W : GFX_EV_POINTER(DOWN, uchwyt)
+loop ruch palca, co 100 ms
+  G -> W : GFX_EV_POINTER(MOVE)
+  W -> W : clamp_size (min 100x60, obszar nad paskiem)
+  W -> G : GFX_WM_CONFIGURE(id, w, h)
+  G -> P : GFX_EV_CONFIGURE(w, h)
+  P -> G : GFX_WIN_RESIZE + GFX_WIN_DAMAGE
+  G -> W : GFX_EV_WM_RESIZE(id, rozmiar przyjęty)
+  W -> W : resized(): ramka i uchwyt dopasowane
+end
+U -> G : podniesienie palca
+G -> W : GFX_EV_POINTER(UP)
+W -> G : GFX_WM_CONFIGURE(id, rozmiar końcowy)
+@enduml

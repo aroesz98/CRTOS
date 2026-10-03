@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "gfxd (U03)" as G
+participant "libgfx (L02)" as L
+participant "wm" as W
+participant "program z oknem" as P
+G -> L : GFX_EV_SETTINGS
+L -> L : ui_settings_load, ui_settings_apply\n(ui_theme: czcionki, akcent, radius, alpha)
+L -> W : GFX_EV_SETTINGS
+W -> W : restyle(): metrics() (ui_px),\nmenu i podpowiedź zamknięte,\nikony do wczytania od nowa
+W -> G : nowy pasek zadań (bar_create:\nARGB, gdy alpha < 255)
+W -> G : stary pasek usunięty
+loop każde zarządzane okno
+  W -> G : rebuild_frame: nowa ramka w miejscu\nstarej (ARGB przy zaokrągleniach)
+  W -> G : gfx_wm_attach (okno w nowej ramce),\nnowy uchwyt rozmiaru
+  W -> G : stara ramka usunięta
+  opt okno na pełnym ekranie
+    W -> G : gfx_wm_configure (nowy obszar\nnad paskiem zadań)
+  end
+end
+W -> W : draw_bar, preload_icons
+G -> P : GFX_EV_SETTINGS (przez libgfx)
+P -> G : gfx_win_resize (nowa skala)
+G -> W : GFX_EV_WM_RESIZE
+W -> W : resized(): ramka do rozmiaru;\nokno poza ekranem wraca na niego
+W -> G : gfx_win_move ramki
+@enduml

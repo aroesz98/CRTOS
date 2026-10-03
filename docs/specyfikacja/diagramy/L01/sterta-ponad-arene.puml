@@ -1,0 +1,33 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program\n(cc1)" as P
+participant "libcrtosheap\n(heap.c)" as H
+participant "jądro\n(K08 sbrk, K11 shm)" as K
+    P -> H : malloc(n)
+    H -> H : klasa TLSF, która na pewno wystarczy
+    alt jest wolny blok
+        H -> H : zdjęcie z listy, reszta wraca jako wolny blok
+    else brak bloku
+        H -> K : _sbrk(max(n + nagłówki, 256 KB))
+        alt arena ma jeszcze miejsce
+            K --> H : stary koniec sterty
+            H -> H : strażnik puli -> wolny blok,\npołączenie z poprzednim, nowy strażnik
+        else arena pełna
+            K --> H : -ENOMEM
+            H -> K : crtos_sys_info(): mem_free
+            loop rozmiary od mem_free - zapas (najwyżej CRTOS_HEAP_WINDOW_KB,\ndomyślnie 30 MB) w dół (>= n)
+                H -> K : shm_create(rozmiar)
+                K --> H : uchwyt albo -ENOMEM
+            end
+            H -> K : shm_map(uchwyt) -> okna MPU 9-11\n(obiekt z kilku regionów: kilka okien)
+            H -> K : close(uchwyt)
+            H -> H : nowa pula: wolny blok + strażnik
+        end
+        H -> H : ponowne wyszukanie
+    end
+    H --> P : wskaźnik (albo NULL i ENOMEM)
+    P -> H : free(p)
+    H -> H : połączenie z wolnymi sąsiadami, na listę
+    note over P, K : przy wyjściu programu jądro zwalnia arenę\ni odmapowuje okna (obiekty shm znikają)
+@enduml

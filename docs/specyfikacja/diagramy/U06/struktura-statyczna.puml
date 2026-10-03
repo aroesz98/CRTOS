@@ -1,0 +1,43 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class httpd_c <<program httpd.app>> {
+  -const char* s_root
+  -int s_listen
+  +main(argc, argv) : int
+  -worker(arg)
+  -serve(fd)
+  -decode_path(p) : bool
+  -send_file(fd, head, url, path)
+  -listing(fd, head, url, path)
+  -status_page(fd, head)
+  -status_json(fd, head)
+  -reply_error(fd, head, code, reason)
+  -mime(path) : const char*
+}
+class deployd_c <<program deployd.app>> {
+  -uint32_t s_crc_table[256]
+  -char* s_buf
+  +main() : int
+  -session(fd, peer)
+  -check_token(given) : bool
+  -path_ok(p) : bool
+  -read_ok(p) : bool
+  -url_decode(s) : bool
+  -url_encode(s, out, size)
+  -cmd_put(c, path, size, crc)
+  -cmd_crc(c, path)
+  -cmd_get(c, path) : int
+  -cmd_stat(c, path)
+  -cmd_list(c, path)
+  -cmd_mkdir(c, path)
+  -cmd_flash(c, path)
+  -answer_discovery(u)
+}
+class conn <<struct>> {
+  +int fd
+  +char line[512]
+  +size_t have
+}
+deployd_c ..> conn
+@enduml

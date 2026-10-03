@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "S02 spi_sync" as F
+participant "lpspi_transfer" as D
+participant "run()" as R
+participant "LPSPI3 + SDK" as H
+F -> D : transfer(spi, części)
+D -> D : słowa 8-bitowe? SPI_LOOP -> -ENOTSUP
+loop grupy części (ta sama prędkość, bez cs_change/opóźnienia)
+  D -> D : configure(prędkość, tryb, cs) gdy się zmieniły
+  alt jedna część z tx albo rx
+    D -> R : run(tx, rx, len) wprost na buforach części
+  else kilka części
+    D -> D : bufor wewnętrzny 4 KB albo kmalloc(2 x suma)
+    D -> R : run(zebrane tx, rx)
+  end
+  R -> H : LPSPI_MasterTransferNonBlocking(PCS ciągły)
+  R -> R : sem_take(done, 2 s + 2 x czas przesłania)
+  alt limit czasu albo -EINTR
+    R -> H : LPSPI_MasterTransferAbort
+  end
+  opt delay_us ostatniej części
+    D -> D : SDK_DelayAtLeastUs
+  end
+end
+D --> F : 0 / błąd
+@enduml

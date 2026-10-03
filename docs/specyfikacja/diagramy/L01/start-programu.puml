@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "K08 (loader)" as K
+participant "crt0 _start" as C
+participant "newlib" as N
+participant "main" as M
+K -> C : wątek główny, R0 = crtos_startup
+C -> C : __crtos_startup = s, environ = envp
+C -> N : atexit(run_fini)
+loop init_array
+  C -> C : konstruktory statyczne
+end
+C -> M : main(argc, argv, envp)
+M --> C : kod
+C -> N : exit(kod): atexit, destruktory, fflush
+N -> K : _exit -> SYS_EXIT
+@enduml

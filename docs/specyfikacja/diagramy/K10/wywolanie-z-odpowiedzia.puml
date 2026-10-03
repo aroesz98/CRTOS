@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "klient (msg_call)" as C
+participant "ipc.cpp" as K
+participant "serwer (msg_recv, msg_reply)" as S
+    S -> K : msg_recv(port) - kolejka pusta, sched_block(recv_wq)
+    C -> K : msg_call(port, req, rep, timeout)
+    K -> K : copy_from_user(crtos_call), uaccess_ok(rep)
+    K -> K : msg_build: kopia req do kmsg, handle_ref(req_handle)
+    K -> K : call na stosie klienta: token, msg, CALL_QUEUED
+    K -> K : enqueue: queue, wake recv_wq, poll_notify
+    K -> S : obudzony: kmsg z kolejki, CALL_RECEIVED, call do s_calls
+    K -> S : kopia danych do bufora serwera, uchwyt do jego tablicy, info.token
+    C -> K : czeka na call.wq (limit czasu)
+    S -> K : msg_reply(token, dane, uchwyt)
+    K -> K : msg_build odpowiedzi, szukanie tokenu w s_calls
+    K -> C : call_finish: CALL_DONE, result = długość, wake
+    K -> C : kopia odpowiedzi do rep, rep_handle do tablicy klienta
+@enduml

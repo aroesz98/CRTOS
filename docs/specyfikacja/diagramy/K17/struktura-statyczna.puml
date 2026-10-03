@@ -1,0 +1,69 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class device_node <<struct>> {
+  +const char* name
+  +uint32_t phandle
+  +property* properties
+  +device_node* parent
+  +device_node* child
+  +device_node* sibling
+  +device* dev
+  +uint32_t flags
+}
+class property <<struct>> {
+  +const char* name
+  +const void* value
+  +uint32_t length
+  +property* next
+}
+class device <<struct>> {
+  +char name[32]
+  +device_node* of_node
+  +device* parent
+  +driver* driver
+  +const of_device_id* match
+  +void* driver_data
+  +void* bus_data
+  +int state
+  +int probe_err
+  +list_head devres
+}
+class driver <<struct>> {
+  +const char* name
+  +const of_device_id* of_match_table
+  +probe(dev) : int
+  +remove(dev)
+  +module* owner
+}
+class of_device_id <<struct>> {
+  +const char* compatible
+  +const void* data
+}
+class devres <<struct>> {
+  +list_head node
+  +action(arg)
+  +void* arg
+}
+enum device_state {
+  DEV_UNBOUND
+  DEV_BOUND
+  DEV_DEFERRED
+  DEV_FAILED
+}
+class uev_client <<struct>> {
+  +char q[64][32]
+  +uint32_t head
+  +uint32_t tail
+  +uint32_t lost
+  +wait_queue wq
+  +poll_head ph
+}
+device_node o-- property
+device_node --> device_node : parent, child, sibling
+device --> device_node : of_node
+device --> driver
+device o-- devres
+device --> device_state
+driver o-- of_device_id
+@enduml

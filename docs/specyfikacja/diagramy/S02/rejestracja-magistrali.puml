@@ -1,0 +1,17 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "lpi2c-imxrt probe (D02)" as D
+participant "i2c.cpp" as I
+participant "K17 model sterowników" as K
+participant "gt911 probe (D04)" as T
+D -> I : i2c_adapter_register(dev, ops, ctx)
+I -> I : numer z aliasu i2c1, mutex magistrali
+loop dzieci węzła z compatible i reg <= 0x7F
+  I -> I : i2c_client (adres)
+  I -> K : device_create_of(dziecko, dev, client)
+  K -> T : probe (np. goodix,gt911 w modules.alias)
+  T -> I : i2c_client_get(dev), i2c_write_read(...)
+end
+I --> D : i2c-1: N device(s)
+@enduml

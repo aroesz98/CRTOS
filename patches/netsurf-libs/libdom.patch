@@ -1,0 +1,25 @@
+diff --git a/src/core/node.c b/src/core/node.c
+index 76c7931..5836fe3 100644
+--- a/src/core/node.c
++++ b/src/core/node.c
+@@ -2522,7 +2522,9 @@ dom_exception _dom_node_dispatch_event(dom_event_target *et,
+ 	ntargets = 0;
+ 
+ 	/* Add interested event listeners to array */
+-	for (; target != NULL; target = target->parent) {
++	/* CRTOS: the target's ancestors - the target itself has the target phase (with it here
++	 * as well, its listeners ran twice: at the target and again as it bubbled) */
++	for (target = target->parent; target != NULL; target = target->parent) {
+ 		struct listener_entry *le = target->eti.listeners;
+ 		bool target_has_listener = false;
+ 
+@@ -2605,7 +2607,8 @@ dom_exception _dom_node_dispatch_event(dom_event_target *et,
+ 	/* Bubbling phase */
+ 	evt->phase = DOM_BUBBLING_PHASE;
+ 
+-	for (targetnr = 0; targetnr < ntargets; ++targetnr) {
++	/* CRTOS: only for an event that bubbles */
++	for (targetnr = 0; evt->bubble && targetnr < ntargets; ++targetnr) {
+ 		dom_node_internal *node =
+ 			(dom_node_internal *) targets[targetnr];
+ 		err = _dom_event_target_dispatch(targets[targetnr],

@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "lpuart_write/read" as D
+participant "lpuart_irq" as I
+participant "LPUART3" as H
+P -> D : write(dane)
+D -> D : kopia do pierścienia TX, TIE = 1
+H -> I : TDRE: FIFO nadajnika z pierścienia, pusto -> TIE = 0
+H -> I : RDRF/IDLE: bajty do pierścienia RX
+I -> D : event_set(EV_RX), poll_notify
+P -> D : read(): pierścień pusty -> event_wait(EV_RX)
+D --> P : >= 1 bajt
+@enduml

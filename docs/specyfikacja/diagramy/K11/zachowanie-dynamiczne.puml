@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "proces A (klient gfx)" as A
+participant "shm.cpp" as K
+participant "K10 IPC" as I
+participant "proces B (gfxd)" as B
+    A -> K : shm_create(64 KB)
+    K -> K : region 64 KB: blok z ósemek po 8 KB,\nnie przekracza granicy 64 KB (SDRAM), zerowanie
+    K --> A : uchwyt h1
+    A -> K : shm_map(h1)
+    K -> K : wolne okno, mpu_encode_region(9 + i), refs++
+    K -> K : mpu_proc_changed(A): regiony 8-11 od razu
+    K --> A : adres
+    A -> I : msg_call(gfx, GFX_WIN_CREATE, uchwyt h1)
+    I -> B : uchwyt h2 (ten sam obiekt, refs++)
+    B -> K : shm_map(h2) -> ten sam adres
+    note over A, B : oba procesy widzą te same piksele
+    A -> K : close(h1), shm_unmap(adres)
+    B -> K : close(h2), shm_unmap(adres)
+    K -> K : refs == 0: kfree(base), kfree(shm)
+@enduml

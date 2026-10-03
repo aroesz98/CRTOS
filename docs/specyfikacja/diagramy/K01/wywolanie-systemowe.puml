@@ -1,0 +1,34 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (nPRIV=1)" as P
+participant "SVC_Handler" as V
+participant "syscall_enter" as E
+participant "syscall_thread (nPRIV=0, stos jądra)" as T
+participant "syscall_exit" as X
+    P -> V : svc #0
+    V -> V : CONTROL.nPRIV == 1: wywołanie z programu
+    alt R12 w GETPID..TIME_US
+        V -> V : syscall_fast(frame)
+        V --> P : powrót
+    else 
+        V -> E : ramka programu, LR, R4, R5
+        E -> E : usp, uexc_return, sc_id = R12, sc_a4, sc_a5, TF_IN_SYSCALL
+        E -> E : S16-S31 do fp_save (gdy ramka z FPU)
+        E -> E : nowa ramka na szczycie stosu jądra: PC = syscall_thread, R0-R3
+        E -> E : stack_limit = kstack + strażnik, nPRIV = 0
+        E --> V : nowy PSP
+        V --> T : bx 0xFFFFFFFD (wątek, PSP, ramka podstawowa)
+        T -> T : push R4-R11, syscall_dispatch(sc_id, R0-R3, sc_a4, sc_a5)
+        T -> V : svc #1 (nPRIV == 0)
+        V -> X : ramka syscall_thread
+        alt TF_KILLED
+            X -> X : ramka kill_in_kernel(-EINTR) na stosie jądra
+            X --> T : task_exit() w trybie jądra
+        else 
+            X -> X : R0, R1 do ramki programu, S16-S31 z fp_save
+            X -> X : stack_limit = ustack + strażnik, nPRIV = 1
+            X --> P : bx uexc_return, PSP = ramka programu
+        end
+    end
+@enduml

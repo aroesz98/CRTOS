@@ -1,0 +1,50 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class input_cpp <<moduł>> {
+  -input_dev* s_inputs[8]
+  +input_register(name) : input_dev*
+  +input_unregister(d)
+  +input_report(d, type, code, value)
+  +input_sync(d)
+  -ev_open(f) : int
+  -ev_read(f, buf, len) : int
+  -ev_poll(f, e) : int
+  -ev_close(f) : int
+}
+class input_dev <<struct>> {
+  +char name[32]
+  +char devname[12]
+  +int index
+  +bool gone
+  +uint32_t refs
+  +input_absinfo abs[2]
+  +uint8_t keybits[96]
+  +list_head clients
+}
+class input_client <<struct, na otwarcie>> {
+  +input_dev* dev
+  +input_event q[64]
+  +uint32_t head
+  +uint32_t tail
+  +uint32_t dropped
+  +event ev
+  +poll_head ph
+}
+class input_event <<struct ABI>> {
+  +uint32_t sec
+  +uint32_t usec
+  +uint16_t type
+  +uint16_t code
+  +int32_t value
+}
+input_cpp o-- "0..8" input_dev
+input_dev o-- "0..*" input_client : otwarte pliki
+input_client *-- "64" input_event
+class gt911 <<D04>>
+class gpio_keys <<D04>>
+class usb_hid <<D06>>
+gt911 ..> input_cpp : input_report
+gpio_keys ..> input_cpp : input_report
+usb_hid ..> input_cpp : input_report
+@enduml

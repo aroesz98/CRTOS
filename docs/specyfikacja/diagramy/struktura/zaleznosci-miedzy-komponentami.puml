@@ -1,0 +1,52 @@
+@startuml
+!include ../styl.iuml
+title Zależności między warstwami i komponentami
+
+package "L3 aplikacje i programy" as L3 {
+  component "A01 wm" as A01
+  component "A02 aplikacje" as A02
+  component "A03 programy konsolowe" as A03
+}
+package "L2 usługi" as L2 {
+  component "U01 init" as U01
+  component "U02 devmgr" as U02
+  component "U03 gfxd" as U03
+  component "U04 inputd, osk" as U04
+  component "U05 netmgr" as U05
+  component "U06 httpd, deployd" as U06
+  component "U07 getty" as U07
+  component "U08 vncd" as U08
+}
+package "biblioteki programów" as LIB {
+  component "L02 libgfx" as L02
+  component "L01 libcrtos" as L01
+}
+package "L1 sterowniki .ko" as L1 {
+  component "D01-D08" as D
+}
+package "L0 jądro" as L0 {
+  component "S01-S05 frameworki" as S
+  component "K01-K19 rdzeń" as K
+}
+
+A01 ..> L02
+A02 ..> L02
+A03 ..> L01
+U04 ..> L02
+L02 ..> L01
+U01 ..> L01
+U02 ..> L01
+U03 ..> L01
+U05 ..> L01
+U06 ..> L01
+U07 ..> L01
+U08 ..> L01
+U08 ..> L02 : kopia ekranu, wejście, schowek
+L02 ..> U03 : port "gfx" (IPC)
+U04 ..> U02 : port "devmgr"
+U03 ..> U02 : port "devmgr"
+L01 ..> K : svc #0 (wywołania systemowe)
+D ..> S : API jądra (ksyms), rejestracja *_ops
+D ..> K : API jądra (ksyms)
+S ..> K
+@enduml

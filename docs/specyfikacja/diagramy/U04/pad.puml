@@ -1,0 +1,34 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "esp32-pad (D04)" as P
+participant "/dev/event1 (S04)" as N
+participant "inputd" as I
+participant "gfxd (U03)" as G
+participant "okno z fokusem" as W
+I -> N : open, INPUT_IOC_GET_KEYBITS (BTN_SOUTH: pad),\nINPUT_IOC_GET_ABS(0..5): zakresy osi
+P -> N : EV_ABS (osie), EV_KEY (przyciski), EV_SYN
+N -> I : read
+loop zdarzenia raportu
+  alt EV_ABS
+    I -> I : pad_axis: skalowanie do ±32767 / 0..32767, gałka dirty
+  else EV_KEY
+    I -> I : przycisk do tablicy raportu
+  else EV_SYN
+    I -> I : pad_flush(force = są przyciski)
+    opt gałka dirty i (force albo ≥ 20 ms od poprzedniej)
+      I -> G : GFX_INPUT {GFX_STICK, code = gałka, x, y}
+      G -> W : GFX_EV_STICK {code, x, y}
+    end
+    loop przyciski raportu
+      I -> G : GFX_INPUT {GFX_KEY, code, value}
+      G -> W : GFX_EV_KEY
+    end
+  end
+end
+opt gałka wstrzymana
+  I -> I : poll z czasem do pad_due_ms
+  I -> G : GFX_INPUT {GFX_STICK, ...} (ostatnia pozycja)
+  G -> W : GFX_EV_STICK
+end
+@enduml

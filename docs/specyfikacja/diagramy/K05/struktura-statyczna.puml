@@ -1,0 +1,75 @@
+@startuml
+!include ../styl.iuml
+class sched_cpp <<moduł>> {
+  +task_t* g_current
+  +uint32_t g_ticks
+  -uint32_t s_ready_bitmap
+  -list_head s_ready[32]
+  -list_head s_sleepq
+  -list_head s_all
+  -list_head s_dead
+  -uint32_t s_lock_count
+  -uint32_t s_switch_deferred
+  -task_t* s_idle
+  -tick_stats s_tick_stats
+  +sched_block(wq, timeout, key) : int
+  +sched_wake(t, result)
+  +sched_ready(t)
+  +sched_switch()
+  +sched_tick()
+  +time_us() : uint64_t
+  +kthread_create(name, fn, arg, prio, stack) : task_t*
+  +task_exit(code)
+  +task_kill(t) : int
+  +sched_reap()
+}
+class task <<struct>> {
+  +uint32_t* sp
+  +uint32_t flags
+  +uint8_t prio
+  +uint8_t base_prio
+  +uint8_t state
+  +uint8_t slice
+  +int id
+  +list_head rq_node
+  +list_head sl_node
+  +list_head all_node
+  +uint32_t wake_tick
+  +wait_queue* waiting_on
+  +mutex* blocked_on_mutex
+  +int32_t wait_result
+  +list_head mutexes_held
+  +uint8_t* kstack
+  +proc* proc
+  +uint64_t cycles
+  +char name[16]
+}
+class wait_queue <<struct>> {
+  +list_head waiters
+}
+class tick_stats <<struct>> {
+  +uint32_t late
+  +uint32_t lost
+  +uint32_t max_gap_cycles
+  +uint32_t max_gap_at
+  +char max_gap_task[16]
+}
+class kworker_cpp <<moduł>> {
+  -kwork s_q[32]
+  -uint32_t s_head
+  -uint32_t s_tail
+  -uint32_t s_lost
+  -semaphore s_sem
+  +kworker_queue(fn, arg)
+  -kworker(arg)
+}
+class kwork <<struct>> {
+  +fn(void*)
+  +void* arg
+}
+sched_cpp o-- task : kolejki gotowych, uśpionych, wszystkich, martwych
+wait_queue o-- task : rq_node (gdy BLOCKED)
+sched_cpp *-- tick_stats
+kworker_cpp *-- "32" kwork
+kworker_cpp ..> sched_cpp : sched_reap()
+@enduml

@@ -1,0 +1,86 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class wm_c <<program wm.app>> {
+  -gfx* g
+  -managed s_m[24]
+  -int s_order[24]
+  -gfx_win* s_bar
+  -gfx_win* s_menu
+  -app s_apps[24]
+  -icon s_icons[96]
+  -gfx_win* s_tip
+  -int s_hover, s_tip_item, s_tip_quiet
+  -uint64_t s_tip_due_us
+  -osk_state s_osk
+  -uint32_t s_uid_caps
+  -managed* s_drag, s_btn_win, s_resize
+  +main(argc, argv) : int
+  -handle(ev)
+  -manage(ev)
+  -unmanage(m)
+  -frame_pointer(m, ev)
+  -grip_pointer(m, ev)
+  -bar_pointer(ev)
+  -menu_pointer(ev)
+  -menu_key(ev)
+  -toggle_maximize(m)
+  -close_window(m)
+  -load_apps()
+  -launch(a)
+  -draw_bar()
+  -icon_get(name, size) : gfx_image*
+  -draw_icon(s, x, y, size, name, title)
+  -bar_hover(item)
+  -tip_show(item)
+  -tip_hide()
+  -osk_request(op) : bool
+  -metrics()
+  -restyle()
+  -rebuild_frame(m)
+  -resized(m, w, h)
+}
+class metrics <<struct M>> {
+  +int title_h, bar_h, grip, min_w, min_h
+  +int menu_w, menu_row, tip_h, item_w
+  +int icon_menu, icon_bar, icon_title
+  +int radius
+  +uint8_t alpha
+}
+class managed <<struct>> {
+  +bool used
+  +int id, pid
+  +int w, h, x, y
+  +char title[32]
+  +char icon[24]
+  +gfx_win* frame
+  +gfx_win* grip
+  +bool mapped, minimized, focused, maximized
+  +uint32_t flags
+  +uint64_t close_us
+  +int save_x, save_y, save_w, save_h
+}
+class app <<struct>> {
+  +char title[32]
+  +char cmd[96]
+  +char icon[24]
+  +uint32_t caps
+}
+class icon <<struct>> {
+  +char name[24]
+  +int size
+  +gfx_image* img
+}
+class libgfx <<L02>> {
+  +gfx_icon_load(name, size) : gfx_image*
+  +gfx_image_draw(s, x, y, img)
+  +ui_px(px) : int
+  +ui_theme
+  +gfx_round_rect_aa(s, x, y, w, h, r, color, line, corners)
+}
+wm_c *-- "0..24" managed
+wm_c *-- "0..24" app
+wm_c *-- "0..96" icon
+wm_c ..> libgfx : ikony, wygląd
+wm_c *-- metrics
+@enduml

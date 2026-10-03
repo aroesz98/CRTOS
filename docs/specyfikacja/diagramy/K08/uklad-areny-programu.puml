@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+title Układ areny programu (adresy rosną w prawo)
+left to right direction
+
+rectangle "offset 0\nkod, dane, bss" as A #E8F1FB
+rectangle "heap_start .. brk\nsterta\n(sbrk rośnie w górę)" as B #E8F1FB
+rectangle "wolne\n(min. 256 B odstępu\nod stosów)" as C #F4F4F4
+rectangle "stack_floor ..\nstosy wątków\n(strażnik 256 B na dnie każdego)" as D #FDF1E4
+rectangle "blok startowy\nargv, envp, crtos_startup" as E #FDF1E4
+rectangle "arena_size\n(koniec areny)" as F #F4F4F4
+
+A --> B
+B --> C
+C --> D
+D --> E
+E --> F
+@enduml

@@ -1,0 +1,33 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class fault_cpp <<moduł>> {
+  +fault_init()
+  +HardFault_Handler()
+  +MemManage_Handler()
+  +BusFault_Handler()
+  +UsageFault_Handler()
+  -fault_common()
+  +fault_handle(frame, exc_return, vect, regs) : uint64_t
+  -fault_reason(cfsr, hfsr) : const char*
+  -report(out, t, vect, cfsr, hfsr, addr, ...)
+  -panic_out(fmt) : int
+}
+class SCB_fault_regs <<rejestry>> {
+  +CFSR (MMFSR, BFSR, UFSR)
+  +HFSR
+  +MMFAR
+  +BFAR
+}
+class decision <<enumeracja logiczna>> {
+  watek_konczony
+  proces_konczony
+  panic
+  leniwe_FPU_odlozone
+}
+fault_cpp ..> SCB_fault_regs : czyta i kasuje
+fault_cpp ..> decision
+fault_cpp ..> proc_kill : K08
+fault_cpp ..> task_redirect_to_exit : K05
+fault_cpp ..> panic : K15
+@enduml

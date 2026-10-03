@@ -1,0 +1,24 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Programista" as D
+participant "arm-crtos-gcc\n(launcher)" as L
+participant "arm-none-eabi-gcc\n(driver + crtos.specs)" as G
+participant "cc1 / cc1plus, as" as C
+participant "collect2 / ld" as K
+participant "crtos-app" as A
+participant "płytka: loader (K16)" as B
+D -> L : arm-crtos-gcc -O2 hello.c -o hello.app
+L -> L : znajduje Arm GNU (CRTOS_GCC_BIN, gcc-bin.txt, PATH)
+L -> G : -mcpu=cortex-m7 ... -specs=lib/crtos.specs -B lib/ -L lib -isystem include + argumenty
+G -> C : -DCRTOS_USER=1, sekcje funkcji, nagłówki newlib-nano
+C --> G : hello.o
+G -> K : -r --gc-sections -e _start -u __crtos_app_info -T crtos-app.ld\ncrtos-crt0.o crtos-memops.o crtos-cxxrt.o hello.o\n--start-group -lgcc -lcrtos -lc_nano -lm --end-group
+K --> G : hello.app (ELF relokowalny, .crtos_app)
+G --> L : kod wyjścia
+L --> D : kod wyjścia
+D -> A : crtos-app check hello.app
+A --> D : ok / co odrzuciłby loader
+D -> B : crtos put + uruchomienie
+B -> B : arena (kod, dane, sterta, stos z .crtos_app), relokacje, _start
+@enduml

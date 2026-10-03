@@ -1,0 +1,37 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "DualSense (Bluetooth)" as DS
+participant "mostek ESP32\n(esp32-s3-bt-mod)" as E
+participant "LPUART3\n(lpuart-imxrt, /dev/ttyS3)" as U
+participant "wątek esp32-pad" as T
+participant "S04 input\n(/dev/event1)" as N
+participant "inputd (U04)" as I
+DS -> E : raport HID (przyciski, gałki)
+E -> U : ramka 13 B, 460800 bodów\n(przy zmianie, gałki co ≥ 8 ms, bez zmian co 200 ms)
+U -> U : przerwanie: bajty do bufora 2 KB
+loop dopóki wątek działa
+  T -> U : vfs_read (O_NONBLOCK, 64 B)
+  alt są bajty
+    T -> T : feed: synchronizacja a5 5a, 13 B
+    T -> T : frame_done: XOR bajtów 2–11
+    alt suma się zgadza
+      T -> T : przyciski (24 bity) + lewa gałka jako krzyżak (histereza 56/40)
+      T -> N : EV_ABS dla osi zmienionych o > 1 (albo w spoczynku / na końcu)
+      T -> N : EV_KEY (kod, 0/1) dla każdego zmienionego bitu
+      opt coś się zmieniło
+        T -> N : EV_SYN
+        N -> I : zdarzenia z /dev/event1
+      end
+    else błędna suma
+      T -> T : bad++ (ramka pominięta)
+    end
+  else EAGAIN
+    T -> T : task_sleep_ms(2), quiet_ms += 2
+    opt quiet_ms ≥ 700 i łącze żyło
+      T -> N : zwolnienie wszystkich przycisków, osie w spoczynku
+      T -> T : "pad link quiet"
+    end
+  end
+end
+@enduml

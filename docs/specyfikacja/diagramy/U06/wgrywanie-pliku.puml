@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "crtos deploy (T01)" as H
+participant "deployd" as D
+participant "karta SD" as S
+H -> D : UDP "CRTOS?" (albo znany adres)
+D --> H : "CRTOS <mac>"
+H -> D : TCP 5555
+D --> H : "CRTOS deployd 2"
+H -> D : AUTH <token>
+D -> D : token z pliku, porównanie w stałym czasie
+D --> H : OK
+H -> D : PUT /sd/crtos/apps/paint.app <rozmiar> <crc>
+H -> D : dane
+D -> S : mkdir po drodze, zapis do paint.app.part po 64 KB
+D -> D : CRC-32 odebranych danych
+alt CRC zgodne i zapis udany
+  D -> S : unlink(stary), rename(.part -> paint.app)
+  D --> H : OK <bajty> in <ms> ...
+else
+  D -> S : unlink(.part)
+  D --> H : ERR crc ... / ERR <błąd>
+end
+H -> D : QUIT
+@enduml

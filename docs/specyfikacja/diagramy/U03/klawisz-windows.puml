@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "inputd / vncd" as I
+participant "gfxd" as G
+participant "wm (menedżer)" as W
+participant "term (fokus)" as T
+I -> G : GFX_INPUT(GFX_KEY, KEY_LEFTMETA, 1)
+G -> G : klawisz Windows: do menedżera, s_held += {META, wm}
+G -> W : GFX_EV_KEY(win 0, KEY_LEFTMETA, 1)
+W -> W : menu_open(), zaznaczony pierwszy program
+W -> G : GFX_WM_KEYS(on 1)
+I -> G : GFX_INPUT(GFX_KEY, KEY_LEFTMETA, 0)
+G -> W : GFX_EV_KEY(win 0, KEY_LEFTMETA, 0) (tam, gdzie naciśnięcie)
+I -> G : GFX_INPUT(GFX_KEY, KEY_DOWN, 1)
+G -> G : s_wm_keys: do menedżera
+G -> W : GFX_EV_KEY(win 0, KEY_DOWN, 1)
+W -> W : następna pozycja menu
+I -> G : GFX_INPUT(GFX_KEY, KEY_ENTER, 1)
+G -> W : GFX_EV_KEY(win 0, KEY_ENTER, 1)
+W -> W : menu_close(), launch(program)
+W -> G : GFX_WM_KEYS(on 0)
+I -> G : GFX_INPUT(GFX_KEY, KEY_ENTER, 0)
+G -> W : GFX_EV_KEY(win 0, KEY_ENTER, 0) (tam, gdzie naciśnięcie)
+I -> G : GFX_INPUT(GFX_KEY, KEY_A, 1)
+G -> T : GFX_EV_KEY(KEY_A, 1) (okno z fokusem)
+@enduml

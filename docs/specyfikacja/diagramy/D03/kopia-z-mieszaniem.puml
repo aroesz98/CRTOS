@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "S03 gpu2d_blit" as G
+participant "pxp_blit" as P
+participant "PXP" as H
+participant "pxp_irq" as I
+G -> P : blit(dst, dx, dy, src ARGB, rect, GPU2D_BLEND)
+P -> P : obcięcie do dst i src, formaty
+P -> P : czyszczenie cache źródła, czyszczenie i unieważnienie celu (gdy pamięć z cache)
+P -> H : PS = cel (tło), AS = źródło alfa, wyjście = cel (w miejscu)
+P -> H : PXP_Start
+P -> P : sem_take(done, 200 ms)
+H -> I : kompletne
+I -> P : sem_give
+alt limit czasu
+  P -> H : PXP_Reset
+  P --> G : -ETIMEDOUT
+else
+  P --> G : 0
+end
+@enduml

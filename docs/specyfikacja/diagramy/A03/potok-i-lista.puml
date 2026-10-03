@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Użytkownik" as U
+participant "sh" as S
+participant "jądro (K08, K12)" as K
+participant "prog1" as P1
+participant "cat (wbudowane)" as B
+U -> S : prog1 a | cat > out.txt && echo ok
+S -> S : split(): "prog1 a | cat > out.txt", &&, "echo ok"
+S -> S : parse() pierwszego elementu: $…, wzorce, przekierowania
+S -> K : pipe(p)
+S -> K : crtos_spawn(prog1, stdio = {-1, p[1], -1})
+K --> S : pid
+S -> K : close(p[1])
+S -> K : TTY_IOC_GET_FG (poprzedni), TTY_IOC_SET_FG(pid):\nCtrl-C kończy prog1 także w czasie cat
+S -> B : run_builtin(cat, wejście p[0], wyjście out.txt)
+P1 -> K : write(1, …) do potoku
+B -> K : read(p[0]) … 0 (koniec: prog1 skończył)
+B --> S : 0
+S -> K : crtos_wait(pid), potem TTY_IOC_SET_FG(poprzedni)
+K --> S : kod prog1
+S -> S : status = kod ostatniego (cat) = 0
+S -> S : && i status 0: parse() i run_pipeline("echo ok")
+@enduml

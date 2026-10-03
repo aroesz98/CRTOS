@@ -1,0 +1,62 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class sdcard_cpp <<moduł>> {
+  -card s_card
+  -mutex s_lock
+  -event s_ev
+  -uint32_t s_adma[64]
+  -uint8_t s_bounce[4096]
+  -int s_max_mode
+  -uint32_t s_max_hz
+  +sdcard_init() : int
+  +sdcard_read(lba, buf, count) : int
+  +sdcard_write(lba, buf, count) : int
+  -transfer(cmd, data, flags) : int
+  -rw(write, lba, buf, count) : int
+  -xfer_chunk(write, lba, buf, n, bounce) : int
+  -recover_card() : int
+  -reinit() : int
+  -init_card(uhs) : int
+  -switch_voltage() : int
+  -tune() : int
+  -sd_irq(irq, ctx)
+}
+class sdcard_info <<struct>> {
+  +int ready
+  +int high_capacity
+  +uint32_t blocks
+  +uint32_t clock_hz
+  +int bus_width
+  +int mode
+  +int v18
+  +uint32_t errors
+  +uint32_t retries
+  +uint32_t reinits
+}
+class fat_cpp <<moduł>> {
+  -FATFS fs
+  -uint8_t* s_wb
+  -uint8_t* s_ra
+  -uint32_t s_wb_lba, s_wb_n
+  -uint32_t s_ra_lba, s_ra_n
+  -uint32_t s_ra_window
+  +disk_read(pdrv, buff, sector, count) : DRESULT
+  +disk_write(pdrv, buff, sector, count) : DRESULT
+  +disk_ioctl(pdrv, cmd, buff) : DRESULT
+  +fat_mount(mp) : int
+  -wb_flush() : int
+  -fr_errno(fr) : int
+}
+class FatFs <<zewnętrzny, R0.15>> {
+  +f_open, f_read, f_write, f_lseek, f_sync, f_close
+  +f_opendir, f_readdir, f_mkdir, f_unlink, f_rename, f_getfree
+}
+interface vfs_fs_ops <<interfejs, K13>> {
+}
+fat_cpp ..|> vfs_fs_ops
+fat_cpp --> FatFs
+FatFs --> fat_cpp : diskio (disk_read, disk_write, disk_ioctl)
+fat_cpp --> sdcard_cpp : sdcard_read, sdcard_write
+sdcard_cpp ..> sdcard_info
+@enduml

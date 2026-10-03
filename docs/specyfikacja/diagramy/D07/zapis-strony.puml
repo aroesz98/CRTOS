@@ -1,0 +1,23 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (write)" as P
+participant "mtd_write" as W
+participant "FlexSPI (IP)" as F
+participant "HyperFlash" as H
+P -> W : write(buf, len) na /dev/mtd1
+W -> W : ro? -EROFS; mutex
+loop kawałki do końca strony 512 B
+  W -> W : strona = 0xFF, kopia danych (wyrównanie do 2 B)
+  W -> W : quiet_enter: PRIMASK, I-cache i D-cache wyłączone
+  W -> F : zegar /4 (32 MHz), write enable (LUT 4)
+  W -> F : page program (LUT 10) z m.page
+  loop do gotowości (limit 5 s)
+    W -> F : read status (LUT 2): bit 15 gotowe, bity błędów
+  end
+  W -> F : zegar i DLL jak z Boot ROM, SoftwareReset (bufory AHB)
+  W -> W : quiet_leave
+end
+W --> P : bajty
+note over W : kasowanie bloku: ok. 0,8 s z wyłączonymi przerwaniami
+@enduml

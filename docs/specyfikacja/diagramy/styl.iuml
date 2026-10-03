@@ -1,0 +1,22 @@
+' Wspólny styl diagramów dokumentacji projektowej CRTOS (PlantUML).
+' Każdy diagram zaczyna się od: !include ../styl.iuml
+' Układ "smetana" jest wbudowany w PlantUML: diagramy klas, stanów i komponentów
+' nie wymagają instalacji Graphviza.
+!pragma layout smetana
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+skinparam classAttributeIconSize 0
+skinparam classFontStyle bold
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 420
+skinparam noteBackgroundColor #FFFBE6
+skinparam noteBorderColor #B8A04A
+skinparam ActivityBackgroundColor #F2F6FC
+skinparam StateBackgroundColor #F2F6FC
+hide empty members
+' kropka w nazwie (np. "clk.cpp") nie tworzy przestrzeni nazw
+set separator none
