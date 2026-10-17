@@ -1,0 +1,3039 @@
+diff --git a/content/handlers/html/html.c b/content/handlers/html/html.c
+index f92985b04..2b01e6253 100644
+--- a/content/handlers/html/html.c
++++ b/content/handlers/html/html.c
+@@ -838,6 +838,7 @@ html_begin_conversion(html_content *htmlc)
+ 	dom_exception exc; /* returned by libdom functions */
+ 	dom_string *node_name = NULL;
+ 	dom_hubbub_error error;
++	bool first_time; /* CRTOS: conversion begins here for the first time */
+ 
+ 	/* The act of completing the parse can result in additional data
+ 	 * being flushed through the parser. This may result in new style or
+@@ -889,6 +890,7 @@ html_begin_conversion(html_content *htmlc)
+ 	}
+ 
+ 	/* Conversion begins proper at this point */
++	first_time = !htmlc->conversion_begun;
+ 	htmlc->conversion_begun = true;
+ 
+ 	/* complete script execution, including deferred scripts */
+@@ -897,6 +899,13 @@ html_begin_conversion(html_content *htmlc)
+ 	/* fire a simple event that bubbles named DOMContentLoaded at
+ 	 * the Document.
+ 	 */
++	/* CRTOS: there was only the comment; pages that start from this
++	 * event (document or window listeners) never ran. Once: a style
++	 * sheet or script that comes in later calls this again. */
++	if (first_time && htmlc->jsthread != NULL) {
++		js_fire_event(htmlc->jsthread, "DOMContentLoaded",
++			      htmlc->document, NULL);
++	}
+ 
+ 	/* get encoding */
+ 	if (htmlc->encoding == NULL) {
+@@ -1366,6 +1375,13 @@ static nserror html_close(struct content *c)
+ 	if (htmlc->jsthread != NULL) {
+ 		/* Close, but do not destroy (yet) the JS thread */
+ 		ret = js_closethread(htmlc->jsthread);
++		/* CRTOS: destroyed as well - a page no window shows runs no
++		 * scripts, and their memory (up to a megabyte a page) is back
++		 * at once, not when the content cache lets the content go (a
++		 * few pages visited quickly filled the browser's heap). Shown
++		 * again from the cache, the page is as its scripts left it. */
++		js_destroythread(htmlc->jsthread);
++		htmlc->jsthread = NULL;
+ 	}
+ 
+ 	return ret;
+diff --git a/content/handlers/image/image.c b/content/handlers/image/image.c
+index 2bd5f5f8d..3040c0d1e 100644
+--- a/content/handlers/image/image.c
++++ b/content/handlers/image/image.c
+@@ -113,6 +113,39 @@ nserror image_init(void)
+ }
+ 
+ 
++/* exported interface documented in image/image.h */
++unsigned int image_decode_scale_extra(unsigned int width, unsigned int height,
++		size_t extra)
++{
++	unsigned int scale = 1;
++#ifdef NETSURF_IMAGE_MAX_BYTES
++	while (scale <= 8 &&
++	       extra + (unsigned long long)((width + scale - 1) / scale) *
++	       ((height + scale - 1) / scale) * 4 > NETSURF_IMAGE_MAX_BYTES) {
++		scale *= 2;
++	}
++	if (scale > 8 && extra > 0) {
++		/* over the budget at any size: at least do not make the
++		 * picture worse than the bitmap alone requires */
++		return image_decode_scale_extra(width, height, 0);
++	}
++	if (scale > 8) {
++		scale = 8;
++	}
++#else
++	(void)width;
++	(void)height;
++	(void)extra;
++#endif
++	return scale;
++}
++
++/* exported interface documented in image/image.h */
++unsigned int image_decode_scale(unsigned int width, unsigned int height)
++{
++	return image_decode_scale_extra(width, height, 0);
++}
++
+ bool image_bitmap_plot(struct bitmap *bitmap,
+ 		       struct content_redraw_data *data,
+ 		       const struct rect *clip,
+diff --git a/content/handlers/image/image.h b/content/handlers/image/image.h
+index dac586c34..9f1be299c 100644
+--- a/content/handlers/image/image.h
++++ b/content/handlers/image/image.h
+@@ -23,6 +23,8 @@
+ #ifndef NETSURF_IMAGE_IMAGE_H_
+ #define NETSURF_IMAGE_IMAGE_H_
+ 
++#include <stddef.h>
++
+ #include "utils/errors.h"
+ 
+ struct content_redraw_data;
+@@ -31,6 +33,31 @@ struct content_redraw_data;
+  */
+ nserror image_init(void);
+ 
++/**
++ * Divisor for decoding an image at reduced resolution.
++ *
++ * Where the platform limits the memory of one decoded bitmap
++ * (NETSURF_IMAGE_MAX_BYTES), images whose full-size bitmap would exceed it
++ * are decoded at 1/2, 1/4 or 1/8 of their size by the decoders that can do
++ * that. The image keeps its intrinsic size for layout; the smaller bitmap
++ * is scaled when it is plotted.
++ *
++ * \param width The image's width in pixels.
++ * \param height The image's height in pixels.
++ * 
++eturn 1 (full size), 2, 4 or 8.
++ */
++unsigned int image_decode_scale(unsigned int width, unsigned int height);
++
++/**
++ * The same for a decoder that needs \a extra bytes besides the bitmap while
++ * it decodes (a progressive JPEG keeps the whole image's DCT coefficients):
++ * the bitmap is made smaller to fit the rest of the budget, down to 1/8. If
++ * even that is over the budget, the scale is the one of the bitmap alone.
++ */
++unsigned int image_decode_scale_extra(unsigned int width, unsigned int height,
++		size_t extra);
++
+ /** Common image content handler bitmap plot call.
+  *
+  * This plots the specified bitmap controlled by the redraw context
+diff --git a/content/handlers/image/jpeg.c b/content/handlers/image/jpeg.c
+index 93372f15a..80d36f15d 100644
+--- a/content/handlers/image/jpeg.c
++++ b/content/handlers/image/jpeg.c
+@@ -39,6 +39,7 @@
+ #include "desktop/gui_internal.h"
+ #include "desktop/bitmap.h"
+ 
++#include "image/image.h"
+ #include "image/image_cache.h"
+ 
+ #define JPEG_INTERNAL_OPTIONS
+@@ -253,6 +254,27 @@ static inline void nsjpeg__decode_client_fmt(
+ /**
+  * create a bitmap from jpeg content.
+  */
++/**
++ * Memory the decoder of a progressive JPEG holds for the whole image: the DCT
++ * coefficients of every block of every component (a sequential one decodes
++ * row by row).
++ */
++static size_t nsjpeg_coef_bytes(const struct jpeg_decompress_struct *cinfo)
++{
++	size_t bytes = 0;
++	int ci;
++
++	if (!cinfo->progressive_mode) {
++		return 0;
++	}
++	for (ci = 0; ci < cinfo->num_components; ci++) {
++		const jpeg_component_info *comp = &cinfo->comp_info[ci];
++		bytes += (size_t)comp->width_in_blocks *
++			comp->height_in_blocks * sizeof(JBLOCK);
++	}
++	return bytes;
++}
++
+ static struct bitmap *
+ jpeg_cache_convert(struct content *c)
+ {
+@@ -334,6 +356,11 @@ jpeg_cache_convert(struct content *c)
+ 	}
+ 	cinfo.dct_method = JDCT_ISLOW;
+ 
++	/* a big image may be decoded at reduced size (the DCT scales) */
++	cinfo.scale_num = 1;
++	cinfo.scale_denom = image_decode_scale_extra(cinfo.image_width,
++			cinfo.image_height, nsjpeg_coef_bytes(&cinfo));
++
+ 	/* commence the decompression, output parameters now valid */
+ 	jpeg_start_decompress(&cinfo);
+ 
+diff --git a/content/handlers/image/png.c b/content/handlers/image/png.c
+index 97a5795b3..3e81910e3 100644
+--- a/content/handlers/image/png.c
++++ b/content/handlers/image/png.c
+@@ -34,6 +34,7 @@
+ #include "desktop/gui_internal.h"
+ #include "desktop/bitmap.h"
+ 
++#include "image/image.h"
+ #include "image/image_cache.h"
+ #include "image/png.h"
+ 
+@@ -187,8 +188,11 @@ static void info_callback(png_structp png_s, png_infop info)
+ 	png_c->base.height = height;
+ 	png_c->base.size += width * height * 4;
+ 
+-	/* see if progressive-conversion should continue */
+-	if (image_cache_speculate((struct content *)png_c) == false) {
++	/* see if progressive-conversion should continue (not for images
++	 * that are to be decoded at reduced size: png_cache_convert does)
++	 */
++	if (image_cache_speculate((struct content *)png_c) == false ||
++	    image_decode_scale(width, height) > 1) {
+ 		longjmp(png_jmpbuf(png_s), CBERR_NOPRE);
+ 	}
+ 
+@@ -467,8 +471,10 @@ png_cache_convert(struct content *c)
+ 	struct png_cache_read_data_s png_cache_read_data;
+ 	png_uint_32 width, height;
+ 	volatile png_bytep * volatile row_pointers = NULL;
++	png_bytep volatile row_buffer = NULL;
++	unsigned int scale;
+ 
+-	png_cache_read_data.data = 
++	png_cache_read_data.data =
+ 		content__get_source_data(c, &png_cache_read_data.size);
+ 
+ 	if ((png_cache_read_data.data == NULL) || 
+@@ -512,20 +518,57 @@ png_cache_convert(struct content *c)
+ 	width = png_get_image_width(png_ptr, info_ptr);
+ 	height = png_get_image_height(png_ptr, info_ptr);
+ 
++	/* A big image may be decoded at reduced size, keeping every scale-th
++	 * pixel of every scale-th row (not interlaced ones: their passes need
++	 * the whole image)
++	 */
++	scale = image_decode_scale(width, height);
++	if (png_get_interlace_type(png_ptr, info_ptr) != PNG_INTERLACE_NONE) {
++		scale = 1;
++	}
++
+ 	/* Claim the required memory for the converted PNG */
+-	bitmap = guit->bitmap->create(width, height, BITMAP_NONE);
++	bitmap = guit->bitmap->create((width + scale - 1) / scale,
++			(height + scale - 1) / scale, BITMAP_NONE);
+ 	if (bitmap == NULL) {
+ 		/* cleanup and bail */
+ 		goto png_cache_convert_error;
+ 	}
+ 
+-	row_pointers = calc_row_pointers((struct bitmap *) bitmap);
++	if (scale == 1) {
++		row_pointers = calc_row_pointers((struct bitmap *) bitmap);
+ 
+-	if (row_pointers != NULL) {
+-		png_read_image(png_ptr, (png_bytep *) row_pointers);
++		if (row_pointers != NULL) {
++			png_read_image(png_ptr, (png_bytep *) row_pointers);
++		} else {
++			guit->bitmap->destroy((struct bitmap *)bitmap);
++			bitmap = NULL;
++		}
+ 	} else {
+-		guit->bitmap->destroy((struct bitmap *)bitmap);
+-		bitmap = NULL;
++		unsigned char *buffer;
++		size_t rowstride;
++		png_uint_32 y, x, bitmap_width = (width + scale - 1) / scale;
++
++		buffer = guit->bitmap->get_buffer((struct bitmap *) bitmap);
++		rowstride = guit->bitmap->get_rowstride((struct bitmap *) bitmap);
++		row_buffer = malloc(png_get_rowbytes(png_ptr, info_ptr));
++		if (buffer == NULL || row_buffer == NULL) {
++			guit->bitmap->destroy((struct bitmap *)bitmap);
++			bitmap = NULL;
++			goto png_cache_convert_error;
++		}
++		for (y = 0; y < height; y++) {
++			png_read_row(png_ptr, (png_bytep) row_buffer, NULL);
++			if (y % scale == 0) {
++				uint32_t *dst = (uint32_t *)(buffer +
++						rowstride * (y / scale));
++				const uint32_t *src =
++					(const uint32_t *) row_buffer;
++				for (x = 0; x < bitmap_width; x++) {
++					dst[x] = src[x * scale];
++				}
++			}
++		}
+ 	}
+ 
+ png_cache_convert_error:
+@@ -537,6 +580,10 @@ png_cache_convert_error:
+ 		free((png_bytep *) row_pointers);
+ 	}
+ 
++	if (row_buffer != NULL) {
++		free((png_bytep) row_buffer);
++	}
++
+ 	if (bitmap != NULL) {
+ 		bool opaque = bitmap_test_opaque((void *)bitmap);
+ 		guit->bitmap->set_opaque((void *)bitmap, opaque);
+diff --git a/content/handlers/image/webp.c b/content/handlers/image/webp.c
+index c04c0efd2..7552b320f 100644
+--- a/content/handlers/image/webp.c
++++ b/content/handlers/image/webp.c
+@@ -40,6 +40,7 @@
+ #include "desktop/gui_internal.h"
+ #include "desktop/bitmap.h"
+ 
++#include "image/image.h"
+ #include "image/image_cache.h"
+ 
+ #include "webp.h"
+@@ -93,9 +94,11 @@ webp_cache_convert(struct content *c)
+ 	size_t source_size; /* length of webp source data */
+ 	VP8StatusCode webpres;
+ 	WebPBitstreamFeatures webpfeatures;
++	WebPDecoderConfig config;
+ 	unsigned int bmap_flags;
++	unsigned int scale;
++	int width, height;
+ 	uint8_t *pixels = NULL;
+-	uint8_t *decoded;
+ 	size_t rowstride;
+ 	struct bitmap *bitmap = NULL;
+ 	bitmap_fmt_t webp_fmt = {
+@@ -120,10 +123,13 @@ webp_cache_convert(struct content *c)
+ 		bmap_flags = BITMAP_NONE;
+ 	}
+ 
++	/* a big image may be decoded at reduced size (the decoder scales) */
++	scale = image_decode_scale(webpfeatures.width, webpfeatures.height);
++	width = (webpfeatures.width + scale - 1) / scale;
++	height = (webpfeatures.height + scale - 1) / scale;
++
+ 	/* create bitmap */
+-	bitmap = guit->bitmap->create(webpfeatures.width,
+-				      webpfeatures.height,
+-				      bmap_flags);
++	bitmap = guit->bitmap->create(width, height, bmap_flags);
+ 	if (bitmap == NULL) {
+ 		/* empty bitmap could not be created */
+ 		return NULL;
+@@ -138,27 +144,42 @@ webp_cache_convert(struct content *c)
+ 
+ 	rowstride = guit->bitmap->get_rowstride(bitmap);
+ 
++	if (!WebPInitDecoderConfig(&config)) {
++		guit->bitmap->destroy(bitmap);
++		return NULL;
++	}
++	if (scale > 1) {
++		config.options.use_scaling = 1;
++		config.options.scaled_width = width;
++		config.options.scaled_height = height;
++	}
++
+ 	switch (webp_fmt.layout) {
+ 	default:
+ 		/* WebP has no ABGR function, fall back to default. */
+ 		webp_fmt.layout = BITMAP_LAYOUT_R8G8B8A8;
+ 		fallthrough;
+ 	case BITMAP_LAYOUT_R8G8B8A8:
+-		decoded = WebPDecodeRGBAInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
++		config.output.colorspace = MODE_RGBA;
+ 		break;
+ 
+ 	case BITMAP_LAYOUT_B8G8R8A8:
+-		decoded = WebPDecodeBGRAInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
++		config.output.colorspace = MODE_BGRA;
+ 		break;
+ 
+ 	case BITMAP_LAYOUT_A8R8G8B8:
+-		decoded = WebPDecodeARGBInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
++		config.output.colorspace = MODE_ARGB;
+ 		break;
+ 	}
+-	if (decoded == NULL) {
++
++	/* decode straight into the bitmap */
++	config.output.is_external_memory = 1;
++	config.output.u.RGBA.rgba = pixels;
++	config.output.u.RGBA.stride = rowstride;
++	config.output.u.RGBA.size = rowstride * height;
++	webpres = WebPDecode(source_data, source_size, &config);
++	WebPFreeDecBuffer(&config.output);
++	if (webpres != VP8_STATUS_OK) {
+ 		/* decode failed */
+ 		guit->bitmap->destroy(bitmap);
+ 		return NULL;
+diff --git a/content/handlers/javascript/duktape/Document.bnd b/content/handlers/javascript/duktape/Document.bnd
+index 2f9adc380..b738f6b0e 100644
+--- a/content/handlers/javascript/duktape/Document.bnd
++++ b/content/handlers/javascript/duktape/Document.bnd
+@@ -18,6 +18,38 @@ prologue Document()
+ #include "content/urldb.h"
+ 
+ #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
++
++/* CRTOS: the HTML content a document belongs to, NULL when there is none */
++static struct html_content *document_htmlc(dom_node *doc)
++{
++	struct html_content *htmlc = NULL;
++
++	if (dom_node_get_user_data(doc, corestring_dom___ns_key_html_content_data,
++				   &htmlc) != DOM_NO_ERR)
++		return NULL;
++	return htmlc;
++}
++
++/* CRTOS: the document's address (URL, documentURI) */
++static duk_ret_t document_push_url(duk_context *ctx, dom_node *doc)
++{
++	struct html_content *htmlc = document_htmlc(doc);
++
++	if (htmlc == NULL)
++		return 0;
++	duk_push_string(ctx, nsurl_access(llcache_handle_get_url(htmlc->base.llcache)));
++	return 1;
++}
++
++/* CRTOS: the character encoding the document was decoded from */
++static duk_ret_t document_push_encoding(duk_context *ctx, dom_node *doc)
++{
++	struct html_content *htmlc = document_htmlc(doc);
++
++	duk_push_string(ctx, htmlc != NULL && htmlc->encoding != NULL ?
++			htmlc->encoding : "UTF-8");
++	return 1;
++}
+ %}
+ 
+ 
+@@ -580,3 +612,138 @@ getter Document::onwaiting();
+ setter Document::onwaiting();
+ getter Document::onwheel();
+ setter Document::onwheel();
++
++/* CRTOS: what the document is and how far it has got, which scripts read (these were stubs
++ * that returned undefined, so e.g. document.readyState === "loading" was never true and
++ * document.referrer.indexOf() threw) */
++
++getter Document::readyState()
++%{
++	struct html_content *htmlc = document_htmlc(priv->parent.node);
++
++	/* conversion begins after the parse and the scripts (DOMContentLoaded); the selection
++	 * context exists once the style sheets are in, just before load */
++	if (htmlc == NULL || !htmlc->conversion_begun)
++		duk_push_string(ctx, "loading");
++	else if (htmlc->select_ctx == NULL)
++		duk_push_string(ctx, "interactive");
++	else
++		duk_push_string(ctx, "complete");
++	return 1;
++%}
++
++getter Document::URL()
++%{
++	return document_push_url(ctx, priv->parent.node);
++%}
++
++getter Document::documentURI()
++%{
++	return document_push_url(ctx, priv->parent.node);
++%}
++
++getter Document::characterSet()
++%{
++	return document_push_encoding(ctx, priv->parent.node);
++%}
++
++getter Document::inputEncoding()
++%{
++	return document_push_encoding(ctx, priv->parent.node);
++%}
++
++getter Document::contentType()
++%{
++	/* scripts run in HTML documents only */
++	duk_push_string(ctx, "text/html");
++	return 1;
++%}
++
++getter Document::compatMode()
++%{
++	dom_document_quirks_mode quirks = DOM_DOCUMENT_QUIRKS_MODE_NONE;
++
++	(void) dom_document_get_quirks_mode(priv->parent.node, &quirks);
++	duk_push_string(ctx, quirks == DOM_DOCUMENT_QUIRKS_MODE_FULL ?
++			"BackCompat" : "CSS1Compat");
++	return 1;
++%}
++
++getter Document::domain()
++%{
++	struct html_content *htmlc = document_htmlc(priv->parent.node);
++	lwc_string *host;
++
++	if (htmlc == NULL)
++		return 0;
++	host = nsurl_get_component(llcache_handle_get_url(htmlc->base.llcache), NSURL_HOST);
++	if (host == NULL) {
++		duk_push_string(ctx, "");
++		return 1;
++	}
++	duk_push_lstring(ctx, lwc_string_data(host), lwc_string_length(host));
++	lwc_string_unref(host);
++	return 1;
++%}
++
++getter Document::referrer()
++%{
++	/* the page that linked here is not kept with the content: none, as the standard has it
++	 * for a document opened directly */
++	duk_push_string(ctx, "");
++	return 1;
++%}
++
++getter Document::title()
++%{
++	dom_string *title = NULL;
++
++	if (dom_html_document_get_title((dom_html_document *)priv->parent.node,
++					&title) != DOM_NO_ERR || title == NULL) {
++		duk_push_string(ctx, "");
++		return 1;
++	}
++	duk_push_lstring(ctx, dom_string_data(title), dom_string_length(title));
++	dom_string_unref(title);
++	return 1;
++%}
++
++setter Document::title()
++%{
++	duk_size_t len;
++	const char *text = duk_safe_to_lstring(ctx, 0, &len);
++	dom_string *title;
++
++	if (dom_string_create((const uint8_t *)text, len, &title) != DOM_NO_ERR)
++		return 0;
++	(void) dom_html_document_set_title((dom_html_document *)priv->parent.node, title);
++	dom_string_unref(title);
++	return 0;
++%}
++
++getter Document::defaultView()
++%{
++	/* the Window: the global object of the page's thread */
++	duk_push_global_object(ctx);
++	return 1;
++%}
++
++method Document::createComment()
++%{
++	dom_node *newnode;
++	dom_exception err;
++	duk_size_t text_len;
++	const char *text = duk_safe_to_lstring(ctx, 0, &text_len);
++	dom_string *text_str;
++
++	err = dom_string_create((const uint8_t*)text, text_len, &text_str);
++	if (err != DOM_NO_ERR) return 0; /* coerced to undefined */
++
++	err = dom_document_create_comment(priv->parent.node, text_str, &newnode);
++	dom_string_unref(text_str);
++	if (err != DOM_NO_ERR) return 0; /* coerced to undefined */
++
++	dukky_push_node(ctx, newnode);
++	dom_node_unref(newnode);
++	return 1;
++%}
+diff --git a/content/handlers/javascript/duktape/Element.bnd b/content/handlers/javascript/duktape/Element.bnd
+index ff0686fd9..a10b84c4b 100644
+--- a/content/handlers/javascript/duktape/Element.bnd
++++ b/content/handlers/javascript/duktape/Element.bnd
+@@ -573,3 +573,91 @@ getter Element::attributes()
+ 	}
+ 	return 1;
+ %}
++
++/* CRTOS: the element's names and remove() (stubs that returned undefined: el.tagName was
++ * undefined for every element) */
++
++getter Element::tagName()
++%{
++	dom_string *name;
++
++	/* libdom gives HTML elements their names in upper case, as tagName has them */
++	if (dom_node_get_node_name(((node_private_t *)priv)->node, &name) != DOM_NO_ERR ||
++	    name == NULL)
++		return 0;
++	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
++	dom_string_unref(name);
++	return 1;
++%}
++
++getter Element::localName()
++%{
++	dom_node *node = ((node_private_t *)priv)->node;
++	dom_string *name = NULL;
++	dom_string *ns = NULL;
++	bool html;
++
++	/* an HTML element's local name is in lower case (libdom keeps the parser's upper case
++	 * and gives none for elements made by createElement()); others' as they are */
++	if (dom_node_get_namespace(node, &ns) != DOM_NO_ERR)
++		ns = NULL;
++	html = ns == NULL || dom_string_isequal(ns, corestring_dom_html_namespace);
++	if (ns != NULL)
++		dom_string_unref(ns);
++	if (dom_node_get_local_name(node, &name) != DOM_NO_ERR || name == NULL) {
++		if (dom_node_get_node_name(node, &name) != DOM_NO_ERR || name == NULL)
++			return 0;
++	}
++	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
++	dom_string_unref(name);
++	if (html) {
++		duk_get_prop_string(ctx, -1, "toLowerCase");
++		duk_dup(ctx, -2);
++		duk_call_method(ctx, 0);
++	}
++	return 1;
++%}
++
++getter Element::namespaceURI()
++%{
++	dom_string *ns = NULL;
++
++	if (dom_node_get_namespace(((node_private_t *)priv)->node, &ns) == DOM_NO_ERR &&
++	    ns != NULL) {
++		duk_push_lstring(ctx, dom_string_data(ns), dom_string_length(ns));
++		dom_string_unref(ns);
++		return 1;
++	}
++	/* createElement() in an HTML document makes HTML elements */
++	duk_push_string(ctx, "http://www.w3.org/1999/xhtml");
++	return 1;
++%}
++
++getter Element::prefix()
++%{
++	dom_string *prefix = NULL;
++
++	if (dom_node_get_prefix(((node_private_t *)priv)->node, &prefix) != DOM_NO_ERR ||
++	    prefix == NULL) {
++		duk_push_null(ctx);
++		return 1;
++	}
++	duk_push_lstring(ctx, dom_string_data(prefix), dom_string_length(prefix));
++	dom_string_unref(prefix);
++	return 1;
++%}
++
++method Element::remove()
++%{
++	dom_node *parent = NULL;
++	dom_node *old = NULL;
++
++	if (dom_node_get_parent_node(((node_private_t *)priv)->node, &parent) != DOM_NO_ERR ||
++	    parent == NULL)
++		return 0;
++	if (dom_node_remove_child(parent, ((node_private_t *)priv)->node, &old) == DOM_NO_ERR &&
++	    old != NULL)
++		dom_node_unref(old);
++	dom_node_unref(parent);
++	return 0;
++%}
+diff --git a/content/handlers/javascript/duktape/EventTarget.bnd b/content/handlers/javascript/duktape/EventTarget.bnd
+index d1f9e50d7..7c2791e43 100644
+--- a/content/handlers/javascript/duktape/EventTarget.bnd
++++ b/content/handlers/javascript/duktape/EventTarget.bnd
+@@ -263,7 +263,15 @@ method EventTarget::dispatchEvent()
+ 	if (dom_event_set_is_trusted(evt, false) != DOM_NO_ERR) return 0;
+ 
+ 	/** \todo work out how to dispatch against non-node things */
+-	if (priv->is_node == false) return 0;
++	if (priv->is_node == false) {
++		/* CRTOS: the Window, to the listeners scripts added to it */
++		duk_push_this(ctx);
++		duk_push_global_object(ctx);
++		if (!duk_strict_equals(ctx, -1, -2)) return 0;
++		duk_pop_2(ctx);
++		duk_push_boolean(ctx, dukky_window_listeners(ctx, evt));
++		return 1;
++	}
+ 
+ 	bool success;
+ 	/* Event prepared, dispatch against ourselves */
+diff --git a/content/handlers/javascript/duktape/HTMLAnchorElement.bnd b/content/handlers/javascript/duktape/HTMLAnchorElement.bnd
+index 3dcfef72e..a55c04951 100644
+--- a/content/handlers/javascript/duktape/HTMLAnchorElement.bnd
++++ b/content/handlers/javascript/duktape/HTMLAnchorElement.bnd
+@@ -37,3 +37,55 @@ setter HTMLAnchorElement::target();
+ 
+ 
+ 
++
++/* CRTOS: href as links have it, resolved against the document's base (it was a stub that
++ * returned undefined) */
++prologue HTMLAnchorElement()
++%{
++#include "utils/corestrings.h"
++#include "utils/nsurl.h"
++#include "html/private.h"
++%}
++
++getter HTMLAnchorElement::href()
++%{
++	dom_node *node = ((node_private_t *)priv)->node;
++	struct html_content *htmlc = NULL;
++	struct dom_document *doc = NULL;
++	dom_string *value = NULL;
++	nsurl *url;
++
++	if (dom_element_get_attribute(node, corestring_dom_href, &value) != DOM_NO_ERR ||
++	    value == NULL) {
++		duk_push_string(ctx, "");
++		return 1;
++	}
++	if (dom_node_get_owner_document(node, &doc) == DOM_NO_ERR && doc != NULL) {
++		(void) dom_node_get_user_data(doc, corestring_dom___ns_key_html_content_data,
++					      &htmlc);
++		dom_node_unref(doc);
++	}
++	if (htmlc != NULL && htmlc->base_url != NULL &&
++	    nsurl_join(htmlc->base_url, dom_string_data(value), &url) == NSERROR_OK) {
++		duk_push_lstring(ctx, nsurl_access(url), nsurl_length(url));
++		nsurl_unref(url);
++	} else {
++		duk_push_lstring(ctx, dom_string_data(value), dom_string_length(value));
++	}
++	dom_string_unref(value);
++	return 1;
++%}
++
++setter HTMLAnchorElement::href()
++%{
++	duk_size_t len;
++	const char *text = duk_safe_to_lstring(ctx, 0, &len);
++	dom_string *value;
++
++	if (dom_string_create((const uint8_t *)text, len, &value) != DOM_NO_ERR)
++		return 0;
++	(void) dom_element_set_attribute(((node_private_t *)priv)->node, corestring_dom_href,
++					 value);
++	dom_string_unref(value);
++	return 0;
++%}
+diff --git a/content/handlers/javascript/duktape/HTMLFormElement.bnd b/content/handlers/javascript/duktape/HTMLFormElement.bnd
+index 3906cf0b3..bdd4d0826 100644
+--- a/content/handlers/javascript/duktape/HTMLFormElement.bnd
++++ b/content/handlers/javascript/duktape/HTMLFormElement.bnd
+@@ -24,3 +24,40 @@ setter HTMLFormElement::method();
+ 
+ getter HTMLFormElement::target();
+ setter HTMLFormElement::target();
++
++/* CRTOS: submit() sends the form as its submit button would, with none pressed (it was a stub
++ * that did nothing, so pages that send their forms from scripts sent nothing). The browser
++ * knows a document's forms once the page is converted - from load on, not while it is being
++ * parsed. */
++prologue HTMLFormElement()
++%{
++#include "utils/corestrings.h"
++#include "netsurf/browser_window.h"
++#include "html/private.h"
++#include "html/form_internal.h"
++%}
++
++method HTMLFormElement::submit()
++%{
++	dom_node *node = ((node_private_t *)priv)->node;
++	struct dom_document *doc = NULL;
++	struct html_content *htmlc = NULL;
++	struct browser_window *target;
++	struct form *form;
++
++	if (dom_node_get_owner_document(node, &doc) != DOM_NO_ERR || doc == NULL)
++		return 0;
++	(void) dom_node_get_user_data(doc, corestring_dom___ns_key_html_content_data, &htmlc);
++	dom_node_unref(doc);
++	if (htmlc == NULL || htmlc->bw == NULL)
++		return 0;
++	for (form = htmlc->forms; form != NULL; form = form->prev) {
++		if (form->node == (void *)node)
++			break;
++	}
++	if (form == NULL)
++		return 0;
++	target = browser_window_find_target(htmlc->bw, form->target, 0);
++	(void) form_submit(content_get_url(&htmlc->base), target, form, NULL);
++	return 0;
++%}
+diff --git a/content/handlers/javascript/duktape/Location.bnd b/content/handlers/javascript/duktape/Location.bnd
+index a731730de..5790393fe 100644
+--- a/content/handlers/javascript/duktape/Location.bnd
++++ b/content/handlers/javascript/duktape/Location.bnd
+@@ -16,6 +16,23 @@ class Location {
+ prologue Location()
+ %{
+ #include "netsurf/browser_window.h"
++#include "netsurf/types.h"
++#include "desktop/browser_private.h"
++
++/* CRTOS: the fragment the window went to (NetSurf keeps it with the browser window, not in
++ * the content's address), NULL when there is none */
++static lwc_string *location_fragment(duk_context *ctx)
++{
++	window_private_t *priv_win;
++
++	duk_push_global_object(ctx);
++	duk_get_prop_string(ctx, -1, PRIVATE_MAGIC);
++	priv_win = duk_get_pointer(ctx, -1);
++	duk_pop_2(ctx);
++	if (priv_win == NULL || priv_win->win == NULL)
++		return NULL;
++	return priv_win->win->frag_id;
++}
+ %}
+ 
+ init Location(nsurl *url)
+@@ -119,6 +136,14 @@ getter Location::href()
+ 		free(url_s);
+ 	}
+ 
++	/* CRTOS: with the fragment the window went to */
++	lwc_string *frag = location_fragment(ctx);
++	if (frag != NULL) {
++		duk_push_string(ctx, "#");
++		duk_push_lstring(ctx, lwc_string_data(frag), lwc_string_length(frag));
++		duk_concat(ctx, 3);
++	}
++
+ 	return 1;
+ %}
+ 
+@@ -186,6 +211,10 @@ getter Location::protocol()
+ 		free(url_s);
+ 	}
+ 
++	/* CRTOS: "https:", as the standard has it (was "https") */
++	duk_push_string(ctx, ":");
++	duk_concat(ctx, 2);
++
+ 	return 1;
+ %}
+ 
+@@ -235,7 +264,8 @@ getter Location::host()
+ 	char *url_s = NULL;
+ 	size_t url_l;
+ 
+-	nsurl_get(priv->url, NSURL_HOST, &url_s, &url_l);
++	/* CRTOS: with the port, as the standard has it (hostname is without) */
++	nsurl_get(priv->url, NSURL_HOST | NSURL_PORT, &url_s, &url_l);
+ 
+ 	/* if url_s is NULL duk_push_lstring pushes an empty string
+ 	 * which is correct for this API
+@@ -318,6 +348,12 @@ getter Location::search()
+ 
+ 	nsurl_get(priv->url, NSURL_QUERY, &url_s, &url_l);
+ 
++	/* CRTOS: "?query", as the standard has it (nsurl gives the query alone) */
++	if (url_s != NULL && url_l > 0 && url_s[0] != '?') {
++		duk_push_string(ctx, "?");
++		duk_push_lstring(ctx, url_s, url_l);
++		duk_concat(ctx, 2);
++	} else
+ 	/* if url_s is NULL duk_push_lstring pushes an empty string
+ 	 * which is correct for this API
+ 	 */
+@@ -333,20 +369,18 @@ getter Location::search()
+ 
+ getter Location::hash()
+ %{
+-	char *url_s = NULL;
+-	size_t url_l;
+-
+-	nsurl_get(priv->url, NSURL_FRAGMENT, &url_s, &url_l);
+-
+-	/* if url_s is NULL duk_push_lstring pushes an empty string
+-	 * which is correct for this API
+-	 */
+-	duk_push_lstring(ctx, url_s, url_l);
+-
+-	if (url_s != NULL) {
+-		free(url_s);
++	/* CRTOS: "#fragment" of the fragment the window went to - the content's address has
++	 * none */
++	lwc_string *frag = location_fragment(ctx);
++
++	(void) priv;
++	if (frag == NULL || lwc_string_length(frag) == 0) {
++		duk_push_string(ctx, "");
++		return 1;
+ 	}
+-
++	duk_push_string(ctx, "#");
++	duk_push_lstring(ctx, lwc_string_data(frag), lwc_string_length(frag));
++	duk_concat(ctx, 2);
+ 	return 1;
+ %}
+ 
+diff --git a/content/handlers/javascript/duktape/Navigator.bnd b/content/handlers/javascript/duktape/Navigator.bnd
+index b18ca8e83..b31f51019 100644
+--- a/content/handlers/javascript/duktape/Navigator.bnd
++++ b/content/handlers/javascript/duktape/Navigator.bnd
+@@ -10,7 +10,41 @@
+ 
+ prologue Navigator()
+ %{
++#include <string.h>
++#include <sys/utsname.h>
+ #include "utils/useragent.h"
++#include "utils/nsoption.h"
++
++/* CRTOS: the languages the browser asks pages for (accept_language, "pl, en;q=0.5"), each
++ * without its weight; "en" when none are set. Pushes the first one, or with @all an array
++ * of all of them
++ */
++static void navigator_push_languages(duk_context *ctx, bool all)
++{
++	const char *al = nsoption_charp(accept_language);
++	duk_uarridx_t n = 0;
++
++	if (all)
++		duk_push_array(ctx);
++	if (al == NULL || al[0] == '\0')
++		al = "en";
++	while (*al != '\0') {
++		size_t len;
++
++		while (*al == ' ' || *al == ',')
++			al++;
++		len = strcspn(al, ",; ");
++		if (len > 0) {
++			duk_push_lstring(ctx, al, len);
++			if (!all)
++				return;
++			duk_put_prop_index(ctx, -2, n++);
++		}
++		al += strcspn(al, ",");
++	}
++	if (!all)
++		duk_push_string(ctx, "en");
++}
+ %}
+ 
+ method Navigator::taintEnabled()
+@@ -39,7 +73,13 @@ getter Navigator::appVersion()
+ 
+ getter Navigator::platform()
+ %{
+-	duk_push_string(ctx, NULL);
++	/* CRTOS: the system's name, as in the user agent (it was null) */
++	struct utsname u;
++
++	if (uname(&u) == 0)
++		duk_push_string(ctx, u.sysname);
++	else
++		duk_push_string(ctx, "");
+ 	return 1;
+ %}
+ 
+@@ -57,19 +97,40 @@ getter Navigator::productSub()
+ 
+ getter Navigator::vendor()
+ %{
+-	duk_push_string(ctx, NULL);
++	duk_push_string(ctx, ""); /* CRTOS: a string, as the standard has it (was null) */
+ 	return 1;
+ %}
+ 
+ getter Navigator::vendorSub()
+ %{
+-	duk_push_string(ctx, NULL);
++	duk_push_string(ctx, "");
+ 	return 1;
+ %}
+ 
+ getter Navigator::cookieEnabled()
+ %{
+-	duk_push_boolean(ctx, false);
++	/* CRTOS: the browser keeps cookies, pages' own too (document.cookie) */
++	duk_push_boolean(ctx, true);
++	return 1;
++%}
++
++/* CRTOS: the languages of accept_language, and always online (the pages came over the
++ * network) */
++getter Navigator::language()
++%{
++	navigator_push_languages(ctx, false);
++	return 1;
++%}
++
++getter Navigator::languages()
++%{
++	navigator_push_languages(ctx, true);
++	return 1;
++%}
++
++getter Navigator::onLine()
++%{
++	duk_push_boolean(ctx, true);
+ 	return 1;
+ %}
+ 
+diff --git a/content/handlers/javascript/duktape/Window.bnd b/content/handlers/javascript/duktape/Window.bnd
+index a5ff2002d..f797ba94f 100644
+--- a/content/handlers/javascript/duktape/Window.bnd
++++ b/content/handlers/javascript/duktape/Window.bnd
+@@ -24,10 +24,90 @@ class Window {
+ #include "netsurf/misc.h"
+ #include "utils/ring.h"
+ #include "netsurf/inttypes.h"
++#include "desktop/browser_private.h"
+ 
+ #define WINDOW_CALLBACKS MAGIC(WindowCallbacks)
+ #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
+ 
++/* CRTOS: the display's size, where the front end tells it (CRTOS: apps/netsurf/main.c) */
++extern int crtos_screen_width __attribute__((weak));
++extern int crtos_screen_height __attribute__((weak));
++
++/* CRTOS: CSSOM View's sizes, which the Web IDL here lacks (pages that lay themselves out by
++ * window.innerWidth got undefined): the viewport in CSS pixels (the page's scale taken into
++ * account; 0 before the window has one), the screen */
++static duk_ret_t window_push_size(duk_context *ctx, bool height)
++{
++	window_private_t *priv;
++	int w = 0, h = 0;
++	float scale;
++
++	duk_push_this(ctx);
++	duk_get_prop_string(ctx, -1, dukky_magic_string_private);
++	priv = duk_get_pointer(ctx, -1);
++	duk_pop_2(ctx);
++	if (priv != NULL && priv->win != NULL &&
++	    browser_window_get_dimensions(priv->win, &w, &h) == NSERROR_OK) {
++		scale = browser_window_get_scale(priv->win);
++		if (scale > 0) {
++			w = (int)(w / scale);
++			h = (int)(h / scale);
++		}
++	}
++	duk_push_int(ctx, height ? h : w);
++	return 1;
++}
++
++static duk_ret_t window_inner_width(duk_context *ctx)
++{
++	return window_push_size(ctx, false);
++}
++
++static duk_ret_t window_inner_height(duk_context *ctx)
++{
++	return window_push_size(ctx, true);
++}
++
++static duk_ret_t window_screen(duk_context *ctx)
++{
++	int w = &crtos_screen_width != NULL ? crtos_screen_width : 0;
++	int h = &crtos_screen_height != NULL ? crtos_screen_height : 0;
++
++	if (w <= 0 || h <= 0) {
++		/* no display size: the viewport's */
++		window_push_size(ctx, false);
++		w = duk_get_int(ctx, -1);
++		window_push_size(ctx, true);
++		h = duk_get_int(ctx, -1);
++		duk_pop_2(ctx);
++	}
++	duk_push_object(ctx);
++	duk_push_int(ctx, w);
++	duk_put_prop_string(ctx, -2, "width");
++	duk_push_int(ctx, h);
++	duk_put_prop_string(ctx, -2, "height");
++	duk_push_int(ctx, w);
++	duk_put_prop_string(ctx, -2, "availWidth");
++	duk_push_int(ctx, h);
++	duk_put_prop_string(ctx, -2, "availHeight");
++	/* the display's pixels (RGB565) */
++	duk_push_int(ctx, 16);
++	duk_put_prop_string(ctx, -2, "colorDepth");
++	duk_push_int(ctx, 16);
++	duk_put_prop_string(ctx, -2, "pixelDepth");
++	return 1;
++}
++
++static void window_add_getter(duk_context *ctx, const char *name, duk_c_function getter)
++{
++	/* ... proto */
++	duk_push_string(ctx, name);
++	duk_push_c_function(ctx, getter, 0);
++	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER |
++		     DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_ENUMERABLE |
++		     DUK_DEFPROP_HAVE_CONFIGURABLE | DUK_DEFPROP_CONFIGURABLE);
++}
++
+ static size_t next_handle = 0;
+ 
+ typedef struct window_schedule_s {
+@@ -408,6 +488,14 @@ prototype Window()
+ 		     DUK_DEFPROP_ENUMERABLE |
+ 		     DUK_DEFPROP_HAVE_CONFIGURABLE);
+ 	duk_pop(ctx);
++	/* CRTOS: CSSOM View's sizes (window_push_size) */
++	duk_dup(ctx, 0);
++	window_add_getter(ctx, "innerWidth", window_inner_width);
++	window_add_getter(ctx, "innerHeight", window_inner_height);
++	window_add_getter(ctx, "outerWidth", window_inner_width);
++	window_add_getter(ctx, "outerHeight", window_inner_height);
++	window_add_getter(ctx, "screen", window_screen);
++	duk_pop(ctx);
+ %}
+ 
+ getter Window::document()
+diff --git a/content/handlers/javascript/duktape/duk_custom.h b/content/handlers/javascript/duktape/duk_custom.h
+index b373719a3..9172d5d14 100644
+--- a/content/handlers/javascript/duktape/duk_custom.h
++++ b/content/handlers/javascript/duktape/duk_custom.h
+@@ -38,3 +38,12 @@ extern duk_bool_t dukky_check_timeout(void *udata);
+ #define DUK_USE_EXEC_TIMEOUT_CHECK dukky_check_timeout
+ 
+ #include "netsurf/inttypes.h"
++
++/* CRTOS: Date.now() from gettimeofday(). Duktape does not know the system, and its fallback,
++ * time(), counts whole seconds: scripts' timers and performance.now() could not measure
++ * anything shorter. */
++#if defined(__CRTOS__)
++#undef DUK_USE_DATE_NOW_TIME
++#define DUK_USE_DATE_NOW_GETTIMEOFDAY
++#include <sys/time.h>
++#endif
+diff --git a/content/handlers/javascript/duktape/dukky.c b/content/handlers/javascript/duktape/dukky.c
+index a780b0067..a04236dd3 100644
+--- a/content/handlers/javascript/duktape/dukky.c
++++ b/content/handlers/javascript/duktape/dukky.c
+@@ -46,6 +46,23 @@
+ 
+ #include <dom/dom.h>
+ 
++#if defined(__CRTOS__)
++#include <malloc.h>
++
++/* CRTOS: the heap with each page in the log - in use, what the heap has (the arena's and a
++ * window it grew into), the peak: pages with large scripts run the browser out of memory */
++static void dukky_log_heap(const char *when)
++{
++	struct mallinfo mi = mallinfo();
++
++	NSLOG(dukky, INFO, "heap %s: %lu KB used of %lu KB (peak %lu KB)", when,
++	      (unsigned long)(mi.uordblks >> 10), (unsigned long)(mi.arena >> 10),
++	      (unsigned long)(mi.usmblks >> 10));
++}
++#else
++#define dukky_log_heap(when) ((void)0)
++#endif
++
+ #define EVENT_MAGIC MAGIC(EVENT_MAP)
+ #define HANDLER_LISTENER_MAGIC MAGIC(HANDLER_LISTENER_MAP)
+ #define HANDLER_MAGIC MAGIC(HANDLER_MAP)
+@@ -62,6 +79,7 @@ struct jsheap {
+ 	bool pending_destroy; /**< Whether this heap is pending destruction */
+ 	unsigned int live_threads; /**< number of live threads */
+ 	uint64_t exec_start_time;
++	uint64_t exec_timeout_ms; /**< CRTOS: script_timeout, the longest a script may run */
+ };
+ 
+ /**
+@@ -609,13 +627,9 @@ js_newheap(int timeout, jsheap **heap)
+ 		ret,
+ 		NULL);
+ 	if (ret->ctx == NULL) { free(ret); return NSERROR_NOMEM; }
+-	/* Create the prototype stuffs */
+-	duk_push_global_object(ctx);
+-	duk_push_boolean(ctx, true);
+-	duk_put_prop_string(ctx, -2, "protos");
+-	duk_put_global_string(ctx, PROTO_MAGIC);
+-	/* Create prototypes here */
+-	dukky_create_prototypes(ctx);
++	/* CRTOS: the script_timeout option (seconds), which the check below did not use */
++	ret->exec_timeout_ms = (uint64_t)(timeout > 0 ? timeout : 10) * 1000;
++	/* CRTOS: no prototypes here - every thread makes its own (js_newthread) */
+ 	/* Now create the thread map */
+ 	duk_push_object(ctx);
+ 	duk_put_global_string(ctx, THREAD_MAP);
+@@ -643,6 +657,111 @@ void js_destroyheap(jsheap *heap)
+ 	}
+ }
+ 
++/* CRTOS: the scripts every page runs first (polyfill_scripts), compiled for the first page and
++ * kept as bytecode for the others - compiling their 270 KB took a second for every page */
++#define POLYFILL_COUNT (sizeof(polyfill_scripts) / sizeof(polyfill_scripts[0]))
++static struct polyfill_code {
++	void *code;
++	duk_size_t len;
++} polyfill_code[POLYFILL_COUNT];
++
++/* script -> undefined: its bytecode kept in @udata (a struct polyfill_code) */
++static duk_ret_t dukky_keep_polyfill(duk_context *ctx, void *udata)
++{
++	struct polyfill_code *pc = udata;
++	duk_size_t len;
++	void *data;
++
++	duk_dump_function(ctx);
++	data = duk_get_buffer(ctx, -1, &len);
++	pc->code = malloc(len);
++	if (pc->code != NULL) {
++		memcpy(pc->code, data, len);
++		pc->len = len;
++		NSLOG(dukky, INFO, "kept %lu bytes of bytecode", (unsigned long)len);
++	}
++	return 0;
++}
++
++/* -> script, from the bytecode in @udata */
++static duk_ret_t dukky_load_polyfill(duk_context *ctx, void *udata)
++{
++	struct polyfill_code *pc = udata;
++
++	memcpy(duk_push_fixed_buffer(ctx, pc->len), pc->code, pc->len);
++	duk_load_function(ctx);
++	return 1;
++}
++
++/* CRTOS: the scripts every page runs first (polyfill.js.inc: NetSurf's polyfill.js, the
++ * polyfill library and ours, tools/netsurf_prepare.py), run when the page's own code is about
++ * to run for the first time - a script, an event handler (the callers of this) - so
++ * that a page without them does without their quarter of a second and most of a megabyte.
++ * Each is run by itself: one that fails is logged and the page keeps the others and its own
++ * scripts; from the second page on from their bytecode (polyfill_code). */
++#define POLYFILLED_MAGIC MAGIC(Polyfilled)
++static void dukky_polyfill(duk_context *ctx)
++{
++	uint64_t start, done;
++
++	/* ... */
++	duk_push_global_object(ctx);
++	if (duk_get_prop_string(ctx, -1, POLYFILLED_MAGIC)) {
++		duk_pop_2(ctx);
++		return;
++	}
++	duk_pop(ctx);
++	/* marked first: an event these scripts cause does not start them again */
++	duk_push_true(ctx);
++	duk_put_prop_string(ctx, -2, POLYFILLED_MAGIC);
++	duk_pop(ctx);
++	(void) nsu_getmonotonic_ms(&start);
++	for (size_t i = 0; i < POLYFILL_COUNT; i++) {
++		struct polyfill_code *pc = &polyfill_code[i];
++
++		/* ... */
++		if (pc->code == NULL ||
++		    duk_safe_call(ctx, dukky_load_polyfill, pc, 0, 1) != DUK_EXEC_SUCCESS) {
++			if (pc->code != NULL) {
++				/* ..., err */
++				duk_pop(ctx);
++			}
++			duk_push_string(ctx, polyfill_scripts[i].name);
++			/* ..., name */
++			if (duk_pcompile_lstring_filename(ctx, DUK_COMPILE_EVAL,
++							  (const char *)polyfill_scripts[i].src,
++							  polyfill_scripts[i].len) != 0) {
++				NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(ctx, -1));
++				NSLOG(dukky, CRITICAL, "Unable to compile %s",
++				      polyfill_scripts[i].name);
++				duk_pop(ctx);
++				continue;
++			}
++			if (pc->code == NULL) {
++				/* ..., script, script -> ..., script, undefined */
++				duk_dup_top(ctx);
++				if (duk_safe_call(ctx, dukky_keep_polyfill, pc, 1, 1) != DUK_EXEC_SUCCESS)
++					NSLOG(dukky, WARNING, "Unable to keep %s compiled: %s",
++					      polyfill_scripts[i].name,
++					      duk_safe_to_string(ctx, -1));
++				duk_pop(ctx);
++			}
++		}
++		/* ..., (script) */
++		if (dukky_pcall(ctx, 0, true) != 0) {
++			NSLOG(dukky, CRITICAL, "Unable to run %s",
++			      polyfill_scripts[i].name);
++		}
++		/* ..., result */
++		duk_pop(ctx);
++		/* ... */
++	}
++	(void) nsu_getmonotonic_ms(&done);
++	NSLOG(dukky, INFO, "Scripts every page runs first ready in %lu ms",
++	      (unsigned long)(done - start));
++	dukky_log_heap("after them");
++}
++
+ /* Just for here, the CTX is in ret, not thread */
+ #define CTX (ret->ctx)
+ 
+@@ -650,9 +769,11 @@ void js_destroyheap(jsheap *heap)
+ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **thread)
+ {
+ 	jsthread *ret;
++	uint64_t start, protos, done; /* CRTOS: what a page's JavaScript costs before its scripts */
+ 	assert(heap != NULL);
+ 	assert(heap->pending_destroy == false);
+ 
++	(void) nsu_getmonotonic_ms(&start);
+ 	ret = calloc(1, sizeof (*ret));
+ 	if (ret == NULL) {
+ 		NSLOG(dukky, ERROR, "Unable to allocate new JS thread structure");
+@@ -665,13 +786,24 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
+ 
+ 	/* create new thread */
+ 	duk_get_global_string(heap->ctx, THREAD_MAP); /* ... threads */
+-	duk_push_thread(heap->ctx); /* ... threads thread */
++	/* CRTOS: with a global environment of its own - fresh built-ins (Object, Array, ...)
++	 * and, below, DOM prototypes for each page, as browsers give every document. The
++	 * heap lasts as long as the window: shared, they let a page change the functions the
++	 * next page there runs (Array.prototype.join of a login form's script, say). */
++	duk_push_thread_new_globalenv(heap->ctx); /* ... threads thread */
+ 	ret->heap = heap;
+ 	ret->ctx = duk_require_context(heap->ctx, -1);
+ 	ret->thread_idx = heap->next_thread++;
+ 	duk_put_prop_index(heap->ctx, -2, ret->thread_idx);
+ 	heap->live_threads++;
+ 	duk_pop(heap->ctx); /* ... */
++	/* the prototypes, in the thread's global object (the table PROTO_MAGIC names) */
++	duk_push_global_object(CTX);
++	duk_push_boolean(CTX, true);
++	duk_put_prop_string(CTX, -2, "protos");
++	duk_put_global_string(CTX, PROTO_MAGIC);
++	dukky_create_prototypes(CTX);
++	(void) nsu_getmonotonic_ms(&protos);
+ 	duk_push_int(CTX, 0);
+ 	duk_push_int(CTX, 1);
+ 	duk_push_int(CTX, 2);
+@@ -696,25 +828,7 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
+ 	duk_put_global_string(CTX, EVENT_MAGIC);
+ 
+ 	/* Now load the polyfills */
+-	/* ... */
+-	duk_push_string(CTX, "polyfill.js");
+-	/* ..., polyfill.js */
+-	if (duk_pcompile_lstring_filename(CTX, DUK_COMPILE_EVAL,
+-					  (const char *)polyfill_js, polyfill_js_len) != 0) {
+-		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
+-		NSLOG(dukky, CRITICAL, "Unable to compile polyfill.js, thread aborted");
+-		js_destroythread(ret);
+-		return NSERROR_INIT_FAILED;
+-	}
+-	/* ..., (generics.js) */
+-	if (dukky_pcall(CTX, 0, true) != 0) {
+-		NSLOG(dukky, CRITICAL, "Unable to run polyfill.js, thread aborted");
+-		js_destroythread(ret);
+-		return NSERROR_INIT_FAILED;
+-	}
+-	/* ..., result */
+-	duk_pop(CTX);
+-	/* ... */
++	/* CRTOS: before the page's own code first runs (dukky_polyfill) */
+ 
+ 	/* Now load the NetSurf table in */
+ 	/* ... */
+@@ -750,6 +864,10 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
+ 	NSLOG(dukky, DEBUG, "New thread is %p in heap %p", thread, heap);
+ 	*thread = ret;
+ 
++	(void) nsu_getmonotonic_ms(&done);
++	NSLOG(dukky, INFO, "JavaScript for a page ready in %lu ms (prototypes %lu ms)",
++	      (unsigned long)(done - start), (unsigned long)(protos - start));
++	dukky_log_heap("with a new page");
+ 	return NSERROR_OK;
+ }
+ 
+@@ -839,7 +957,6 @@ static void dukky_leave_thread(jsthread *thread)
+ 
+ duk_bool_t dukky_check_timeout(void *udata)
+ {
+-#define JS_EXEC_TIMEOUT_MS 10000 /* 10 seconds */
+ 	jsheap *heap = (jsheap *) udata;
+ 	uint64_t now;
+ 
+@@ -850,7 +967,7 @@ duk_bool_t dukky_check_timeout(void *udata)
+ 	 * start time.
+ 	 */
+ 	return heap->exec_start_time != 0 &&
+-			now > (heap->exec_start_time + JS_EXEC_TIMEOUT_MS);
++			now > (heap->exec_start_time + heap->exec_timeout_ms);
+ }
+ 
+ static void dukky_dump_error(duk_context *ctx)
+@@ -936,6 +1053,7 @@ js_exec(jsthread *thread, const uint8_t *txt, size_t txtlen, const char *name)
+ 	dukky_enter_thread(thread);
+ 
+ 	duk_set_top(CTX, 0);
++	dukky_polyfill(CTX); /* CRTOS */
+ 	NSLOG(dukky, DEEPDEBUG, "Running %"PRIsizet" bytes from %s", txtlen, name);
+ 	/* NSLOG(dukky, DEEPDEBUG, "\n%s\n", txt); */
+ 
+@@ -1140,7 +1258,13 @@ bool dukky_get_current_value_of_event_handler(duk_context *ctx,
+ 	return true;
+ }
+ 
+-static void dukky_generic_event_handler(dom_event *evt, void *pw)
++/* CRTOS: a node has two libdom listeners for a type scripts listen to, one for the capture
++ * phase and one for the target and bubbling phases (dukky_register_event_listener_for): each
++ * calls the script listeners of its kind, the second also the node's event handler (onclick
++ * and the like). With one, registered as the first script listener was, the others' phase
++ * was missed - a capture listener first, and the node's listeners for events bubbling up from
++ * its children never ran. */
++static void dukky_event_handler(dom_event *evt, void *pw, bool capturing)
+ {
+ 	duk_context *ctx = (duk_context *)pw;
+ 	dom_string *name;
+@@ -1150,6 +1274,9 @@ static void dukky_generic_event_handler(dom_event *evt, void *pw)
+ 	duk_uarridx_t idx;
+ 	event_listener_flags flags;
+ 
++	/* CRTOS: registered where a script listens or an element has an event handler */
++	dukky_polyfill(ctx);
++
+ 	NSLOG(dukky, DEBUG, "Handling an event in duktape interface...");
+ 	exc = dom_event_get_type(evt, &name);
+ 	if (exc != DOM_NO_ERR) {
+@@ -1177,7 +1304,7 @@ static void dukky_generic_event_handler(dom_event *evt, void *pw)
+ 	/* If we're capturing right now, we skip the 'event handler'
+ 	 * and go straight to the extras
+ 	 */
+-	if (phase == DOM_CAPTURING_PHASE)
++	if (capturing)
+ 		goto handle_extras;
+ 
+ 	/* ... */
+@@ -1245,23 +1372,30 @@ handle_extras:
+ 	/* ... sublisteners */
+ 	duk_push_array(ctx);
+ 	/* ... sublisteners copy */
+-	idx = 0;
+-	while (duk_get_prop_index(ctx, -2, idx)) {
+-		/* ... sublisteners copy handler */
+-		duk_get_prop_index(ctx, -1, 1);
+-		/* ... sublisteners copy handler flags */
+-		if ((event_listener_flags)duk_to_int(ctx, -1) & ELF_ONCE) {
+-			duk_dup(ctx, -4);
+-			/* ... subl copy handler flags subl */
+-			dukky_shuffle_array(ctx, idx);
+-			duk_pop(ctx);
+-			/* ... subl copy handler flags */
++	/* CRTOS: every listener into the copy, and off the list the once-only ones of this
++	 * phase (shuffling the list down had skipped the listener after each one taken off) */
++	{
++		duk_uarridx_t n = 0;
++		idx = 0;
++		while (duk_get_prop_index(ctx, -2, idx)) {
++			/* ... sublisteners copy handler */
++			duk_dup_top(ctx);
++			duk_put_prop_index(ctx, -3, n++);
++			duk_get_prop_index(ctx, -1, 1);
++			/* ... sublisteners copy handler flags */
++			flags = (event_listener_flags)duk_to_int(ctx, -1);
++			duk_pop_2(ctx);
++			/* ... sublisteners copy */
++			if ((flags & ELF_ONCE) && !!(flags & ELF_CAPTURE) == capturing) {
++				duk_dup(ctx, -2);
++				/* ... subl copy subl */
++				dukky_shuffle_array(ctx, idx);
++				duk_pop(ctx);
++				/* ... subl copy */
++			} else {
++				idx++;
++			}
+ 		}
+-		duk_pop(ctx);
+-		/* ... sublisteners copy handler */
+-		duk_put_prop_index(ctx, -2, idx);
+-		/* ... sublisteners copy */
+-		idx++;
+ 	}
+ 	/* ... sublisteners copy undefined */
+ 	duk_pop(ctx);
+@@ -1285,8 +1419,8 @@ handle_extras:
+ 		flags = (event_listener_flags)duk_get_int(ctx, -1);
+ 		duk_pop(ctx);
+ 		/* ... copy handler callback */
+-		if (((phase == DOM_CAPTURING_PHASE) && !(flags & ELF_CAPTURE)) ||
+-		    ((phase != DOM_CAPTURING_PHASE) && (flags & ELF_CAPTURE))) {
++		if (!!(flags & ELF_CAPTURE) != capturing) {
++			/* CRTOS: the other libdom listener's */
+ 			duk_pop_2(ctx);
+ 			/* ... copy */
+ 			continue;
+@@ -1341,6 +1475,16 @@ out:
+ 	dom_string_unref(name);
+ }
+ 
++static void dukky_capture_event_handler(dom_event *evt, void *pw)
++{
++	dukky_event_handler(evt, pw, true);
++}
++
++static void dukky_generic_event_handler(dom_event *evt, void *pw)
++{
++	dukky_event_handler(evt, pw, false);
++}
++
+ void dukky_register_event_listener_for(duk_context *ctx,
+ 				       struct dom_element *ele,
+ 				       dom_string *name,
+@@ -1385,21 +1529,27 @@ void dukky_register_event_listener_for(duk_context *ctx,
+ 		return;
+ 	}
+ 
+-	/* Otherwise add an event listener to the element */
+-	exc = dom_event_listener_create(dukky_generic_event_handler, ctx,
+-					&listen);
+-	if (exc != DOM_NO_ERR) return;
+-	exc = dom_event_target_add_event_listener(
+-		ele, name, listen, capture);
+-	if (exc != DOM_NO_ERR) {
+-		NSLOG(dukky, DEBUG,
+-		      "Unable to register listener for %p.%*s", ele,
+-		      (int)dom_string_length(name), dom_string_data(name));
+-	} else {
+-		NSLOG(dukky, DEBUG, "have registered listener for %p.%*s",
+-		      ele, (int)dom_string_length(name), dom_string_data(name));
++	/* Otherwise add event listeners to the element: CRTOS - one for each
++	 * phase, whatever @capture is (dukky_event_handler); the capture one
++	 * first, as its listeners go first at the target */
++	(void) capture;
++	for (int i = 0; i < 2; i++) {
++		exc = dom_event_listener_create(i == 0 ? dukky_capture_event_handler :
++						dukky_generic_event_handler, ctx,
++						&listen);
++		if (exc != DOM_NO_ERR) return;
++		exc = dom_event_target_add_event_listener(
++			ele, name, listen, i == 0);
++		if (exc != DOM_NO_ERR) {
++			NSLOG(dukky, DEBUG,
++			      "Unable to register listener for %p.%*s", ele,
++			      (int)dom_string_length(name), dom_string_data(name));
++		} else {
++			NSLOG(dukky, DEBUG, "have registered listener for %p.%*s",
++			      ele, (int)dom_string_length(name), dom_string_data(name));
++		}
++		dom_event_listener_unref(listen);
+ 	}
+-	dom_event_listener_unref(listen);
+ }
+ 
+ /* The sub-listeners are a list of {callback,flags} tuples */
+@@ -1564,6 +1714,116 @@ void js_event_cleanup(jsthread *thread, struct dom_event *evt)
+ 	dukky_leave_thread(thread);
+ }
+ 
++/* CRTOS: calls the listeners scripts added to the Window (window.addEventListener) for the
++ * type of @evt, this being the Window: libdom dispatches only at nodes, so they never ran -
++ * not even for load, which called window.onload alone. As the extras of
++ * dukky_event_handler do for a node, the listeners are called from a copy (they may
++ * add or remove others), once-only ones are taken off the list, and those removed meanwhile
++ * are skipped. Returns whether the event was not cancelled. */
++bool dukky_window_listeners(duk_context *ctx, dom_event *evt)
++{
++	dom_string *name;
++	duk_uarridx_t idx, n = 0;
++	bool prevented = false;
++
++	if (dom_event_get_type(evt, &name) != DOM_NO_ERR || name == NULL)
++		return true;
++	/* ... */
++	duk_push_lstring(ctx, dom_string_data(name), dom_string_length(name));
++	dom_string_unref(name);
++	duk_push_global_object(ctx);
++	/* ... type Window */
++	if (dukky_event_target_push_listeners(ctx, true)) {
++		/* ... undefined: none */
++		duk_pop(ctx);
++		return true;
++	}
++	dukky_polyfill(ctx);
++	/* ... listeners */
++	duk_push_array(ctx);
++	/* ... listeners copy */
++	idx = 0;
++	while (duk_get_prop_index(ctx, -2, idx)) {
++		event_listener_flags flags;
++		/* ... listeners copy entry */
++		duk_dup_top(ctx);
++		duk_put_prop_index(ctx, -3, n++);
++		duk_get_prop_index(ctx, -1, 1);
++		/* ... listeners copy entry flags */
++		flags = (event_listener_flags)duk_to_int(ctx, -1);
++		duk_pop_2(ctx);
++		/* ... listeners copy */
++		if (flags & ELF_ONCE) {
++			duk_dup(ctx, -2);
++			dukky_shuffle_array(ctx, idx);
++			duk_pop(ctx);
++		} else {
++			idx++;
++		}
++	}
++	/* ... listeners copy undefined */
++	duk_pop(ctx);
++	duk_remove(ctx, -2);
++	/* ... copy */
++	for (idx = 0; idx < n; idx++) {
++		duk_get_prop_index(ctx, -1, idx);
++		/* ... copy entry */
++		if (duk_get_prop_index(ctx, -1, 2)) {
++			/* removed meanwhile (removeEventListener marks it so) */
++			duk_pop_2(ctx);
++			continue;
++		}
++		duk_pop(ctx);
++		duk_get_prop_index(ctx, -1, 0);
++		/* ... copy entry callback */
++		duk_push_global_object(ctx);
++		dukky_push_event(ctx, evt);
++		/* ... copy entry callback Window event */
++		dukky_reset_start_time(ctx);
++		if (duk_pcall_method(ctx, 1) != 0)
++			dukky_dump_error(ctx);
++		/* ... copy entry result */
++		duk_pop_2(ctx);
++		/* ... copy */
++	}
++	duk_pop(ctx);
++	/* ... */
++	(void) dom_event_is_default_prevented(evt, &prevented);
++	return !prevented;
++}
++
++/* CRTOS: DOMContentLoaded (NetSurf had only the comment where it is fired): at the document,
++ * to its listeners through libdom, then at the Window, as it bubbles there */
++static bool dukky_fire_content_loaded(jsthread *thread, struct dom_document *doc)
++{
++	dom_exception exc;
++	dom_event *evt;
++	dom_string *type;
++	bool success;
++
++	exc = dom_string_create((const uint8_t *)"DOMContentLoaded",
++				SLEN("DOMContentLoaded"), &type);
++	if (exc != DOM_NO_ERR) return true;
++	exc = dom_event_create(&evt);
++	if (exc != DOM_NO_ERR) {
++		dom_string_unref(type);
++		return true;
++	}
++	exc = dom_event_init(evt, type, true, false);
++	dom_string_unref(type);
++	if (exc != DOM_NO_ERR) {
++		dom_event_unref(evt);
++		return true;
++	}
++	dukky_enter_thread(thread);
++	(void) dom_event_target_dispatch_event(doc, evt, &success);
++	(void) dukky_window_listeners(CTX, evt);
++	dukky_leave_thread(thread);
++	js_event_cleanup(thread, evt);
++	dom_event_unref(evt);
++	return true;
++}
++
+ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
+ {
+ 	dom_exception exc;
+@@ -1582,6 +1842,9 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 		/* Swallow non-Window-targetted events quietly */
+ 		return true;
+ 
++	if (strcmp(type, "DOMContentLoaded") == 0)
++		return dukky_fire_content_loaded(thread, doc);
++
+ 	if (strcmp(type, "load") != 0)
+ 		/* Swallow non-load events quietly */
+ 		return true;
+@@ -1616,6 +1879,10 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 		/* ... handlers */
+ 		exc = dom_html_document_get_body(doc, &body);
+ 		if (exc != DOM_NO_ERR) {
++			/* CRTOS: the Window's listeners all the same */
++			duk_pop(CTX);
++			(void) dukky_window_listeners(CTX, evt);
++			js_event_cleanup(thread, evt);
+ 			dom_event_unref(evt);
+ 			dukky_leave_thread(thread);
+ 			return true;
+@@ -1628,6 +1895,11 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 			dom_node_unref(body);
+ 			/* ... handlers */
+ 			duk_pop(CTX);
++			/* CRTOS: no onload, but the Window's listeners (and the
++			 * event was not released here) */
++			(void) dukky_window_listeners(CTX, evt);
++			js_event_cleanup(thread, evt);
++			dom_event_unref(evt);
+ 			dukky_leave_thread(thread);
+ 			return true;
+ 		}
+@@ -1641,6 +1913,7 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 	/* ... handler handlers */
+ 	duk_pop(CTX);
+ 	/* ... handler */
++	dukky_polyfill(CTX); /* CRTOS */
+ 	duk_push_global_object(CTX);
+ 	/* ... handler Window */
+ 	dukky_push_event(CTX, evt);
+@@ -1668,6 +1941,7 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 
+ 		duk_pop_n(CTX, 6);
+ 		/* ... */
++		(void) dukky_window_listeners(CTX, evt); /* CRTOS */
+ 		js_event_cleanup(thread, evt);
+ 		dom_event_unref(evt);
+ 		dukky_leave_thread(thread);
+@@ -1676,6 +1950,7 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
+ 	/* ... result */
+ 	duk_pop(CTX);
+ 	/* ... */
++	(void) dukky_window_listeners(CTX, evt); /* CRTOS */
+ 	js_event_cleanup(thread, evt);
+ 	dom_event_unref(evt);
+ 	dukky_leave_thread(thread);
+diff --git a/content/handlers/javascript/duktape/dukky.h b/content/handlers/javascript/duktape/dukky.h
+index 5a67951dc..9fdaccfc9 100644
+--- a/content/handlers/javascript/duktape/dukky.h
++++ b/content/handlers/javascript/duktape/dukky.h
+@@ -48,6 +48,10 @@ typedef enum {
+ 
+ void dukky_shuffle_array(duk_context *ctx, duk_uarridx_t idx);
+ 
++/* CRTOS: call the Window's listeners for an event (libdom dispatches at nodes only);
++ * false when one cancelled it */
++bool dukky_window_listeners(duk_context *ctx, dom_event *evt);
++
+ /* pcall something, and if it errored, also dump the error to the log */
+ duk_int_t dukky_pcall(duk_context *ctx, duk_size_t argc, bool reset_timeout);
+ 
+diff --git a/desktop/browser_history.c b/desktop/browser_history.c
+index 42a152ee7..91c3eddd0 100644
+--- a/desktop/browser_history.c
++++ b/desktop/browser_history.c
+@@ -413,6 +413,22 @@ browser_window_history_add(struct browser_window *bw,
+ 	}
+ 	history->current = entry;
+ 
++#if defined(__CRTOS__)
++	/* CRTOS: thumbnails for the last few pages back only - each takes
++	 * some 40 KB of the browser's 8 MB heap, and a long session's
++	 * history held megabytes of them (the local history shows the
++	 * others without a picture) */
++	{
++		struct history_entry *e = entry;
++		for (int n = 0; e != NULL; e = e->back, n++) {
++			if (n >= 8 && e->page.bitmap != NULL) {
++				guit->bitmap->destroy(e->page.bitmap);
++				e->page.bitmap = NULL;
++			}
++		}
++	}
++#endif
++
+ 	browser_window_history__layout(history);
+ 
+ 	return NSERROR_OK;
+diff --git a/desktop/browser_window.c b/desktop/browser_window.c
+index 226741be5..155fa3385 100644
+--- a/desktop/browser_window.c
++++ b/desktop/browser_window.c
+@@ -4182,8 +4182,14 @@ void browser_window_set_status(struct browser_window *bw, const char *text)
+ 
+ 	if ((bw->status.text == NULL) || (bw->status.text_len < text_len)) {
+ 		/* no current string allocation or it is not long enough */
++		char *copy = strdup(text);
++		if (copy == NULL) {
++			/* CRTOS: out of memory - the old text stays (the NULL
++			 * that went to the front end crashed it) */
++			return;
++		}
+ 		free(bw->status.text);
+-		bw->status.text = strdup(text);
++		bw->status.text = copy;
+ 		bw->status.text_len = text_len;
+ 	} else {
+ 		/* current allocation has enough space */
+diff --git a/desktop/netsurf.c b/desktop/netsurf.c
+index bd785898f..ae6530b8c 100644
+--- a/desktop/netsurf.c
++++ b/desktop/netsurf.c
+@@ -78,7 +78,13 @@
+ #define IMAGE_CACHE_CLEAN_TIME (10 * 1000)
+ 
+ /** default time between content cache cleans. */
++#if defined(__CRTOS__)
++/* CRTOS: contents no window shows any more go after 3 s, not 20 - with their scripts' memory
++ * (up to a megabyte a page), a few pages visited quickly filled the browser's 8 MB heap */
++#define HL_CACHE_CLEAN_TIME (3 * 1000)
++#else
+ #define HL_CACHE_CLEAN_TIME (2 * IMAGE_CACHE_CLEAN_TIME)
++#endif
+ 
+ /** ensure there is a minimal amount of memory for source objetcs and
+  * decoded bitmaps.
+diff --git a/frontends/framebuffer/bitmap.c b/frontends/framebuffer/bitmap.c
+index c9b58541e..195e0b4b4 100644
+--- a/frontends/framebuffer/bitmap.c
++++ b/frontends/framebuffer/bitmap.c
+@@ -39,6 +39,11 @@
+ #include "framebuffer/framebuffer.h"
+ #include "framebuffer/bitmap.h"
+ 
++/** widest render of a page for its thumbnail (local history) */
++#ifndef FB_THUMBNAIL_RENDER_WIDTH
++#define FB_THUMBNAIL_RENDER_WIDTH 1024
++#endif
++
+ /**
+  * Create a bitmap.
+  *
+@@ -229,10 +234,12 @@ bitmap_render(struct bitmap *bitmap,
+ 
+ 	/* Calculate size of buffer to render the content into */
+ 	/* We get the width from the largest of the bitmap width and the content
+-	 * width, unless it exceeds 1024, in which case we use 1024. This means
+-	 * we never create excessively large render buffers for huge contents,
+-	 * which would eat memory and cripple performance. */
+-	cwidth = max(width, min(content_get_width(content), 1024));
++	 * width, unless it exceeds FB_THUMBNAIL_RENDER_WIDTH (1024 unless the
++	 * build sets it), in which case we use that. This means we never create
++	 * excessively large render buffers for huge contents, which would eat
++	 * memory and cripple performance. */
++	cwidth = max(width, min(content_get_width(content),
++				FB_THUMBNAIL_RENDER_WIDTH));
+ 	/* The height is set in proportion with the width, according to the
+ 	 * aspect ratio of the required thumbnail. */
+ 	cheight = ((cwidth * height) + (width / 2)) / width;
+diff --git a/frontends/framebuffer/clipboard.c b/frontends/framebuffer/clipboard.c
+index 20a00e038..4fe76490d 100644
+--- a/frontends/framebuffer/clipboard.c
++++ b/frontends/framebuffer/clipboard.c
+@@ -39,6 +39,12 @@ static struct gui_clipboard {
+ 	size_t length;
+ } gui_clipboard;
+ 
++/* CRTOS: the system clipboard (apps/netsurf/nsfb_crtos.c), shared with the other
++ * programs; the local buffer above serves when it cannot be reached
++ */
++int crtos_clipboard_set(const char *text, size_t len);
++char *crtos_clipboard_get(size_t *len);
++
+ 
+ /**
+  * Core asks front end for clipboard contents.
+@@ -51,6 +57,12 @@ static void gui_get_clipboard(char **buffer, size_t *length)
+ 	*buffer = NULL;
+ 	*length = 0;
+ 
++	/* CRTOS: the system clipboard first */
++	*buffer = crtos_clipboard_get(length);
++	if (*buffer != NULL) {
++		return;
++	}
++
+ 	if (gui_clipboard.length > 0) {
+ 		assert(gui_clipboard.buffer != NULL);
+ 		NSLOG(netsurf, INFO, "Pasting %zd bytes: \"%s\"\n",
+@@ -95,6 +107,9 @@ static void gui_set_clipboard(const char *buffer, size_t length,
+ 	memcpy(gui_clipboard.buffer, buffer, length);
+ 	gui_clipboard.length = length;
+ 	gui_clipboard.buffer[gui_clipboard.length] = '\0';
++
++	/* CRTOS: and the system clipboard */
++	crtos_clipboard_set(buffer, length);
+ }
+ 
+ static struct gui_clipboard_table clipboard_table = {
+diff --git a/frontends/framebuffer/fbtk/event.c b/frontends/framebuffer/fbtk/event.c
+index 7a580911b..75cacc41d 100644
+--- a/frontends/framebuffer/fbtk/event.c
++++ b/frontends/framebuffer/fbtk/event.c
+@@ -74,6 +74,32 @@ fbtk_click(fbtk_widget_t *widget, nsfb_event_t *event)
+ 
+ 	clicked = fbtk_get_widget_at(root, cloc.x0, cloc.y0);
+ 
++	/* A button release belongs to the widget that got the press, also
++	 * when the pointer has left it (easy on a touch screen): the
++	 * browser and scroll bars end their drags there, and a button
++	 * released away from itself is not activated (a press in the URL
++	 * bar released over the close button used to quit).
++	 */
++	if ((event->value.keycode >= NSFB_KEY_MOUSE_1) &&
++	    (event->value.keycode <= NSFB_KEY_MOUSE_3)) {
++		if (event->type == NSFB_EVENT_KEY_DOWN) {
++			if (root->u.root.pressed == NULL)
++				root->u.root.pressed = clicked;
++		} else if (event->type == NSFB_EVENT_KEY_UP) {
++			fbtk_widget_t *pressed = root->u.root.pressed;
++
++			root->u.root.pressed = NULL;
++			if (pressed == NULL)
++				return; /* no press, or its widget is gone */
++			if ((pressed != clicked) &&
++			    ((pressed->type == FB_WIDGET_TYPE_BITMAP) ||
++			     ((pressed->type == FB_WIDGET_TYPE_TEXT) &&
++			      (fbtk_get_handler(pressed, FBTK_CBT_INPUT) == NULL))))
++				return; /* a button, released elsewhere */
++			clicked = pressed;
++		}
++	}
++
+ 	if (clicked == NULL)
+ 		return;
+ 
+@@ -148,15 +174,21 @@ fbtk_warp_pointer(fbtk_widget_t *widget, int x, int y, bool relative)
+ 
+ 		moved = fbtk_get_widget_at(root, cloc.x0, cloc.y0);
+ 
+-		x = fbtk_get_absx(moved);
+-		y = fbtk_get_absy(moved);
+-
+ 		/* post enter and leaving messages */
+ 		if (moved != root->u.root.prev) {
+ 			fbtk_post_callback(root->u.root.prev, FBTK_CBT_POINTERLEAVE);
+ 			root->u.root.prev = moved;
+ 			fbtk_post_callback(root->u.root.prev, FBTK_CBT_POINTERENTER);
+ 		}
++
++		/* while a button is held, the widget that got the press
++		 * follows the pointer (so the browser sees a drag start)
++		 */
++		if (root->u.root.pressed != NULL)
++			moved = root->u.root.pressed;
++
++		x = fbtk_get_absx(moved);
++		y = fbtk_get_absy(moved);
+ 	} else {
+ 		/* pointer movement has been grabbed by a widget */
+ 		moved = root->u.root.grabbed;
+diff --git a/frontends/framebuffer/fbtk/fbtk.c b/frontends/framebuffer/fbtk/fbtk.c
+index 91f6e2570..349c4bee4 100644
+--- a/frontends/framebuffer/fbtk/fbtk.c
++++ b/frontends/framebuffer/fbtk/fbtk.c
+@@ -292,6 +292,19 @@ fbtk_destroy_widget(fbtk_widget_t *widget)
+ 
+ 	parent = widget->parent;
+ 	if (parent != NULL) {
++		fbtk_widget_t *root = fbtk_get_root_widget(widget);
++
++		/* the pointer and focus state must not refer to it */
++		if (root != NULL) {
++			if (root->u.root.pressed == widget)
++				root->u.root.pressed = NULL;
++			if (root->u.root.grabbed == widget)
++				root->u.root.grabbed = NULL;
++			if (root->u.root.prev == widget)
++				root->u.root.prev = NULL;
++			if (root->u.root.input == widget)
++				root->u.root.input = NULL;
++		}
+ 
+ 		/* unlink from siblings */
+ 		if (widget->prev != NULL) {
+diff --git a/frontends/framebuffer/fbtk/text.c b/frontends/framebuffer/fbtk/text.c
+index 9c96dcef4..5b8dee970 100644
+--- a/frontends/framebuffer/fbtk/text.c
++++ b/frontends/framebuffer/fbtk/text.c
+@@ -52,6 +52,13 @@
+ /* Convert pixels to points, assuming a DPI of 90 */
+ #define px_to_pt(x) (((x) * 72) / FBTK_DPI)
+ 
++/* CRTOS: behind a writable text selected whole (0xAABBGGRR: light blue) */
++#define TEXT_SELECTION_COLOUR 0xFFF0C8A8
++
++/* CRTOS: the system clipboard (apps/netsurf/nsfb_crtos.c) */
++int crtos_clipboard_set(const char *text, size_t len);
++char *crtos_clipboard_get(size_t *len);
++
+ /* Get a font style for a text input */
+ static inline void
+ fb_text_font_style(fbtk_widget_t *widget, int *font_height, int *padding,
+@@ -141,9 +148,25 @@ fb_redraw_text(fbtk_widget_t *widget, fbtk_callback_info *cbi )
+ 		y += 1;
+ #endif
+ 
+-		if (caret && widget->width - padding - padding < caret_x) {
+-			scroll = (widget->width - padding - padding) - caret_x;
+-			x +=  scroll;
++		/* while it is edited, the text scrolls with the caret */
++		if (caret) {
++			scroll = -widget->u.text.scroll;
++			x += scroll;
++		}
++
++		/* CRTOS: the whole text selected: on the selection colour */
++		if (caret && widget->u.text.all && widget->u.text.len > 0) {
++			nsfb_bbox_t sel;
++
++			sel.x0 = x < bbox.x0 ? bbox.x0 : x;
++			sel.y0 = bbox.y0 + padding;
++			sel.x1 = x + widget->u.text.width + 1;
++			if (sel.x1 > bbox.x1)
++				sel.x1 = bbox.x1;
++			sel.y1 = bbox.y1 - padding;
++			nsfb_plot_rectangle_fill(root->u.root.fb, &sel,
++					TEXT_SELECTION_COLOUR);
++			font_style.background = TEXT_SELECTION_COLOUR;
+ 		}
+ 
+ 		/* Call the fb text plotting, baseline is 3/4 down the font */
+@@ -292,7 +315,132 @@ fb_text_input_remove_caret_cb(fbtk_widget_t *widget)
+ 	}
+ }
+ 
++/* Scroll a writable text so that its caret is in view, and away from the
++ * edges where the text allows it (a tap near an edge then moves on).
++ */
++static void
++text_scroll_to_caret(fbtk_widget_t *widget, int border)
++{
++	int visible = widget->width - border - border;
++	int margin = visible / 5;
++	int pos = widget->u.text.idx_offset - widget->u.text.scroll;
++	int max = widget->u.text.width + 1 - visible; /* the end in view */
++
++	if (pos > visible - 1 - margin) {
++		widget->u.text.scroll = widget->u.text.idx_offset -
++				(visible - 1 - margin);
++	} else if (pos < margin) {
++		widget->u.text.scroll = widget->u.text.idx_offset - margin;
++	}
++	if (widget->u.text.scroll > max)
++		widget->u.text.scroll = max;
++	if (widget->u.text.scroll < 0)
++		widget->u.text.scroll = 0;
++}
++
++/* Put the caret of a writable text at the character nearest to x (relative
++ * to the widget, as shown), scrolling the text to keep the caret in view.
++ */
++static void
++text_caret_at(fbtk_widget_t *widget, int x)
++{
++	plot_font_style_t font_style;
++	int fh;
++	int border;
++	size_t idx;
++
++	fb_text_font_style(widget, &fh, &border, &font_style);
++
++	fb_font_position(&font_style, widget->u.text.text,
++			widget->u.text.len,
++			x - border + widget->u.text.scroll,
++			&idx,
++			&widget->u.text.idx_offset);
++	widget->u.text.idx = idx;
++	text_scroll_to_caret(widget, border);
++	fbtk_set_caret(widget, true,
++			widget->u.text.idx_offset + border,
++			border,
++			widget->height - border - border,
++			fb_text_input_remove_caret_cb);
++
++	fbtk_request_redraw(widget);
++}
++
++/* CRTOS: the text of a writable changed: its width again */
++static void
++text_measure(fbtk_widget_t *widget, plot_font_style_t *font_style)
++{
++	fb_font_width(font_style, widget->u.text.text, widget->u.text.len,
++			&widget->u.text.width);
++}
++
++/* CRTOS: the whole text away (it was selected, or Ctrl+U) */
++static void
++text_clear(fbtk_widget_t *widget)
++{
++	widget->u.text.all = false;
++	widget->u.text.idx = 0;
++	widget->u.text.len = 0;
++	widget->u.text.text[0] = '\0';
++	widget->u.text.width = 0;
++}
++
++/* CRTOS: @n bytes of @s at the caret, without line breaks and other control
++ * characters (a pasted text); false without memory
++ */
++static bool
++text_insert(fbtk_widget_t *widget, const char *s, size_t n)
++{
++	size_t k = 0, i;
++	char *temp;
++
++	for (i = 0; i < n; i++) {
++		if ((unsigned char)s[i] >= 0x20 && s[i] != 0x7f)
++			k++;
++	}
++	if (k == 0)
++		return true;
++	temp = realloc(widget->u.text.text, widget->u.text.len + k + 1);
++	if (temp == NULL)
++		return false;
++	widget->u.text.text = temp;
++	memmove(temp + widget->u.text.idx + k, temp + widget->u.text.idx,
++			widget->u.text.len - widget->u.text.idx);
++	for (i = 0, k = 0; i < n; i++) {
++		if ((unsigned char)s[i] >= 0x20 && s[i] != 0x7f)
++			temp[widget->u.text.idx + k++] = s[i];
++	}
++	widget->u.text.idx += k;
++	widget->u.text.len += k;
++	temp[widget->u.text.len] = '\0';
++	return true;
++}
++
++/* CRTOS: where the word before the caret starts (Ctrl+Backspace): spaces, then
++ * everything up to a space or a separator of addresses
++ */
++static int
++text_word_start(fbtk_widget_t *widget)
++{
++	const char *t = widget->u.text.text;
++	int i = widget->u.text.idx;
++
++	while (i > 0 && t[i - 1] == ' ')
++		i--;
++	while (i > 0 && t[i - 1] != ' ' && strchr("/.?&=:", t[i - 1]) == NULL)
++		i--;
++	if (i == widget->u.text.idx && i > 0)
++		i--; /* only a separator: that one */
++	return i;
++}
++
+ /** Routine called when text events occour in writeable widget.
++ *
++ * CRTOS: Ctrl+A selects the whole text (the next character, Backspace or
++ * Delete replaces or removes it, an arrow ends the selection), Ctrl+C / Ctrl+X
++ * copy / cut it and Ctrl+V pastes, all with the system clipboard; Delete
++ * removes the character after the caret, Ctrl+Backspace the word before it.
+  *
+  * @param widget The widget reciving input events.
+  * @param cbi The callback parameters.
+@@ -303,11 +451,14 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ {
+ 	int value;
+ 	static fbtk_modifier_type modifier = FBTK_MOD_CLEAR;
+-	char *temp;
+ 	plot_font_style_t font_style;
+ 	int fh;
+ 	int border;
+ 	bool caret_moved = false;
++	bool ctrl;
++	bool all;
++	int ucs4;
++	char c;
+ 
+ 	fb_text_font_style(widget, &fh, &border, &font_style);
+ 
+@@ -345,29 +496,62 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 		return 0;
+ 	}
+ 
++	if (widget->u.text.text == NULL) {
++		widget->u.text.text = calloc(1,1);
++		if (widget->u.text.text == NULL)
++			return 0;
++	}
++	ctrl = (modifier & (FBTK_MOD_LCTRL | FBTK_MOD_RCTRL)) != 0;
++	all = widget->u.text.all && widget->u.text.len > 0;
++
+ 	switch (value) {
+ 	case NSFB_KEY_BACKSPACE:
+-		if (widget->u.text.idx <= 0)
++		if (all) {
++			text_clear(widget);
++		} else if (widget->u.text.idx > 0) {
++			int from = ctrl ? text_word_start(widget) :
++					widget->u.text.idx - 1;
++
++			memmove(widget->u.text.text + from,
++					widget->u.text.text + widget->u.text.idx,
++					widget->u.text.len - widget->u.text.idx);
++			widget->u.text.len -= widget->u.text.idx - from;
++			widget->u.text.idx = from;
++			widget->u.text.text[widget->u.text.len] = 0;
++		} else {
+ 			break;
+-		memmove(widget->u.text.text + widget->u.text.idx - 1,
+-				widget->u.text.text + widget->u.text.idx,
+-				widget->u.text.len - widget->u.text.idx);
+-		widget->u.text.idx--;
+-		widget->u.text.len--;
+-		widget->u.text.text[widget->u.text.len] = 0;
+-
+-		fb_font_width(&font_style, widget->u.text.text,
+-				widget->u.text.len, &widget->u.text.width);
++		}
++		text_measure(widget, &font_style);
++		caret_moved = true;
++		break;
+ 
++	case NSFB_KEY_DELETE:
++		if (all) {
++			text_clear(widget);
++		} else if (widget->u.text.idx < widget->u.text.len) {
++			memmove(widget->u.text.text + widget->u.text.idx,
++					widget->u.text.text + widget->u.text.idx + 1,
++					widget->u.text.len - widget->u.text.idx - 1);
++			widget->u.text.len--;
++			widget->u.text.text[widget->u.text.len] = 0;
++		} else {
++			break;
++		}
++		text_measure(widget, &font_style);
+ 		caret_moved = true;
+ 		break;
+ 
+ 	case NSFB_KEY_RETURN:
++		widget->u.text.all = false;
+ 		widget->u.text.enter(widget->u.text.pw, widget->u.text.text);
+ 		break;
+ 
+ 	case NSFB_KEY_RIGHT:
+-		if (widget->u.text.idx < widget->u.text.len) {
++		if (all) {
++			widget->u.text.all = false;
++			widget->u.text.idx = widget->u.text.len;
++			caret_moved = true;
++		} else if (widget->u.text.idx < widget->u.text.len) {
+ 			if (modifier == FBTK_MOD_CLEAR)
+ 				widget->u.text.idx++;
+ 			else
+@@ -378,7 +562,11 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 		break;
+ 
+ 	case NSFB_KEY_LEFT:
+-		if (widget->u.text.idx > 0) {
++		if (all) {
++			widget->u.text.all = false;
++			widget->u.text.idx = 0;
++			caret_moved = true;
++		} else if (widget->u.text.idx > 0) {
+ 			if (modifier == FBTK_MOD_CLEAR)
+ 				widget->u.text.idx--;
+ 			else
+@@ -389,19 +577,15 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 		break;
+ 
+ 	case NSFB_KEY_HOME:
+-		if (widget->u.text.idx > 0) {
+-			widget->u.text.idx = 0;
+-
+-			caret_moved = true;
+-		}
++		widget->u.text.all = false;
++		widget->u.text.idx = 0;
++		caret_moved = true;
+ 		break;
+ 
+ 	case NSFB_KEY_END:
+-		if (widget->u.text.idx < widget->u.text.len) {
+-			widget->u.text.idx = widget->u.text.len;
+-
+-			caret_moved = true;
+-		}
++		widget->u.text.all = false;
++		widget->u.text.idx = widget->u.text.len;
++		caret_moved = true;
+ 		break;
+ 
+ 	case NSFB_KEY_PAGEUP:
+@@ -429,37 +613,56 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 		break;
+ 
+ 	default:
+-		if (modifier & FBTK_MOD_LCTRL || modifier & FBTK_MOD_RCTRL) {
++		if (ctrl) {
+ 			/* CTRL pressed, don't enter any text */
+-			if (value == NSFB_KEY_u) {
++			if (value == NSFB_KEY_a) {
++				/* CTRL+A: select all of it */
++				if (widget->u.text.len > 0) {
++					widget->u.text.all = true;
++					widget->u.text.idx = widget->u.text.len;
++					caret_moved = true;
++				}
++			} else if (value == NSFB_KEY_c || value == NSFB_KEY_x) {
++				/* CTRL+C, CTRL+X: copy (and cut) the selection */
++				if (all) {
++					crtos_clipboard_set(widget->u.text.text,
++							widget->u.text.len);
++					if (value == NSFB_KEY_x) {
++						text_clear(widget);
++						caret_moved = true;
++					}
++				}
++			} else if (value == NSFB_KEY_v) {
++				/* CTRL+V: paste, over the selection */
++				size_t n;
++				char *clip = crtos_clipboard_get(&n);
++
++				if (clip != NULL) {
++					if (all)
++						text_clear(widget);
++					text_insert(widget, clip, n);
++					free(clip);
++					text_measure(widget, &font_style);
++					caret_moved = true;
++				}
++			} else if (value == NSFB_KEY_u) {
+ 				/* CTRL+U: clear writable */
+-				widget->u.text.idx = 0;
+-				widget->u.text.len = 0;
+-				widget->u.text.text[widget->u.text.len] = '\0';
+-				widget->u.text.width = 0;
++				text_clear(widget);
+ 				caret_moved = true;
+ 			}
+ 			break;
+ 		}
+ 
+-		/* allow for new character and null */
+-		temp = realloc(widget->u.text.text, widget->u.text.len + 2);
+-		if (temp == NULL) {
++		/* a printable character (others would put garbage in) */
++		ucs4 = fbtk_keycode_to_ucs4(value, modifier);
++		if (ucs4 < 0x20 || ucs4 >= 0x7f)
+ 			break;
+-		}
+-
+-		widget->u.text.text = temp;
+-		memmove(widget->u.text.text + widget->u.text.idx + 1,
+-				widget->u.text.text + widget->u.text.idx,
+-				widget->u.text.len - widget->u.text.idx);
+-		widget->u.text.text[widget->u.text.idx] =
+-				fbtk_keycode_to_ucs4(value, modifier);
+-		widget->u.text.idx++;
+-		widget->u.text.len++;
+-		widget->u.text.text[widget->u.text.len] = '\0';
+-
+-		fb_font_width(&font_style, widget->u.text.text,
+-				widget->u.text.len, &widget->u.text.width);
++		if (all)
++			text_clear(widget);
++		c = (char)ucs4;
++		if (!text_insert(widget, &c, 1))
++			break;
++		text_measure(widget, &font_style);
+ 		caret_moved = true;
+ 		break;
+ 	}
+@@ -467,6 +670,7 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 	if (caret_moved) {
+ 		fb_font_width(&font_style, widget->u.text.text,
+ 				widget->u.text.idx, &widget->u.text.idx_offset);
++		text_scroll_to_caret(widget, border);
+ 		fbtk_set_caret(widget, true,
+ 				widget->u.text.idx_offset + border,
+ 				border,
+@@ -488,27 +692,65 @@ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ static int
+ text_input_click(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ {
+-	plot_font_style_t font_style;
+-	int fh;
+-	int border;
+-	size_t idx;
++	int c_x, c_y, c_h;
+ 
+-	fb_text_font_style(widget, &fh, &border, &font_style);
++	/* the press places the caret and a drag moves it; the release
++	 * (which may come from far away) leaves it there
++	 */
++	if (cbi->event->type != NSFB_EVENT_KEY_DOWN)
++		return 0;
+ 
+-	widget->u.text.idx = widget->u.text.len;
++	/* without the caret the text is shown from its start */
++	if (!fbtk_get_caret(widget, &c_x, &c_y, &c_h)) {
++		widget->u.text.scroll = 0;
+ 
+-	fb_font_position(&font_style, widget->u.text.text,
+-			widget->u.text.len, cbi->x - border,
+-			&idx,
+-			&widget->u.text.idx_offset);
+-	widget->u.text.idx = idx;
+-	fbtk_set_caret(widget, true,
+-			widget->u.text.idx_offset + border,
+-			border,
+-			widget->height - border - border,
+-			fb_text_input_remove_caret_cb);
++		/* CRTOS: the click that brings the caret in selects the whole
++		 * text, as address bars do (typing replaces it); a click in
++		 * the text then places the caret
++		 */
++		if (widget->u.text.text != NULL && widget->u.text.len > 0) {
++			plot_font_style_t font_style;
++			int fh, border;
+ 
+-	fbtk_request_redraw(widget);
++			fb_text_font_style(widget, &fh, &border, &font_style);
++			widget->u.text.all = true;
++			widget->u.text.idx = widget->u.text.len;
++			fb_font_width(&font_style, widget->u.text.text,
++					widget->u.text.idx,
++					&widget->u.text.idx_offset);
++			text_scroll_to_caret(widget, border);
++			fbtk_set_caret(widget, true,
++					widget->u.text.idx_offset + border,
++					border,
++					widget->height - border - border,
++					fb_text_input_remove_caret_cb);
++			fbtk_request_redraw(widget);
++			return 0;
++		}
++	}
++
++	widget->u.text.all = false;
++	text_caret_at(widget, cbi->x);
++
++	return 0;
++}
++
++/** Routine called when the pointer moves over a writeable widget, or away
++ * from it while the button pressed on it is still held.
++ *
++ * @param widget The widget reciving the movement.
++ * @param cbi The callback parameters.
++ * @return The callback result.
++ */
++static int
++text_input_move(fbtk_widget_t *widget, fbtk_callback_info *cbi)
++{
++	/* CRTOS: (not while the press that selected the whole text is held:
++	 * a finger never lies still)
++	 */
++	if (fbtk_get_root_widget(widget)->u.root.pressed == widget &&
++	    !widget->u.text.all)
++		text_caret_at(widget, cbi->x);
+ 
+ 	return 0;
+ }
+@@ -522,6 +764,8 @@ text_input_click(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ static int
+ text_input_strip_focus(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ {
++	widget->u.text.scroll = 0;
++	widget->u.text.all = false; /* CRTOS */
+ 	fbtk_set_caret(widget, false, 0, 0, 0, NULL);
+ 
+ 	return 0;
+@@ -548,14 +792,24 @@ fbtk_set_text(fbtk_widget_t *widget, const char *text)
+ 
+ 	if ((widget == NULL) || (widget->type != FB_WIDGET_TYPE_TEXT))
+ 		return;
++	if (text == NULL) /* CRTOS: a caller out of memory */
++		text = "";
+ 	if (widget->u.text.text != NULL) {
+ 		if (strcmp(widget->u.text.text, text) == 0)
+ 			return; /* text is being set to the same thing */
++	}
++	{
++		/* CRTOS: out of memory, the widget keeps its text (a NULL one
++		 * was measured and drawn below) */
++		char *copy = strdup(text);
++		if (copy == NULL)
++			return;
+ 		free(widget->u.text.text);
++		widget->u.text.text = copy;
+ 	}
+-	widget->u.text.text = strdup(text);
+ 	widget->u.text.len = strlen(text);
+ 	widget->u.text.idx = widget->u.text.len;
++	widget->u.text.all = false; /* CRTOS */
+ 
+ 
+ 	fb_text_font_style(widget, &fh, &border, &font_style);
+@@ -563,9 +817,11 @@ fbtk_set_text(fbtk_widget_t *widget, const char *text)
+ 			widget->u.text.len, &widget->u.text.width);
+ 	fb_font_width(&font_style, widget->u.text.text,
+ 			widget->u.text.idx, &widget->u.text.idx_offset);
++	widget->u.text.scroll = 0;
+ 
+ 	if (fbtk_get_caret(widget, &c_x, &c_y, &c_h)) {
+ 		/* Widget has caret; move it to end of new string */
++		text_scroll_to_caret(widget, border);
+ 		fbtk_set_caret(widget, true,
+ 				widget->u.text.idx_offset + border,
+ 				border,
+@@ -628,6 +884,7 @@ fbtk_create_writable_text(fbtk_widget_t *parent,
+ 	fbtk_set_handler(neww, FBTK_CBT_REDRAW, fb_redraw_text, NULL);
+ 	fbtk_set_handler(neww, FBTK_CBT_DESTROY, fb_destroy_text, NULL);
+ 	fbtk_set_handler(neww, FBTK_CBT_CLICK, text_input_click, pw);
++	fbtk_set_handler(neww, FBTK_CBT_POINTERMOVE, text_input_move, NULL);
+ 	fbtk_set_handler(neww, FBTK_CBT_STRIP_FOCUS, text_input_strip_focus, NULL);
+ 	fbtk_set_handler(neww, FBTK_CBT_INPUT, text_input, neww);
+ 
+diff --git a/frontends/framebuffer/fbtk/widget.h b/frontends/framebuffer/fbtk/widget.h
+index 5622723ee..395c1260c 100644
+--- a/frontends/framebuffer/fbtk/widget.h
++++ b/frontends/framebuffer/fbtk/widget.h
+@@ -160,6 +160,7 @@ struct fbtk_widget_s {
+ 			nsfb_t *fb;
+ 			struct fbtk_widget_s *prev; /* previous widget pointer wasin */
+ 			struct fbtk_widget_s *grabbed; /* widget that has grabbed pointer movement. */
++			struct fbtk_widget_s *pressed; /* widget that got the button press, until the release */
+ 			struct fbtk_widget_s *input;
+ 
+ 			/* caret */
+@@ -187,6 +188,8 @@ struct fbtk_widget_s {
+ 			int len; /* text length */
+ 			int width; /* text width in px */
+ 			int idx_offset; /* caret pos in pixels */
++			int scroll; /* pixels the text is scrolled left while it has the caret */
++			bool all; /* CRTOS: the whole text is selected: the next key replaces it */
+ 		} text;
+ 
+ 		/* application driven widget */
+diff --git a/frontends/framebuffer/fetch.c b/frontends/framebuffer/fetch.c
+index 23cbb4f21..c44fbcc7f 100644
+--- a/frontends/framebuffer/fetch.c
++++ b/frontends/framebuffer/fetch.c
+@@ -87,6 +87,17 @@ static const char *fetch_filetype(const char *unix_path)
+ 		return "image/svg";
+ 	if (2 < l && strcasecmp(unix_path + l - 3, "bmp") == 0)
+ 		return "image/bmp";
++	if (3 < l && strcasecmp(unix_path + l - 4, "webp") == 0)
++		return "image/webp";
++	if (2 < l && strcasecmp(unix_path + l - 3, "ico") == 0)
++		return "image/x-icon";
++	if (2 < l && strcasecmp(unix_path + l - 3, "txt") == 0)
++		return "text/plain";
++	/* CRTOS: scripts of local pages (without this they were HTML and never ran) */
++	if (2 < l && strcasecmp(unix_path + l - 3, ".js") == 0)
++		return "application/javascript";
++	if (3 < l && strcasecmp(unix_path + l - 4, ".mjs") == 0)
++		return "application/javascript";
+ 	return "text/html";
+ }
+ 
+diff --git a/frontends/framebuffer/framebuffer.c b/frontends/framebuffer/framebuffer.c
+index 52afdbf5d..ef3cec710 100644
+--- a/frontends/framebuffer/framebuffer.c
++++ b/frontends/framebuffer/framebuffer.c
+@@ -22,6 +22,7 @@
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <math.h>
+ 
+ #include <libnsfb.h>
+ #include <libnsfb_plot.h>
+@@ -264,6 +265,298 @@ framebuffer_plot_polygon(const struct redraw_context *ctx,
+  * \param transform A transform to apply to the path.
+  * \return NSERROR_OK on success else error code.
+  */
++/**
++ * A path flattened to straight lines: the points of all its subpaths, in
++ * screen coordinates, and where each subpath starts.
++ */
++struct flat_path {
++	float *xy;		/**< x, y of each point */
++	unsigned int npoints;
++	unsigned int point_alloc;
++	unsigned int *start;	/**< first point of each subpath */
++	bool *closed;		/**< subpath ends with a close command */
++	unsigned int nsub;
++	unsigned int sub_alloc;
++};
++
++static bool flat_path_point(struct flat_path *fp, float x, float y)
++{
++	if (fp->npoints == fp->point_alloc) {
++		unsigned int alloc = fp->point_alloc ? fp->point_alloc * 2 : 64;
++		float *xy = realloc(fp->xy, alloc * 2 * sizeof(float));
++		if (xy == NULL) {
++			return false;
++		}
++		fp->xy = xy;
++		fp->point_alloc = alloc;
++	}
++	fp->xy[fp->npoints * 2] = x;
++	fp->xy[fp->npoints * 2 + 1] = y;
++	fp->npoints++;
++	return true;
++}
++
++static bool flat_path_subpath(struct flat_path *fp)
++{
++	if (fp->nsub == fp->sub_alloc) {
++		unsigned int alloc = fp->sub_alloc ? fp->sub_alloc * 2 : 8;
++		unsigned int *start = realloc(fp->start, alloc * sizeof(*start));
++		bool *closed;
++		if (start == NULL) {
++			return false;
++		}
++		fp->start = start;
++		closed = realloc(fp->closed, alloc * sizeof(*closed));
++		if (closed == NULL) {
++			return false;
++		}
++		fp->closed = closed;
++		fp->sub_alloc = alloc;
++	}
++	fp->start[fp->nsub] = fp->npoints;
++	fp->closed[fp->nsub] = false;
++	fp->nsub++;
++	return true;
++}
++
++/** Number of points in subpath i */
++static unsigned int flat_path_count(const struct flat_path *fp, unsigned int i)
++{
++	unsigned int end = (i + 1 < fp->nsub) ? fp->start[i + 1] : fp->npoints;
++	return end - fp->start[i];
++}
++
++/**
++ * Flatten a plotter path (move, line, cubic bezier and close commands) with
++ * its transform applied.
++ */
++static bool
++flat_path_build(struct flat_path *fp, const float *p, unsigned int n,
++		const float t[6])
++{
++	unsigned int i = 0;
++	float cx = 0, cy = 0; /* current point, screen coordinates */
++
++#define TX(x, y) (t[0] * (x) + t[2] * (y) + t[4])
++#define TY(x, y) (t[1] * (x) + t[3] * (y) + t[5])
++
++	while (i < n) {
++		switch ((int)p[i]) {
++		case PLOTTER_PATH_MOVE:
++			if (i + 3 > n || !flat_path_subpath(fp)) {
++				return false;
++			}
++			cx = TX(p[i + 1], p[i + 2]);
++			cy = TY(p[i + 1], p[i + 2]);
++			if (!flat_path_point(fp, cx, cy)) {
++				return false;
++			}
++			i += 3;
++			break;
++
++		case PLOTTER_PATH_CLOSE:
++			if (fp->nsub > 0) {
++				unsigned int s = fp->start[fp->nsub - 1];
++				fp->closed[fp->nsub - 1] = true;
++				/* drawing continues from the subpath's start */
++				cx = fp->xy[s * 2];
++				cy = fp->xy[s * 2 + 1];
++			}
++			i += 1;
++			break;
++
++		case PLOTTER_PATH_LINE:
++			if (i + 3 > n) {
++				return false;
++			}
++			if (fp->nsub == 0 && !flat_path_subpath(fp)) {
++				return false;
++			}
++			cx = TX(p[i + 1], p[i + 2]);
++			cy = TY(p[i + 1], p[i + 2]);
++			if (!flat_path_point(fp, cx, cy)) {
++				return false;
++			}
++			i += 3;
++			break;
++
++		case PLOTTER_PATH_BEZIER: {
++			float x1, y1, x2, y2, x3, y3, len;
++			int steps, k;
++
++			if (i + 7 > n) {
++				return false;
++			}
++			if (fp->nsub == 0 && !flat_path_subpath(fp)) {
++				return false;
++			}
++			x1 = TX(p[i + 1], p[i + 2]);
++			y1 = TY(p[i + 1], p[i + 2]);
++			x2 = TX(p[i + 3], p[i + 4]);
++			y2 = TY(p[i + 3], p[i + 4]);
++			x3 = TX(p[i + 5], p[i + 6]);
++			y3 = TY(p[i + 5], p[i + 6]);
++
++			/* a segment every few pixels of the control polygon */
++			len = fabsf(x1 - cx) + fabsf(y1 - cy) +
++				fabsf(x2 - x1) + fabsf(y2 - y1) +
++				fabsf(x3 - x2) + fabsf(y3 - y2);
++			steps = (int)(len / 3.0f);
++			if (steps < 2) {
++				steps = 2;
++			} else if (steps > 64) {
++				steps = 64;
++			}
++			for (k = 1; k <= steps; k++) {
++				float u = (float)k / (float)steps;
++				float v = 1.0f - u;
++				float b0 = v * v * v, b1 = 3 * v * v * u;
++				float b2 = 3 * v * u * u, b3 = u * u * u;
++				if (!flat_path_point(fp,
++						b0 * cx + b1 * x1 + b2 * x2 + b3 * x3,
++						b0 * cy + b1 * y1 + b2 * y2 + b3 * y3)) {
++					return false;
++				}
++			}
++			cx = x3;
++			cy = y3;
++			i += 7;
++			break;
++		}
++
++		default:
++			return false;
++		}
++	}
++#undef TX
++#undef TY
++	return true;
++}
++
++struct path_crossing {
++	float x;
++	int dir;
++};
++
++/**
++ * Fill a flattened path by scanlines with the non-zero winding rule (every
++ * subpath counts as closed), sampling at pixel centres.
++ */
++static bool
++flat_path_fill(const struct flat_path *fp, nsfb_colour_t colour)
++{
++	nsfb_bbox_t clip;
++	struct path_crossing *cross;
++	float ymin, ymax;
++	int y, y0, y1;
++	unsigned int i;
++
++	if (fp->npoints < 3) {
++		return true;
++	}
++	ymin = ymax = fp->xy[1];
++	for (i = 1; i < fp->npoints; i++) {
++		float py = fp->xy[i * 2 + 1];
++		if (py < ymin) {
++			ymin = py;
++		}
++		if (py > ymax) {
++			ymax = py;
++		}
++	}
++	nsfb_plot_get_clip(nsfb, &clip);
++	y0 = (int)floorf(ymin);
++	y1 = (int)ceilf(ymax);
++	if (y0 < clip.y0) {
++		y0 = clip.y0;
++	}
++	if (y1 > clip.y1) {
++		y1 = clip.y1;
++	}
++	if (y0 >= y1) {
++		return true;
++	}
++
++	/* each edge crosses a scanline at most once */
++	cross = malloc(fp->npoints * sizeof(*cross));
++	if (cross == NULL) {
++		return false;
++	}
++	for (y = y0; y < y1; y++) {
++		float yc = y + 0.5f;
++		unsigned int ncross = 0, s, k;
++		int winding = 0;
++		float span_start = 0;
++
++		for (s = 0; s < fp->nsub; s++) {
++			unsigned int first = fp->start[s];
++			unsigned int count = flat_path_count(fp, s);
++			for (k = 0; k < count; k++) {
++				const float *a = &fp->xy[(first + k) * 2];
++				const float *b = &fp->xy[(first + (k + 1) % count) * 2];
++				if ((a[1] <= yc && b[1] > yc) ||
++				    (b[1] <= yc && a[1] > yc)) {
++					float x = a[0] + (yc - a[1]) *
++						(b[0] - a[0]) / (b[1] - a[1]);
++					unsigned int j = ncross++;
++					/* insertion sort by x */
++					while (j > 0 && cross[j - 1].x > x) {
++						cross[j] = cross[j - 1];
++						j--;
++					}
++					cross[j].x = x;
++					cross[j].dir = (b[1] > a[1]) ? 1 : -1;
++				}
++			}
++		}
++
++		for (k = 0; k < ncross; k++) {
++			int before = winding;
++			winding += cross[k].dir;
++			if (before == 0 && winding != 0) {
++				span_start = cross[k].x;
++			} else if (before != 0 && winding == 0) {
++				nsfb_bbox_t span;
++				span.x0 = (int)ceilf(span_start - 0.5f);
++				span.x1 = (int)ceilf(cross[k].x - 0.5f);
++				span.y0 = y;
++				span.y1 = y + 1;
++				if (span.x1 > span.x0) {
++					nsfb_plot_rectangle_fill(nsfb, &span, colour);
++				}
++			}
++		}
++	}
++	free(cross);
++	return true;
++}
++
++/** Stroke a flattened path with lines of the given width */
++static void
++flat_path_stroke(const struct flat_path *fp, nsfb_plot_pen_t *pen)
++{
++	unsigned int s, k;
++
++	for (s = 0; s < fp->nsub; s++) {
++		unsigned int first = fp->start[s];
++		unsigned int count = flat_path_count(fp, s);
++		unsigned int segments = fp->closed[s] ? count : count - 1;
++		if (count < 2) {
++			continue;
++		}
++		for (k = 0; k < segments; k++) {
++			const float *a = &fp->xy[(first + k) * 2];
++			const float *b = &fp->xy[(first + (k + 1) % count) * 2];
++			nsfb_bbox_t line;
++			line.x0 = (int)floorf(a[0] + 0.5f);
++			line.y0 = (int)floorf(a[1] + 0.5f);
++			line.x1 = (int)floorf(b[0] + 0.5f);
++			line.y1 = (int)floorf(b[1] + 0.5f);
++			nsfb_plot_line(nsfb, &line, pen);
++		}
++	}
++}
++
+ static nserror
+ framebuffer_plot_path(const struct redraw_context *ctx,
+ 		const plot_style_t *pstyle,
+@@ -271,8 +564,45 @@ framebuffer_plot_path(const struct redraw_context *ctx,
+ 		unsigned int n,
+ 		const float transform[6])
+ {
+-	NSLOG(netsurf, INFO, "path unimplemented");
+-	return NSERROR_OK;
++	static const float identity[6] = { 1, 0, 0, 1, 0, 0 };
++	struct flat_path fp;
++	nserror res = NSERROR_OK;
++
++	if (transform == NULL) {
++		transform = identity;
++	}
++	memset(&fp, 0, sizeof(fp));
++	if (!flat_path_build(&fp, p, n, transform)) {
++		res = NSERROR_INVALID;
++		goto out;
++	}
++
++	if (pstyle->fill_type != PLOT_OP_TYPE_NONE) {
++		if (!flat_path_fill(&fp, pstyle->fill_colour)) {
++			res = NSERROR_NOMEM;
++			goto out;
++		}
++	}
++
++	if (pstyle->stroke_type != PLOT_OP_TYPE_NONE) {
++		nsfb_plot_pen_t pen;
++		/* the width scales with the transform (its area factor) */
++		float scale = sqrtf(fabsf(transform[0] * transform[3] -
++					  transform[1] * transform[2]));
++		int width = (int)(plot_style_fixed_to_float(pstyle->stroke_width) *
++				  scale + 0.5f);
++
++		pen.stroke_type = NFSB_PLOT_OPTYPE_SOLID;
++		pen.stroke_colour = pstyle->stroke_colour;
++		pen.stroke_width = width > 0 ? width : 1;
++		flat_path_stroke(&fp, &pen);
++	}
++
++out:
++	free(fp.xy);
++	free(fp.start);
++	free(fp.closed);
++	return res;
+ }
+ 
+ 
+diff --git a/frontends/framebuffer/gui.c b/frontends/framebuffer/gui.c
+index 5bfc8227b..3f33665e5 100644
+--- a/frontends/framebuffer/gui.c
++++ b/frontends/framebuffer/gui.c
+@@ -37,6 +37,7 @@
+ #include "netsurf/browser_window.h"
+ #include "netsurf/keypress.h"
+ #include "desktop/browser_history.h"
++#include "desktop/searchweb.h" /* CRTOS: searches from the address bar */
+ #include "netsurf/plotters.h"
+ #include "netsurf/window.h"
+ #include "netsurf/misc.h"
+@@ -865,6 +866,33 @@ fb_browser_window_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ 			browser_window_key_press(gw->bw, NS_KEY_DELETE_RIGHT);
+ 			break;
+ 
++		/* CRTOS: Home and End in a text field (Ctrl: of the whole
++		 * text), else the top and the end of the page; Ctrl+Backspace
++		 * removes the word before the caret
++		 */
++		case NSFB_KEY_HOME:
++			if (browser_window_key_press(gw->bw,
++					(modifier & (FBTK_MOD_RCTRL | FBTK_MOD_LCTRL)) ?
++					NS_KEY_TEXT_START : NS_KEY_LINE_START) == false)
++				widget_scroll_y(gw, 0, true);
++			break;
++
++		case NSFB_KEY_END:
++			if (browser_window_key_press(gw->bw,
++					(modifier & (FBTK_MOD_RCTRL | FBTK_MOD_LCTRL)) ?
++					NS_KEY_TEXT_END : NS_KEY_LINE_END) == false)
++				widget_scroll_y(gw, INT_MAX, true);
++			break;
++
++		case NSFB_KEY_BACKSPACE:
++			if (modifier & (FBTK_MOD_RCTRL | FBTK_MOD_LCTRL)) {
++				browser_window_key_press(gw->bw,
++						NS_KEY_DELETE_WORD_LEFT);
++				break;
++			}
++			browser_window_key_press(gw->bw, NS_KEY_DELETE_LEFT);
++			break;
++
+ 		case NSFB_KEY_PAGEUP:
+ 			if (browser_window_key_press(gw->bw,
+ 					NS_KEY_PAGE_UP) == false)
+@@ -1168,8 +1196,29 @@ fb_url_enter(void *pw, char *text)
+ 	struct browser_window *bw = pw;
+ 	nsurl *url;
+ 	nserror error;
++	const char *t = text;
++	size_t n;
++	char *term;
+ 
+-	error = nsurl_create(text, &url);
++	/* CRTOS: words, or one word without a dot, a colon or a slash, are a
++	 * search with the web search provider (DuckDuckGo, which works without
++	 * JavaScript); anything else is an address, "https://" added if needed
++	 */
++	while (*t == ' ')
++		t++;
++	n = strlen(t);
++	while (n > 0 && t[n - 1] == ' ')
++		n--;
++	term = strndup(t, n);
++	if (term == NULL)
++		return 0;
++	if (strchr(term, ' ') != NULL ||
++	    (strpbrk(term, ".:/") == NULL && strcmp(term, "localhost") != 0)) {
++		error = search_web_omni(term, SEARCH_WEB_OMNI_SEARCHONLY, &url);
++	} else {
++		error = search_web_omni(term, SEARCH_WEB_OMNI_NONE, &url);
++	}
++	free(term);
+ 	if (error != NSERROR_OK) {
+ 		fb_warn_user("Errorcode:", messages_get_errorcode(error));
+ 	} else {
+diff --git a/frontends/framebuffer/schedule.c b/frontends/framebuffer/schedule.c
+index 6d1711236..263f5afc9 100644
+--- a/frontends/framebuffer/schedule.c
++++ b/frontends/framebuffer/schedule.c
+@@ -110,6 +110,11 @@ nserror framebuffer_schedule(int tival, void (*callback)(void *p), void *p)
+         tv.tv_usec = (tival % 1000) * 1000; /* remainder to microseconds */
+ 
+ 	nscb = calloc(1, sizeof(struct nscallback));
++	if (nscb == NULL) {
++		/* CRTOS: out of memory (the browser crashed writing through
++		 * the NULL here) */
++		return NSERROR_NOMEM;
++	}
+ 
+ 	gettimeofday(&nscb->tv, NULL);
+ 	timeradd(&nscb->tv, &tv, &nscb->tv);
+diff --git a/resources/default.css b/resources/default.css
+index fa47c76ff..986de4d2a 100644
+--- a/resources/default.css
++++ b/resources/default.css
+@@ -143,6 +143,10 @@ fieldset { display: block; border: thin solid #888; margin: 1.12em 0; }
+ 
+ noembed, script, style, title { display: none; }
+ 
++/* CRTOS: the hidden attribute (HTML's rendering rules; pages and their scripts hide elements
++ * with it) */
++[hidden], template { display: none; }
++
+ /* HTML5 elements */
+ article, aside, figcaption, figure, footer, header, main, nav, section {
+ 	display: block;
+diff --git a/utils/config.h b/utils/config.h
+index 3914771fd..71fd88077 100644
+--- a/utils/config.h
++++ b/utils/config.h
+@@ -208,4 +208,20 @@ char *realpath(const char *path, char *resolved_path);
+ 	#define NO_IPV6
+ #endif
+ 
++/* CRTOS (newlib + libcrtos, os/apps/netsurf): no memory mapping, no *at()
++ * calls, no regex, no signals, and an IPv4 network stack
++ */
++#if defined(__CRTOS__)
++#undef HAVE_MMAP
++#undef WITH_MMAP
++#undef HAVE_SCANDIR
++#undef HAVE_DIRFD
++#undef HAVE_UNLINKAT
++#undef HAVE_FSTATAT
++#undef HAVE_REGEX
++#undef HAVE_REALPATH
++#undef HAVE_SIGPIPE
++#define NO_IPV6
++#endif
++
+ #endif

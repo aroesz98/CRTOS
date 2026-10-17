@@ -1,0 +1,40 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class pinctrl_imxrt <<moduł .ko>> {
+  -iomuxc_apply(ctx, group) : int
+  -iomuxc_probe(dev) : int
+  -iomuxc_remove(dev)
+}
+class clk_imxrt <<moduł .ko>> {
+  -uint32_t s_critical[13]
+  -ccm_enable(ctx, id) : int
+  -ccm_disable(ctx, id)
+  -ccm_get_rate(ctx, id) : uint32_t
+  -ccm_set_rate(ctx, id, rate) : int
+  -set_lcdif_pix(rate) : int
+}
+class gpio_imxrt <<moduł .ko>> {
+  -g_get, g_set, g_dir_in, g_dir_out, g_to_irq
+  -gi_mask, gi_unmask, gi_set_type
+  -cascade(irq, ctx)
+  -gpio_xlate(ctx, args, nargs) : int
+  -gpio_probe(dev) : int
+  -gpio_remove(dev)
+}
+class imx_gpio <<struct>> {
+  +device* dev
+  +GPIO_Type* base
+  +int irq_base
+  +int nvic[2]
+}
+interface pinctrl_ops <<S01>>
+interface clk_ops <<S01>>
+interface gpio_chip_ops <<S01>>
+interface irq_chip <<K02>>
+pinctrl_imxrt ..|> pinctrl_ops
+clk_imxrt ..|> clk_ops
+gpio_imxrt ..|> gpio_chip_ops
+gpio_imxrt ..|> irq_chip
+gpio_imxrt *-- "5 portów" imx_gpio
+@enduml

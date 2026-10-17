@@ -1,0 +1,35 @@
+@startuml
+!include ../styl.iuml
+title Kontekst systemu CRTOS
+left to right direction
+
+actor "Użytkownik" as USER
+node "Komputer\n(polecenie crtos: build, flash,\ndeploy, kmon, shot)" as PC
+cloud "Sieć lokalna / Internet" as NET
+
+node "Płytka MIMXRT1050-EVKB" {
+  component "i.MX RT1052\nCortex-M7 600 MHz, MPU\n(ITCM, DTCM, OCRAM)" as CPU
+  storage "HyperFlash 64 MB\n(jądro, XIP)" as HF
+  storage "SDRAM 32 MB" as SDRAM
+  storage "karta microSD\n(system plików /sd)" as SD
+  component "ekran 480x272 + dotyk\n(LCDIF, GT911/FT5406 na I2C)" as LCD
+  component "Ethernet 100 Mb/s\n(ENET + KSZ8081)" as ETH
+  component "USB J9\n(urządzenie CDC albo host HID)" as USB
+  component "DAPLink J28\n(SWD + UART konsoli)" as DBG
+  component "złącza J22/J24\n(UART3, SPI3)" as HDR
+}
+
+PC <--> DBG : SWD: flash, kmon, zrzut ekranu\nUART 1 Mb/s: konsola
+PC <--> ETH : TCP 5555: deploy, flash --net
+PC <--> USB : CDC ACM: powłoka
+ETH <--> NET
+USER --> LCD : dotyk, obraz
+CPU -- HF
+CPU -- SDRAM
+CPU -- SD
+CPU -- LCD
+CPU -- ETH
+CPU -- USB
+CPU -- DBG
+CPU -- HDR
+@enduml

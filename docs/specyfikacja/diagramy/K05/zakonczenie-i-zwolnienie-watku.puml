@@ -1,0 +1,17 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek T" as T
+participant "sched.cpp" as S
+participant "K08 procesy" as P
+participant "K06 muteksy" as M
+participant "kworker" as K
+    T -> S : task_exit(code)
+    S -> P : proc_thread_exited(T) (wątek programu)
+    S -> M : mutex_release_all(T)
+    S -> S : DEAD, TF_NOSAVE, na listę s_dead, PendSV
+    S -> K : kworker_queue(NULL): obudzenie
+    note over T : PendSV nie zapisuje kontekstu T, T nigdy nie wraca
+    K -> S : sched_reap()
+    S -> S : usunięcie z s_all, kfree(kstack), kfree(T)
+@enduml

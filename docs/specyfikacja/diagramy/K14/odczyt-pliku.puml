@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (read)" as P
+participant "fat.cpp (VFS + diskio)" as F
+participant "FatFs" as FF
+participant "sdcard.cpp" as S
+participant "USDHC1 + ADMA2" as H
+participant "sd_irq" as I
+    P -> F : fat_read(f, buf, len)
+    F -> FF : f_read (mutex woluminu)
+    FF -> F : disk_read(sector, count)
+    alt bloki w buforze wyprzedzającym
+        F --> FF : kopia z s_ra
+    else 
+        F -> F : zebrane zapisy nakładają się? wb_flush
+        F -> S : sdcard_read(lba, count + wyprzedzenie 16..128 KB)
+        S -> S : mutex karty, bezpośrednio czy przez bufor pośredni
+        S -> H : CMD18 + deskryptory ADMA2, unieważnienie cache bufora
+        S -> S : event_wait(koniec komendy/danych, limit czasu)
+        H -> I : przerwanie
+        I -> S : event_set
+        S -> S : 50 us przerwy przed następną komendą
+        S --> F : 0
+    end
+    F --> P : bajty
+@enduml

@@ -1,0 +1,16 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek enet (D05)" as E
+participant "net.cpp" as N
+participant "net-lwip (D05)" as L
+participant "netmgr (U05)" as M
+E -> N : netdev_register(nd): eth0
+N -> L : attach(nd)
+E -> N : netdev_set_link(nd, up, 100, full)
+N -> L : link(nd)
+M -> N : ioctl(sock, NET_IOC_IFCONF {eth0, DHCP}) (CAP_SYS)
+N -> N : kopia argumentu do jądra
+N -> L : ioctl: dhcp_start
+L --> M : NET_IF_BOUND po otrzymaniu dzierżawy (NET_IOC_IFINFO)
+@enduml

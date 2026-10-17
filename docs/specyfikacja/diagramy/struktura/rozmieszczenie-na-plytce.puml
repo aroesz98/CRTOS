@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+title Rozmieszczenie produktów budowania na płytce
+
+node "HyperFlash 64 MB (XIP od 0x60000000)" as HF {
+  artifact "0x000000: blok konfiguracji FlexSPI (FCFB)" as FCB
+  artifact "0x001000: IVT, dane startowe, DCD (SDRAM)" as IVT
+  artifact "0x002000: jądro crtos.bin (ok. 240 KB)" as KIMG
+  artifact "0x200000-0x4000000: partycja storage (/dev/mtd1)" as STOR
+}
+node "Karta SD (FAT32/exFAT), katalog /crtos" as SDC {
+  artifact "boot/board.dtb" as B
+  artifact "drivers/*.ko, modules.alias" as DR
+  artifact "sbin/*.app (usługi)" as SB
+  artifact "bin/*.app (programy konsolowe)" as BI
+  artifact "apps/*.app (programy z oknem)" as AP
+  artifact "etc/init.cfg, launcher.cfg, network.cfg,\ntimezone, deploy.token, ssl/" as E
+}
+FCB -[hidden]down- IVT
+IVT -[hidden]down- KIMG
+KIMG -[hidden]down- STOR
+KIMG ..> B : wczytuje przy starcie
+KIMG ..> DR : ładuje wg drzewa urządzeń
+KIMG ..> SB : uruchamia sbin/init.app
+SB ..> E : init czyta etc/init.cfg
+SB ..> BI : uruchamia
+SB ..> AP : uruchamia
+@enduml

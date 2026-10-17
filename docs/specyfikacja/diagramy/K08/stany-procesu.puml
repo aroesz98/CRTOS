@@ -1,0 +1,9 @@
+@startuml
+!include ../styl.iuml
+[*] --> ALIVE : proc_create()
+ALIVE --> EXITING : proc_kill(code)
+ALIVE --> DEAD : ostatni wątek skończył się
+EXITING --> DEAD : ostatni wątek skończył się albo proces nie miał wątków
+DEAD --> RELEASED : proc_release() w kworker (uchwyty, shm, arena)
+RELEASED --> [*] : ostatni proc_put() (rodzic odebrał kod albo go nie ma)
+@enduml

@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "sys_ioctl" as I
+participant "K13 vfs_ioctl" as V
+participant "sterownik (file_ops.ioctl)" as D
+    P -> I : ioctl(fd, cmd, arg)
+    I -> I : size = _IOC_SIZE(cmd): uaccess_ok(arg, size)?
+    I -> I : handle_ref(fd, H_FILE)
+    alt FIO_GETFL / FIO_SETFL
+        I -> I : flagi pliku (O_NONBLOCK, O_APPEND)
+    else 
+        I -> V : vfs_ioctl(f, cmd, arg)
+        V -> D : ioctl(f, cmd, arg)
+        note over D : wskaźniki WEWNĄTRZ struktury sprawdza sterownik (uaccess_ok)
+    end
+    I -> I : vfs_close(f) (odwołanie z handle_ref)
+    I --> P : wynik
+@enduml

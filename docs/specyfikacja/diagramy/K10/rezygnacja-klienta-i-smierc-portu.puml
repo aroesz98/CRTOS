@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "klient" as C
+participant "ipc.cpp" as K
+participant "serwer" as S
+    C -> K : msg_call(..., timeout)
+    alt limit czasu albo -EINTR przed odpowiedzią
+        K -> K : CALL_QUEUED: usunięcie komunikatu z kolejki
+        K -> K : CALL_RECEIVED: usunięcie z s_calls
+        K -> K : state = CALL_DONE
+        K --> C : -ETIMEDOUT / -EINTR
+        S -> K : msg_reply(token) później
+        K --> S : -ENOENT (odpowiedź zwolniona)
+    end
+    S -> K : zamknięcie uchwytu odbiorczego (albo koniec procesu)
+    K -> K : port_close_recv: dead, wyrejestrowanie nazwy
+    K -> K : komunikaty z kolejki: call_finish(-EPIPE), zwolnienie z uchwytami
+    K -> K : odebrane bez odpowiedzi: call_finish(-EPIPE)
+    K -> K : wake send_wq i recv_wq z -EPIPE, poll_notify (POLLHUP)
+@enduml

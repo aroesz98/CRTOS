@@ -1,0 +1,394 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * STM32H7S7 SoC description for CRTOS.
+ * Peripherals are disabled here and enabled/configured by the board file. Addresses and
+ * interrupt numbers: RM0477 and the CMSIS header stm32h7s7xx.h. Clocks: <&rcc STM32_CLK(register,
+ * bit)>, the enable bit of the peripheral, as dt-bindings/clock/stm32h7rs-clock.h names them.
+ */
+#include <dt-bindings/clock/stm32h7rs-clock.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pinctrl/stm32-pinctrl.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "st,stm32h7s7";
+	interrupt-parent = <&nvic>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-m7";
+			reg = <0>;
+			clock-frequency = <600000000>;
+		};
+	};
+
+	/* ITCM 64 KB, 128 KB with the lower half of AXI SRAM1 (option bytes ITCM_AXI_SHARE=0 or 1,
+	 * 1 recommended for CRTOS; 2 would take the GPU's half as well): the kernel reads the size
+	 * from the option bytes, this node gives the most it uses. DTCM 64 KB, AXI SRAM2-4 328 KB
+	 * (ECC off) for the kernel; the upper half of SRAM1 (0x24010000, 64 KB) is the GPU's for
+	 * drawing 3D primitives */
+	itcm: memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x20000>;
+	};
+	dtcm: memory@20000000 {
+		device_type = "memory";
+		reg = <0x20000000 0x10000>;
+	};
+	axisram: memory@24020000 {
+		device_type = "memory";
+		reg = <0x24020000 0x52000>;
+	};
+
+	nvic: interrupt-controller@e000e100 {
+		compatible = "arm,armv7m-nvic";
+		reg = <0xe000e100 0xc00>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		arm,num-irq-priority-bits = <4>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		rcc: clock-controller@58024400 {
+			compatible = "st,stm32h7rs-rcc";
+			reg = <0x58024400 0x400>;
+			#clock-cells = <1>;
+		};
+
+		/* the pins of all GPIO ports (pinmux groups of the board file) */
+		pinctrl: pinctrl@58020000 {
+			compatible = "st,stm32h7rs-pinctrl";
+			reg = <0x58020000 0x4000>;
+		};
+
+		/* EXTI: the GPIO interrupt lines 0-15 (any port, SBS EXTICR) */
+		exti: interrupt-controller@58000000 {
+			compatible = "st,stm32h7rs-exti";
+			reg = <0x58000000 0x400>, <0x58000400 0x400>;
+			interrupts = <16>, <17>, <18>, <19>, <20>, <21>, <22>, <23>,
+				     <24>, <25>, <26>, <27>, <28>, <29>, <30>, <31>;
+			clocks = <&rcc STM32_CLK(STM32_APB4ENR, STM32_APB4_SBS)>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpioa: gpio@58020000 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58020000 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 0)>;
+			st,port = <0>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiob: gpio@58020400 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58020400 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 1)>;
+			st,port = <1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpioc: gpio@58020800 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58020800 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 2)>;
+			st,port = <2>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiod: gpio@58020c00 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58020c00 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 3)>;
+			st,port = <3>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpioe: gpio@58021000 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58021000 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 4)>;
+			st,port = <4>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiof: gpio@58021400 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58021400 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 5)>;
+			st,port = <5>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiog: gpio@58021800 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58021800 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 6)>;
+			st,port = <6>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpioh: gpio@58021c00 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58021c00 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 7)>;
+			st,port = <7>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiom: gpio@58023000 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58023000 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 12)>;
+			st,port = <12>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpion: gpio@58023400 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58023400 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 13)>;
+			st,port = <13>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpioo: gpio@58023800 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58023800 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 14)>;
+			st,port = <14>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		gpiop: gpio@58023c00 {
+			compatible = "st,stm32h7rs-gpio";
+			reg = <0x58023c00 0x400>;
+			clocks = <&rcc STM32_CLK(STM32_AHB4ENR, 15)>;
+			st,port = <15>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			interrupt-parent = <&exti>;
+		};
+
+		usart1: serial@42001000 {
+			compatible = "st,stm32-uart";
+			reg = <0x42001000 0x400>;
+			interrupts = <82>;
+			clocks = <&rcc STM32_CLK(STM32_APB2ENR, STM32_APB2_USART1)>;
+			status = "disabled";
+		};
+
+		uart4: serial@40004c00 {
+			compatible = "st,stm32-uart";
+			reg = <0x40004c00 0x400>;
+			interrupts = <85>;
+			clocks = <&rcc STM32_CLK(STM32_APB1ENR1, STM32_APB1_UART4)>;
+			status = "disabled";
+		};
+
+		uart7: serial@40007800 {
+			compatible = "st,stm32-uart";
+			reg = <0x40007800 0x400>;
+			interrupts = <87>;
+			clocks = <&rcc STM32_CLK(STM32_APB1ENR1, STM32_APB1_UART7)>;
+			status = "disabled";
+		};
+
+		i2c1: i2c@40005400 {
+			compatible = "st,stm32-i2c";
+			reg = <0x40005400 0x400>;
+			interrupts = <76>, <77>;
+			clocks = <&rcc STM32_CLK(STM32_APB1ENR1, STM32_APB1_I2C1)>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		sdmmc1: mmc@52007000 {
+			compatible = "st,stm32-sdmmc";
+			reg = <0x52007000 0x400>;
+			interrupts = <108>;
+			clocks = <&rcc STM32_CLK(STM32_AHB5ENR, STM32_AHB5_SDMMC1)>;
+			status = "disabled";
+		};
+
+		ltdc: display-controller@50001000 {
+			compatible = "st,stm32-ltdc";
+			reg = <0x50001000 0x1000>;
+			interrupts = <96>, <97>;
+			clocks = <&rcc STM32_CLK(STM32_APB5ENR, STM32_APB5_LTDC)>,
+				 <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_LTDC)>;
+			clock-names = "bus", "pix";
+			status = "disabled";
+		};
+
+		/* the 2D accelerator: the NeoChrom GPU (its error interrupt second, its read cache) and
+		 * the DMA2D (Chrom-ART), driven together */
+		gpu2d: gpu@52014000 {
+			compatible = "st,stm32-gpu2d";
+			/* the GPU, its read cache, the DMA2D, on-chip memory for primitives (AXI SRAM1's
+			 * upper half: used unless the option bytes give all of SRAM1 to the ITCM) */
+			reg = <0x52014000 0x1000>, <0x52015000 0x400>, <0x52001000 0x1000>, <0x24010000 0x10000>;
+			interrupts = <149>, <150>, <98>;
+			clocks = <&rcc STM32_CLK(STM32_AHB5ENR, STM32_AHB5_GPU2D)>, <&rcc STM32_CLK(STM32_AHB5ENR, STM32_AHB5_DMA2D)>;
+			clock-names = "gpu", "dma2d";
+			status = "disabled";
+		};
+
+		xspi2: spi@5200a000 {
+			compatible = "st,stm32-xspi";
+			reg = <0x5200a000 0x1000>, <0x70000000 0x8000000>;
+			interrupts = <106>;
+			clocks = <&rcc STM32_CLK(STM32_AHB5ENR, STM32_AHB5_XSPI2)>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		mac: ethernet@40028000 {
+			compatible = "st,stm32-ethernet";
+			reg = <0x40028000 0x2000>;
+			interrupts = <92>;
+			clocks = <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_ETH1MAC)>, <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_ETH1TX)>,
+				 <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_ETH1RX)>;
+			clock-names = "mac", "tx", "rx";
+			status = "disabled";
+		};
+
+		usbotg_hs: usb@40040000 {
+			compatible = "st,stm32-otg-hs";
+			reg = <0x40040000 0x40000>;
+			interrupts = <91>;
+			clocks = <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_OTGHS)>, <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_USBPHYC)>;
+			clock-names = "otg", "phy";
+			status = "disabled";
+		};
+
+		usbotg_fs: usb@40080000 {
+			compatible = "st,stm32-otg-fs";
+			reg = <0x40080000 0x40000>;
+			interrupts = <112>;
+			/* the kernel clock HSI48, kept on 48 MHz by the CRS against the LSE */
+			clocks = <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_OTGFS)>, <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_HSI48)>,
+				 <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_LSE)>;
+			clock-names = "otg", "kernel", "sync";
+			status = "disabled";
+		};
+
+		/* SPI6 as I2S transmitter, fed by a GPDMA1 channel (the codec's sound) */
+		i2s6: audio-controller@58001400 {
+			compatible = "st,stm32h7-i2s";
+			reg = <0x58001400 0x400>, <0x40021000 0x1000>;	/* SPI6, GPDMA1 */
+			interrupts = <63>, <41>;			/* SPI6, GPDMA1 channel 2 */
+			clocks = <&rcc STM32_CLK(STM32_APB4ENR, STM32_APB4_SPI6)>,
+				 <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_GPDMA1)>,
+				 <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_AUDIO)>;
+			clock-names = "bus", "dma", "mclk";
+			st,dma-channel = <2>;
+			st,dma-request = <62>;				/* SPI6_TX */
+			status = "disabled";
+		};
+
+		/* USB Type-C port controller (here: the CC lines of USB1, for the host's VBUS). No
+		 * module of its own: usb-stm32 drives it through the host node's typec-controller and
+		 * gates its clock with the host's clocks ("typec") */
+		ucpd1: typec@4000ec00 {
+			compatible = "st,stm32-ucpd";
+			reg = <0x4000ec00 0x400>;
+			interrupts = <128>;
+			clocks = <&rcc STM32_CLK(STM32_APB1ENR2, STM32_APB12_UCPD1)>;
+			status = "disabled";
+		};
+
+		/* the SAIs: described, no driver yet (the sound of the STM32H7S78-DK is on I2S6) */
+		sai1: sai@42005800 {
+			compatible = "st,stm32-sai";
+			reg = <0x42005800 0x400>;
+			interrupts = <72>, <73>;
+			clocks = <&rcc STM32_CLK(STM32_APB2ENR, STM32_APB2_SAI1)>;
+			status = "disabled";
+		};
+
+		sai2: sai@42005c00 {
+			compatible = "st,stm32-sai";
+			reg = <0x42005c00 0x400>;
+			interrupts = <74>, <75>;
+			clocks = <&rcc STM32_CLK(STM32_APB2ENR, STM32_APB2_SAI2)>;
+			status = "disabled";
+		};
+
+		rtc: rtc@58004000 {
+			compatible = "st,stm32-rtc";
+			reg = <0x58004000 0x400>;
+			interrupts = <32>;
+			clocks = <&rcc STM32_CLK(STM32_APB4ENR, STM32_APB4_RTCAPB)>, <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_LSE)>;
+			clock-names = "bus", "lse";
+			status = "disabled";
+		};
+
+		rng: rng@48020000 {
+			compatible = "st,stm32-rng";
+			reg = <0x48020000 0x400>;
+			interrupts = <37>;
+			clocks = <&rcc STM32_CLK(STM32_AHB3ENR, STM32_AHB3_RNG)>, <&rcc STM32_CLK(STM32_KERNEL, STM32_CK_HSI48)>;
+			clock-names = "bus", "kernel";
+			status = "disabled";
+		};
+	};
+};

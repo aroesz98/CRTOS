@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "ENET (DMA)" as H
+participant "enet_irq" as I
+participant "wątek enet (prio 18)" as T
+participant "S05 netdev_rx\n(ITCM)" as N
+participant "net-lwip rx" as L
+participant "lwIP (pod blokadą rdzenia)" as W
+H -> H : deskryptor z DTCM, ramka do bufora w OCRAM;\nsumy IP/TCP/UDP/ICMP sprawdzone (zła: ramka odrzucona)
+H -> I : przerwanie RXF
+I -> T : callback kENET_RxEvent: sem_give(rx_sem)
+loop rx_frames: deskryptory bez EMPTY
+  alt ostatni deskryptor, bez błędów
+    T -> T : DCACHE_InvalidateByRange(bufor, len)
+    T -> N : netdev_rx(nd, bufor DMA, len)
+    N -> L : rx(ctx, nd, frame, len)
+    L -> W : lw_if_input: pbuf z puli (jedyna kopia), netif->input
+    W -> W : ARP / IP / TCP / UDP (bez liczenia sum)
+    W -> L : zdarzenie gniazda (tylko gdy może kogoś obudzić)\n-> crtos_lwip_event(owner)
+    L -> N : net_sock_event(ks)
+  else błąd albo ramka za długa
+    T -> T : rx_error: licznik przyczyny, rx_errors
+  end
+  T -> H : deskryptor znów EMPTY, RDAR
+end
+note over T : co 1 s (albo 200 ms bez ramek): check_link()
+@enduml

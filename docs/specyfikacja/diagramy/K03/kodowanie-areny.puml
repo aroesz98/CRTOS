@@ -1,0 +1,24 @@
+@startuml
+!include ../styl.iuml
+title mpu_encode_region(): blok pamięci jako region MPU
+
+start
+:blok [base, base + size), size >= 32 B;
+:l2 = log2(size) zaokrąglony w górę;
+repeat
+  if (size == 2^l2 i base wyrównany do 2^l2?) then (tak)
+    :region 2^l2 bez podregionów;
+    :rbar, rasr (atrybuty: RWX, RW albo RW bez cache);
+    stop
+  elseif (l2 >= 8 i blok to ciąg ósemek regionu 2^l2\nwyrównanego w dół do 2^l2?) then (tak)
+    :region 2^l2, SRD wyłącza pozostałe ósemki;
+    :rbar, rasr;
+    stop
+  else (nie)
+    :l2 = l2 + 1;
+  endif
+repeat while (l2 < 32?) is (tak)
+->nie;
+:-EINVAL;
+stop
+@enduml

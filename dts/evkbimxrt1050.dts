@@ -1,0 +1,436 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * NXP i.MX RT1050 EVKB board description for CRTOS.
+ * Pin settings follow the SDK board examples (elcdif/lvgl, lwip_ping, sdcard).
+ */
+/dts-v1/;
+
+#include "imxrt1052.dtsi"
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "NXP i.MX RT1050 EVKB";
+	compatible = "fsl,evkbimxrt1050", "fsl,imxrt1052";
+
+	aliases {
+		serial0 = &lpuart1;
+		serial3 = &lpuart3;
+		spi3 = &lpspi3;
+		mmc0 = &usdhc1;
+		display0 = &lcdif;
+		ethernet0 = &enet;
+	};
+
+	chosen {
+		stdout-path = "serial0:1000000n8";
+		crtos,init = "/sd/crtos/sbin/init.app";
+	};
+
+	sdram: memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x2000000>;
+	};
+
+	/* The panel on the 40-pin RGB connector (and its touch controller on the 6-pin one). EVKB
+	 * ships with the RK043FN66HS-CTG (GT911 touch) or the older RK043FN02H-CT (FT5406), both
+	 * 480x272; 5"/7" 800x480 panels with the same 40-pin connector fit as well. One mode per
+	 * panel: the display starts in native-mode and changes to the size the touch controller
+	 * was configured for when it reports one (GT911: fb_suggest_size). The 800x480 panel is
+	 * the default because its touch is not detected; the RK043 ones are. */
+	panel: panel {
+		compatible = "rocktech,rk043fn66hs-ctg", "rocktech,rk043fn02h-ct";
+		/* LCD_RST: the reset of the panel's touch controller (the panel's DISP is pulled up
+		 * on the board, R67) */
+		enable-gpios = <&gpio1 2 GPIO_ACTIVE_HIGH>;
+		backlight-gpios = <&gpio2 31 GPIO_ACTIVE_HIGH>;
+		bus-width = <16>;
+
+		display-timings {
+			native-mode = <&timing1>;
+
+			/* RK043FN66HS / RK043FN02H (from the SDK, RK043FN66HS values) */
+			timing0: timing-480x272 {
+				clock-frequency = <9300000>;
+				hactive = <480>;
+				vactive = <272>;
+				hfront-porch = <8>;
+				hback-porch = <43>;
+				hsync-len = <4>;
+				vfront-porch = <8>;
+				vback-porch = <12>;
+				vsync-len = <4>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <1>;
+				pixelclk-active = <1>;
+			};
+
+			/* 5"/7" 800x480 TFT with a 40-pin RGB connector, DE mode: blanking as in the usual
+			 * HV-mode figures (back porch 46 clocks / 23 lines from the sync, front porch 40 /
+			 * 12), 27 MHz (24 MHz * 45 / 5 / 8 exactly) for 59.2 Hz - the scan-out reads
+			 * 45 MB/s of SDRAM, three times as much as at 480x272 */
+			timing1: timing-800x480 {
+				clock-frequency = <27000000>;
+				hactive = <800>;
+				vactive = <480>;
+				hfront-porch = <40>;
+				hback-porch = <26>;
+				hsync-len = <20>;
+				vfront-porch = <12>;
+				vback-porch = <13>;
+				vsync-len = <10>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <1>;
+				pixelclk-active = <1>;
+			};
+		};
+	};
+
+	/* files on the unused HyperFlash, programs there run in place (drivers/fs/flashfs.c) */
+	flashfs {
+		compatible = "crtos,flashfs";
+		partition = <&flash0_part>;
+		mountpoint = "/flash0";
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_keys>;
+
+		user-button {
+			label = "SW8";
+			gpios = <&gpio5 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_HOME>;
+			debounce-interval = <20>;
+		};
+	};
+
+	/* The display belongs to the graphics server (gfxd). For a bare hardware check without
+	 * it, add a node with compatible = "crtos,touchpaint" (module tests/drivers/touchpaint). */
+
+	/* A DualSense (Edge) pad over Bluetooth through the ESP32 bridge (esp32-s3-bt-mod/):
+	 * ESP32 GPIO17 (UART2 TX) -> J22 D0 (LPUART3 RX), GND -> GND. The driver
+	 * (drivers/input/esp32-pad) reads the bridge's frames and makes the pad an input device. */
+	gamepad {
+		compatible = "crtos,esp32-pad";
+		port = "/dev/ttyS3";
+		current-speed = <460800>;
+	};
+
+	/* the TCP/IP stack (lwIP, drivers/net/lwip): sockets on every network interface */
+	tcpip {
+		compatible = "crtos,lwip";
+	};
+
+	/* driven by the example module examples/drivers/hello (tests DT -> module autoloading) */
+	hello-test {
+		compatible = "crtos,hello";
+		label = "device tree test node";
+	};
+};
+
+&iomuxc {
+	pinctrl_lpuart1: lpuart1grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B0_12_LPUART1_TXD 0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B0_13_LPUART1_RXD 0x10b0
+		>;
+	};
+
+	/* Arduino header J22: pin 2 (D1) TX, pin 1 (D0) RX (shared with the camera connector) */
+	pinctrl_lpuart3: lpuart3grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B1_06_LPUART3_TXD 0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B1_07_LPUART3_RXD 0x10b0
+		>;
+	};
+
+	/* Arduino header J24: pin 10 SCK, pin 9 SDO (MOSI), pin 1 PCS0. Sending only: the
+	 * LPSPI3's SDI (MISO) pads are taken - GPIO_AD_B1_13 is the audio codec's data input
+	 * (SAI1_TX_DATA00, below), GPIO_AD_B0_02 (J24 pin 2) the panel's LCD_RST line, the
+	 * reset of its touch controller (enable-gpios above): leave that pin unconnected. For reading from a device, swap
+	 * MXRT1050_IOMUXC_GPIO_AD_B1_13_LPSPI3_SDI into this group (J35 pin 3) and disable &sai1.
+	 * The header's usual SPI pins (J24 3-6) are the SD card's lines on this board. Shared
+	 * as well: J24 pin 9 is the ID pin of J9 (USB OTG1), pins 10 and 1 are USB over-current
+	 * flags - so say the SDK's pin labels; the EVKB B1 schematic (SPF-30168, page 12) has
+	 * I2C1 SDA/SCL on J24 pins 9/10 through R276/R277 instead (not checked on the board). */
+	pinctrl_lpspi3: lpspi3grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B0_00_LPSPI3_SCK  0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B0_01_LPSPI3_SDO  0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B0_03_LPSPI3_PCS0 0x10b0
+		>;
+	};
+
+	/* the WM8960 codec: master clock, bit clock, frame sync, data to the DAC */
+	pinctrl_sai1: sai1grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B1_09_SAI1_MCLK      0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B1_13_SAI1_TX_DATA00 0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B1_14_SAI1_TX_BCLK   0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B1_15_SAI1_TX_SYNC   0x10b0
+		>;
+	};
+
+	pinctrl_usdhc1: usdhc1grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_SD_B0_00_USDHC1_CMD     0x17079
+			MXRT1050_IOMUXC_GPIO_SD_B0_01_USDHC1_CLK     0x10079
+			MXRT1050_IOMUXC_GPIO_SD_B0_02_USDHC1_DATA0   0x17079
+			MXRT1050_IOMUXC_GPIO_SD_B0_03_USDHC1_DATA1   0x17079
+			MXRT1050_IOMUXC_GPIO_SD_B0_04_USDHC1_DATA2   0x17079
+			MXRT1050_IOMUXC_GPIO_SD_B0_05_USDHC1_DATA3   0x17079
+			MXRT1050_IOMUXC_GPIO_B1_12_GPIO2_IO28        0x17040
+			MXRT1050_IOMUXC_GPIO_AD_B0_05_GPIO1_IO05     0x10b0
+			MXRT1050_IOMUXC_GPIO_B1_14_USDHC1_VSELECT    0x170a1
+		>;
+	};
+
+	pinctrl_lcdif: lcdifgrp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_B0_00_LCD_CLK      0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_01_LCD_ENABLE   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_02_LCD_HSYNC    0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_03_LCD_VSYNC    0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_04_LCD_DATA00   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_05_LCD_DATA01   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_06_LCD_DATA02   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_07_LCD_DATA03   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_08_LCD_DATA04   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_09_LCD_DATA05   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_10_LCD_DATA06   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_11_LCD_DATA07   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_12_LCD_DATA08   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_13_LCD_DATA09   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_14_LCD_DATA10   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B0_15_LCD_DATA11   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B1_00_LCD_DATA12   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B1_01_LCD_DATA13   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B1_02_LCD_DATA14   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B1_03_LCD_DATA15   0x1b0b0
+			MXRT1050_IOMUXC_GPIO_B1_15_GPIO2_IO31   0x10b0
+			MXRT1050_IOMUXC_GPIO_AD_B0_02_GPIO1_IO02 0x10b0
+		>;
+	};
+
+	pinctrl_lpi2c1: lpi2c1grp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B1_00_LPI2C1_SCL (IMX_PAD_SION | 0xd8b0)
+			MXRT1050_IOMUXC_GPIO_AD_B1_01_LPI2C1_SDA (IMX_PAD_SION | 0xd8b0)
+		>;
+	};
+
+	pinctrl_touch: touchgrp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_AD_B0_11_GPIO1_IO11 0x10b0
+		>;
+	};
+
+	pinctrl_enet: enetgrp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_GPIO_B1_04_ENET_RX_DATA00 0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_05_ENET_RX_DATA01 0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_06_ENET_RX_EN     0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_07_ENET_TX_DATA00 0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_08_ENET_TX_DATA01 0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_09_ENET_TX_EN     0xb0e9
+			MXRT1050_IOMUXC_GPIO_B1_10_ENET_REF_CLK   (IMX_PAD_SION | 0x31)
+			MXRT1050_IOMUXC_GPIO_B1_11_ENET_RX_ER     0xb0e9
+			MXRT1050_IOMUXC_GPIO_EMC_40_ENET_MDC      0xb0e9
+			MXRT1050_IOMUXC_GPIO_EMC_41_ENET_MDIO     0xb829
+			MXRT1050_IOMUXC_GPIO_AD_B0_09_GPIO1_IO09  0xb0a9
+			MXRT1050_IOMUXC_GPIO_AD_B0_10_GPIO1_IO10  0xb0a9
+		>;
+	};
+
+	pinctrl_keys: keysgrp {
+		fsl,pins = <
+			MXRT1050_IOMUXC_SNVS_WAKEUP_GPIO5_IO00 0x1b0a0
+		>;
+	};
+};
+
+&lpuart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_lpuart1>;
+	current-speed = <1000000>;
+	status = "okay";
+};
+
+/* /dev/ttyS3 (lpuart-imxrt): taken by the pad bridge (gamepad node below) at 460800 baud */
+&lpuart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_lpuart3>;
+	current-speed = <460800>;
+	status = "okay";
+};
+
+/* SPI on J24 (lpspi-imxrt): /dev/spidev3.0 for programs. A device with a driver of its own
+ * would be another child: compatible, reg = chip select, spi-max-frequency. */
+&lpspi3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_lpspi3>;
+	status = "okay";
+
+	spidev@0 {
+		compatible = "crtos,spidev";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+	};
+};
+
+&usdhc1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usdhc1>;
+	cd-gpios = <&gpio2 28 GPIO_ACTIVE_LOW>;
+	power-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+	max-frequency = <50000000>;
+	cap-sd-highspeed;
+	status = "okay";
+};
+
+&lcdif {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_lcdif>;
+	display = <&panel>;
+	status = "okay";
+};
+
+&pxp {
+	status = "okay";
+};
+
+&lpi2c1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_lpi2c1>;
+	clock-frequency = <100000>;
+	status = "okay";
+
+	/* only the controller of the fitted panel answers; the other probe fails harmlessly. The
+	 * GT911 reports in the resolution it was configured for, which is its panel's: the size of
+	 * the display mode it picks (inputd scales touches to the screen) */
+	touchscreen@5d {
+		compatible = "goodix,gt911";
+		reg = <0x5d>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_touch>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <11 IRQ_TYPE_EDGE_RISING>;
+	};
+
+	/* the same controller at its other address: a GT911 takes 0x14 when its INT line is high
+	 * as its reset ends (panels that pull INT up, e.g. the 4.3" 800x480 one of the Waveshare
+	 * 16249 module), 0x5d when it is low (RK043FN66HS) */
+	touchscreen@14 {
+		compatible = "goodix,gt911";
+		reg = <0x14>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_touch>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <11 IRQ_TYPE_EDGE_RISING>;
+	};
+
+	touchscreen@38 {
+		compatible = "focaltech,ft5406";
+		reg = <0x38>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_touch>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <11 IRQ_TYPE_EDGE_FALLING>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <272>;
+		touchscreen-swapped-x-y;
+	};
+
+	/* sound: headphone jack J12 and the speaker outputs (sai-imxrt, /dev/audio) */
+	wm8960: audio-codec@1a {
+		compatible = "wlf,wm8960";
+		reg = <0x1a>;
+	};
+};
+
+&sai1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_sai1>;
+	audio-codec = <&wm8960>;
+	status = "okay";
+};
+
+&enet {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_enet>;
+	phy-mode = "rmii";
+	phy-handle = <&ethphy0>;
+	phy-reset-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+	phy-reset-duration = <10>;
+	status = "okay";
+
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ethphy0: ethernet-phy@2 {
+			compatible = "micrel,ksz8081", "ethernet-phy-ieee802.3-c22";
+			reg = <2>;
+			interrupt-parent = <&gpio1>;
+			interrupts = <10 IRQ_TYPE_LEVEL_LOW>;
+		};
+	};
+};
+
+&usbphy1 {
+	status = "okay";
+};
+
+/* J9: "peripheral" - the board is a USB serial port of a computer (/dev/ttyACM0, a shell);
+ * "host" - keyboards and mice (through a USB OTG adapter). One controller may be a device and
+ * the other a host, not both the same. */
+&usb1 {
+	dr_mode = "peripheral";
+	status = "okay";
+};
+
+&usbphy2 {
+	status = "okay";
+};
+
+/* J10: keyboards, mice and hubs (through a USB OTG adapter); the board supplies the 5 V */
+&usb2 {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&flexspi {
+	status = "okay";
+
+	hyperflash: flash@0 {
+		compatible = "cypress,s26ks512s", "cfi-flash";
+		reg = <0>;
+		size = <0x4000000>;
+		/* The kernel image lives in the first 2 MB, the rest is the file system /flash0 */
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			partition@0 {
+				label = "kernel";
+				reg = <0x0 0x200000>;
+				read-only;
+			};
+			flash0_part: partition@200000 {
+				label = "flash0";
+				reg = <0x200000 0x3e00000>;
+			};
+		};
+	};
+};
+
+&gpt1 {
+	status = "okay";
+};
+
+&edma {
+	status = "okay";
+};

@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek A" as A
+participant "PendSV_Handler (ITCM)" as PS
+participant "sched_switch()" as S
+participant "K03 mpu_switch()" as MPU
+participant "wątek B" as B
+    A -> PS : PendSV (sched_pend_switch: tick, wake, yield, block)
+    PS -> PS : czy stos A ma miejsce na kontekst? (task_stack_limit)
+    alt brak miejsca
+        PS -> S : sched_context_overflow(A): zabij wątek/proces
+    else jest miejsce
+        PS -> PS : zapis CONTROL, R4-R11, EXC_RETURN (+ S16-S31)
+    end
+    PS -> S : BASEPRI = KERNEL_BASEPRI
+    S -> S : rozliczenie cykli CPU wątku A
+    S -> S : najwyższy priorytet: 31 - CLZ(mapa bitowa)
+    S -> MPU : strażnicy stosu B (regiony 14, 15), arena i okna procesu B (8-11)
+    PS -> PS : odtworzenie kontekstu B, CONTROL.nPRIV
+    PS --> B : powrót wyjątku
+@enduml

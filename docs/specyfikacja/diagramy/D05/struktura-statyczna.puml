@@ -1,0 +1,72 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "enet-imxrt.ko" {
+  class enet <<struct>> {
+    +device* dev
+    +ENET_Type* base
+    +int irq
+    +enet_handle_t handle
+    +netdev nd
+    +semaphore rx_sem
+    +semaphore tx_sem
+    +mutex tx_lock
+    +task_t* thread
+    +phy_handle_t phy
+    +uint32_t phy_addr
+    +gpio_desc* phy_reset
+    +void* rx_desc, tx_desc <<DTCM>>
+    +uint8_t* tx_bufs <<bez cache>>
+    +uint8_t* rx_bufs <<z cache, OCRAM>>
+    +uint32_t rx_err[5]
+    -enet_irq(irq, ctx)
+    -enet_callback(base, handle, event, info, user)
+    -enet_thread(arg)
+    -rx_frames(e)
+    -rx_error(e, ctl)
+    -enet_xmit(nd, frame, len) : int
+    -tx_frame(e, frame, len) : bool
+    -clear_csums(f, len)
+    -desc_alloc(size) : void*
+    -check_link(e)
+    -set_flow_control(e, fd)
+  }
+}
+package "net-lwip.ko" {
+  class crtos_lwip <<moduł, strona jądra>> {
+    -net_stack_ops s_ops
+    +attach, rx, link
+    +socket, connect, send, recv, poll, ioctl
+    +crtos_lwip_event(owner)
+    +crtos_lwip_xmit(nd, frame, len) : int
+  }
+  class lw_h <<interfejs lw.h>> {
+    +LW_TX_CSUM, LW_RX_CSUM
+    +lw_start() : int
+    +lw_if_add(nd, mac, mtu, csum) : void*
+    +lw_if_input(li, frame, len) : int
+    +lw_if_dhcp(li) : int
+    +lw_socket(domain, type, proto, owner) : int
+    +lw_send(...) : int
+    +lw_recv(...) : int
+    +lw_poll(s) : int
+    +lw_resolve(name, addr) : int
+  }
+  class lwip_side <<moduł, strona lwIP>> {
+    netif (sumy kontrolne na interfejs), etharp, dhcp, dns
+    sockets.c (nieblokujące, zdarzenia tylko gdy check_waiters)
+  }
+  class sys_arch <<moduł>> {
+    sys_sem, sys_mutex, sys_mbox
+    sys_thread_new -> kthread_create
+    mem -> kmalloc
+  }
+}
+interface netdev_ops <<S05>>
+interface net_stack_ops <<S05>>
+enet ..|> netdev_ops
+crtos_lwip ..|> net_stack_ops
+crtos_lwip --> lw_h
+lwip_side ..|> lw_h
+lwip_side ..> sys_arch
+@enduml

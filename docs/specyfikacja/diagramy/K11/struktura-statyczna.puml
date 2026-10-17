@@ -1,0 +1,43 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class shm <<struct>> {
+  +uint32_t refs
+  +uint8_t* base
+  +uint32_t size
+  +uint32_t attr
+  +bool owned
+  +bool mappable
+}
+class shm_window <<struct>> {
+  +shm* shm
+  +uint32_t rbar
+  +uint32_t rasr
+}
+class piece <<struct>> {
+  +uintptr_t base
+  +uint32_t size
+}
+class proc <<struct, K08>> {
+  +shm_window win[3]
+  +handle* htab
+}
+class shm_cpp <<moduł>> {
+  +shm_alloc(size, flags) : shm*
+  +shm_wrap(base, size, nocache) : shm*
+  +shm_revoke(s)
+  +shm_lookup(h, base, size, cached) : shm*
+  +shm_window_span(p, addr) : size_t
+  -shm_cover(base, size, piece, max) : int
+  +sys_shm_create(size, flags) : int64_t
+  +sys_shm_map(h) : int64_t
+  +sys_shm_unmap(addr) : int64_t
+  -shm_map(p, s, addr) : int
+  -shm_unmap(p, addr) : int
+}
+proc *-- "3" shm_window
+shm_window --> shm : odwołanie (obiekt z kilku\nregionów: kilka okien)
+proc ..> shm : uchwyt H_SHM (odwołanie)
+shm_cpp ..> shm
+shm_cpp ..> piece : pokrycie obiektu\nregionami MPU (do 3)
+@enduml

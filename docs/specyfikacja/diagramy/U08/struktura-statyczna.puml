@@ -1,0 +1,77 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class vncd_c <<program vncd.app>> {
+  -gfx* s_g
+  -uint16_t* s_shadow
+  -uint16_t* s_fb
+  -uint8_t* s_dirty
+  -int W, H, TX, TY
+  -int s_clip_ignore
+  -zdef s_z
+  -uint8_t* s_work, s_zout
+  +main() : int
+  -serve(listener) <<wątek, priorytet 11>>
+  -session(fd, listener)
+  -handshake(fd, peer) : int
+  -screen_start() : bool
+  -screen_stop()
+  -take_screen()
+  -process() : int
+  -send_update()
+  -due_rects(out, max) : int
+  -zlib_rect(x, y, w, h)
+  -hextile_tile(x, y, w, h)
+  -raw_rect(x, y, w, h)
+  -row_pixels(x, y, w, dst)
+  -key_event(down, sym)
+  -pointer_event(mask, x, y)
+  -cut_done()
+  -send_clip()
+}
+class viewer <<struct V>> {
+  +int fd
+  +int bytes
+  +bool big
+  +bool native
+  +uint32_t lut_r[32], lut_g[64], lut_b[32]
+  +int enc
+  +bool want
+  +int rx, ry, rw, rh
+  +uint8_t in[2048]
+  +uint8_t out[32768]
+  +char* cut
+  +down[16] {sym, code}
+  +uint8_t buttons
+}
+class pixfmt <<struct>> {
+  +uint8_t bpp, depth, big, truecolour
+  +uint16_t rmax, gmax, bmax
+  +uint8_t rshift, gshift, bshift
+}
+class zdef <<moduł deflate.c>> {
+  +uint16_t head[4096]
+  +int started
+  +uint8_t* out
+  +uint64_t acc
+  +zdef_init(z, out, max_in) : int
+  +zdef_bound(max_in) : size_t
+  +zdef_reset(z)
+  +zdef_rect(z, in, len, unit, row) : size_t
+}
+class des <<moduł des.c>> {
+  +des_encrypt(key, in, out)
+  +vnc_auth_response(password, challenge, response)
+}
+class libgfx <<L02>> {
+  +gfx_screen_watch()
+  +gfx_screen_take()
+  +gfx_send_input()
+  +gfx_clip_set(), gfx_clip_get(), gfx_clip_watch()
+}
+vncd_c *-- viewer
+vncd_c *-- zdef : strumień zlib przeglądarki
+vncd_c ..> pixfmt : SetPixelFormat
+vncd_c ..> des : logowanie
+vncd_c ..> libgfx : gfxd (U03)
+@enduml

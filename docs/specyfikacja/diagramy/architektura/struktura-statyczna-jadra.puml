@@ -1,0 +1,51 @@
+@startuml
+!include ../styl.iuml
+title Grupy komponentów jądra i zależności między nimi
+
+package "start i diagnostyka" as START {
+  component "K18 start" as K18
+  component "K19 kmon, autotesty" as K19
+}
+package "granica programów" as GATE {
+  component "K09 wywołania systemowe" as K09
+}
+package "procesy i komunikacja" as PROC {
+  component "K08 procesy, uchwyty" as K08
+  component "K10 IPC" as K10
+  component "K11 shm" as K11
+  component "K12 potoki, poll" as K12
+}
+package "wejście/wyjście i sterowniki" as IO {
+  component "K13 VFS" as K13
+  component "K14 SD, FAT" as K14
+  component "K15 konsola, log" as K15
+  component "K16 loader" as K16
+  component "K17 DT, model sterowników" as K17
+  component "S01-S05 frameworki" as SUB
+}
+package "rdzeń" as CORE {
+  component "K05 scheduler, czas, kworker" as K05
+  component "K06 synchronizacja" as K06
+  component "K07 pamięć" as K07
+}
+package "arch (Cortex-M7)" as ARCH {
+  component "K01 kontekst, SVC" as K01
+  component "K02 przerwania" as K02
+  component "K03 MPU" as K03
+  component "K04 wyjątki" as K04
+}
+
+START ..> GATE
+START ..> IO
+START ..> CORE
+GATE ..> PROC
+GATE ..> IO
+PROC ..> IO
+PROC ..> CORE
+PROC ..> ARCH
+IO ..> CORE
+IO ..> ARCH
+CORE ..> ARCH
+ARCH ..> CORE : K01, K04 -> K05\n(przełączanie, kończenie wątków)
+ARCH ..> GATE : K01 -> K09\n(wejście do jądra)
+@enduml

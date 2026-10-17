@@ -1,0 +1,19 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek L (prio 5, właściciel)" as L
+participant "mutex" as M
+participant "wątek H (prio 15)" as H
+participant "wątek M (prio 10)" as Mi
+    L -> M : mutex_lock: owner = L
+    H -> M : mutex_lock: zajęty
+    M -> M : H.blocked_on_mutex = m, pi_boost(m, 15)
+    M -> L : sched_set_prio(L, 15)
+    note over Mi : M (10) nie wyprzedza L (15)
+    M -> M : sched_block(H) na m.wq
+    L -> M : mutex_unlock
+    M -> M : owner = H, count = 1, H.blocked_on_mutex = NULL
+    M -> H : sched_wake(H, 0)
+    M -> L : recompute_prio(L): powrót do 5
+    H -> H : działa z mutexem
+@enduml

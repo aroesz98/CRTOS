@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+class netmgr_c <<program netmgr.app>> {
+  -iface s_if[4]
+  -int s_nif
+  -uint32_t s_dns[2]
+  -char s_ntp[64]
+  -int s_fd
+  +main() : int
+  -load_config()
+  -configure(i)
+  -check() : bool
+  -set_dns()
+  -ntp_sync() : int
+  -parse_cidr(s, addr, mask) : int
+}
+class iface <<struct>> {
+  +char name[8]
+  +bool dhcp
+  +uint32_t addr, mask, gw
+  +bool configured
+  +uint32_t flags
+  +uint32_t cur_addr
+}
+netmgr_c *-- "0..4" iface
+@enduml

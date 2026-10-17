@@ -1,0 +1,43 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Programista" as D
+participant "crtos" as C
+participant "CMake / Ninja / GCC" as B
+participant "thirdparty.py" as T
+participant "GitHub" as G
+participant "modcheck / dtc" as K
+participant "netdeploy" as N
+participant "deployd (U06)" as S
+participant "swdcon (sonda)" as W
+D -> C : crtos build
+C -> B : configure (pierwszy raz i po zmianie CMakeLists, sources.txt, patches/), ninja
+B -> T : thirdparty.py --build
+loop każdy katalog third_party/sources.txt
+  alt brak checkoutu (grupa base)
+    T -> G : git fetch --depth 1 commitu (only=: sparse, bez zbędnych plików)
+    G --> T : drzewo commitu
+    T -> T : git apply patches/<katalog>.patch, kopia w .git/crtos.patch
+  else inny commit albo inna łatka
+    T -> T : apply --reverse starej łatki; zmiany spoza łatki? -> błąd, katalog bez zmian
+    T -> G : git fetch commitu (gdy inny)
+    T -> T : git apply nowej łatki
+  else zgodny (HEAD z .git, łatka = kopia)
+    T -> T : nic (bez gita)
+  end
+end
+T --> B : 0 albo błąd konfiguracji
+B -> K : .ko / .app: kontrola symboli; .dts -> .dtb
+B --> C : build/sdcard/crtos/...
+D -> C : crtos deploy
+C -> C : manifest: pliki ze zmienionym CRC
+alt płytka odpowiada w sieci (token)
+  C -> N : upload(pliki)
+  N -> S : AUTH, PUT ... (CRC-32)
+  S --> N : OK
+else
+  C -> W : upload_files (kmon stage/savestage, ok. 45 KB/s)
+end
+C -> C : manifest zaktualizowany po każdym pliku
+C --> D : "nowe sterowniki / usługi po crtos reboot"
+@enduml

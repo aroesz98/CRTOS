@@ -1,0 +1,77 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "I2C (i2c.cpp)" {
+  class i2c_adapter <<struct>> {
+    +device* dev
+    +const i2c_adapter_ops* ops
+    +void* ctx
+    +mutex lock
+    +int bus
+    +i2c_client* clients[8]
+    +int nclients
+  }
+  class i2c_client <<struct>> {
+    +i2c_adapter* adapter
+    +uint16_t addr
+    +device* dev
+  }
+  class i2c_msg <<struct>> {
+    +uint16_t addr
+    +uint16_t flags
+    +uint16_t len
+    +uint8_t* buf
+  }
+  interface i2c_adapter_ops <<interfejs>> {
+    +xfer(ctx, msgs, num) : int
+  }
+}
+package "SPI (spi.cpp)" {
+  class spi_controller <<struct>> {
+    +device* dev
+    +const spi_controller_ops* ops
+    +void* ctx
+    +mutex lock
+    +int bus
+    +int num_cs
+    +spi_device* devices[8]
+    +spidev* spidevs[8]
+  }
+  class spi_device <<struct>> {
+    +spi_controller* ctlr
+    +device* dev
+    +uint8_t cs
+    +uint8_t bits_per_word
+    +uint32_t mode
+    +uint32_t max_speed_hz
+  }
+  class spidev <<struct>> {
+    +spi_device spi
+    +char name[16]
+  }
+  class spi_transfer <<struct>> {
+    +const void* tx_buf
+    +void* rx_buf
+    +uint32_t len
+    +uint32_t speed_hz
+    +uint16_t delay_us
+    +uint8_t bits_per_word
+    +uint8_t cs_change
+  }
+  interface spi_controller_ops <<interfejs>> {
+    +transfer(ctx, spi, xfers, num) : int
+  }
+}
+i2c_adapter *-- "0..8" i2c_client
+i2c_adapter --> i2c_adapter_ops
+i2c_adapter_ops ..> i2c_msg
+spi_controller *-- "0..8" spi_device
+spi_controller *-- "0..8" spidev
+spidev *-- spi_device
+spi_controller --> spi_controller_ops
+spi_controller_ops ..> spi_transfer
+class lpi2c_imxrt <<D02>>
+class lpspi_imxrt <<D02>>
+lpi2c_imxrt ..|> i2c_adapter_ops
+lpspi_imxrt ..|> spi_controller_ops
+@enduml

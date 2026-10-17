@@ -1,0 +1,42 @@
+CRTOS: GCC's garbage collector takes its pages from malloc on a host without mmap, 16 pages
+of 4 KB at a time, and aligns them itself: one page of each group (6% of the collector's
+memory) and a page of each large object go to the alignment. On CRTOS the pages come from
+memalign (libcrtosheap returns the gap in front to the heap), the group's header goes after
+them, and every page is used - memory the compiler on the board lacks for large files.
+--- a/gcc/ggc-page.cc	2026-09-30 00:15:27.674297917 +0200
++++ b/gcc/ggc-page.cc	2026-09-30 00:15:27.674400362 +0200
+@@ -33,6 +33,9 @@
+ #include "cgraph.h"
+ #include "cfgloop.h"
+ #include "plugin.h"
++#ifdef __CRTOS__
++extern "C" void *memalign (size_t, size_t);
++#endif
+ 
+ /* Prefer MAP_ANON(YMOUS) to /dev/zero, since we don't need to keep a
+    file open.  Prefer either to valloc.  */
+@@ -854,11 +857,24 @@
+       size_t alloc_size, head_slop, tail_slop;
+       int multiple_pages = (entry_size == G.pagesize);
+ 
++#ifdef __CRTOS__
++      /* CRTOS: page-aligned memory from the allocator (libcrtosheap's memalign gives the gap
++	 in front back as a free block) and the group's header after the pages: all of them
++	 usable, instead of losing a page of each group to the alignment.  */
++      if (multiple_pages)
++	alloc_size = GGC_QUIRE_SIZE * G.pagesize + sizeof (page_group);
++      else
++	alloc_size = entry_size + sizeof (page_group);
++      allocation = (char *) memalign (G.pagesize, alloc_size);
++      if (!allocation)
++	xmalloc_failed (alloc_size);
++#else
+       if (multiple_pages)
+ 	alloc_size = GGC_QUIRE_SIZE * G.pagesize;
+       else
+ 	alloc_size = entry_size + G.pagesize - 1;
+       allocation = XNEWVEC (char, alloc_size);
++#endif
+ 
+       page = (char *) (((uintptr_t) allocation + G.pagesize - 1) & -G.pagesize);
+       head_slop = page - allocation;

@@ -1,0 +1,46 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class pipe <<struct>> {
+  +uint8_t buf[4096]
+  +uint32_t head
+  +uint32_t tail
+  +int readers
+  +int writers
+  +bool tty
+  +uint32_t mode
+  +int fg_pid
+  +tty_size size
+  +wait_queue rq
+  +wait_queue wq
+  +poll_head ph
+  +mutex rlock
+  +mutex wlock
+}
+class poll_head <<struct>> {
+  +list_head entries
+}
+class poll_entry <<struct>> {
+  +list_head node
+  +task* task
+}
+class poll_slot <<struct, poll.cpp>> {
+  +poll_entry e
+  +void* obj
+  +uint8_t type
+  +uint8_t rights
+  +int16_t events
+}
+class task <<struct, K05>> {
+  +uint8_t poll_armed
+  +uint8_t poll_hit
+}
+interface file_ops <<interfejs, K13>> {
+  +poll(f, e) : int
+}
+pipe *-- poll_head
+poll_head o-- poll_entry
+poll_slot *-- poll_entry
+poll_entry --> task
+pipe ..|> file_ops : pipe_poll
+@enduml

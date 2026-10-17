@@ -1,0 +1,51 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class kmalloc_cpp <<moduł>> {
+  -pool s_pool[5]
+  -ord_any, ord_fast, ord_fast_exec, ord_exec, ord_large, ord_nocache
+  +mm_init()
+  +kmalloc_bounded(size, align, boundary, flags) : void*
+  +kmalloc(size, flags) : void*
+  +kfree(ptr)
+  +mm_pool_info(i, info) : int
+  +mm_check() : int
+  -pool_order(flags) : const uint8_t*
+}
+class pool <<struct>> {
+  +const char* name
+  +uintptr_t base
+  +uintptr_t end
+  +unsigned flags
+  +tlsf* t
+}
+class tlsf <<struct>> {
+  +uint32_t fl_bitmap
+  +uint32_t fl_count
+  +uintptr_t pool_start
+  +uintptr_t pool_end
+  +size_t free_bytes
+  +size_t used_bytes
+  +uint32_t nused
+  +uint32_t* sl_bitmap
+  +blk~** heads
+}
+class blk <<nagłówek bloku, 8 B>> {
+  +blk* prev_phys
+  +uint32_t size_i_F_FREE
+  +blk* next_free (tylko wolne)
+  +blk* prev_free (tylko wolne)
+}
+class tlsf_cpp <<moduł>> {
+  +tlsf_create(mem, bytes) : tlsf*
+  +tlsf_malloc(t, size) : void*
+  +tlsf_memalign_bounded(t, align, size, boundary) : void*
+  +tlsf_free(t, ptr) : int
+  +tlsf_owns(t, ptr) : int
+  +tlsf_check(t) : int
+}
+kmalloc_cpp *-- "5" pool
+pool --> tlsf
+tlsf o-- blk : listy wolnych bloków [fl][sl]
+kmalloc_cpp ..> tlsf_cpp
+@enduml

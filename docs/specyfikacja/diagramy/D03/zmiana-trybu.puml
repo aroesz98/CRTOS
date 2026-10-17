@@ -1,0 +1,33 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "lcdif_probe" as P
+participant "gt911 (probe)" as G
+participant "S03 fb_suggest_size" as F
+participant "lcdif_set_size" as D
+participant "clk-imxrt (D01)" as C
+participant "eLCDIF" as H
+P -> P : find_mode(0, 0): native-mode (800x480)
+P -> C : clk_set_rate(pix, 27 MHz)
+P -> H : ELCDIF_RgbModeInit (wyjście z resetu po włączeniu), start
+P -> F : fb_register (fb0)
+G -> G : konfiguracja kontrolera: rozdzielczość panelu
+G -> F : fb_suggest_size(480, 272)
+alt fb0 otwarty albo bufory u programów
+  F --> G : -EBUSY (tryb bez zmian)
+else nikt nie używa
+  F -> F : resizing = true, zwolnienie wrapperów shm
+  F -> D : set_size(480, 272)
+  D -> D : find_mode(480, 272)
+  alt brak takiego trybu
+    D --> F : -ENOENT
+  else tryb panelu
+    D -> H : stop(): DOTCLK_MODE off, koniec ramki (najwyżej 50 ms)
+    D -> D : nowe bufory (stare zwolnione najpierw; przy braku pamięci stary tryb)
+    D -> C : clk_disable(pix-gate), clk_set_rate(pix, 9,3 MHz), clk_enable
+    D -> H : soft_reset (SFTRST/CLKGATE, najwyżej 5 ms), rejestry trybu RGB, start
+    D --> F : 0, nowe fb_info
+  end
+  F -> F : info = nowe, resizing = false
+end
+@enduml

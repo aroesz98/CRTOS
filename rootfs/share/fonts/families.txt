@@ -1,0 +1,5 @@
+# font families of the interface: <id> <name>, the default first (tools/fonts.py)
+dejavu DejaVu Sans
+noto Noto Sans
+liberation Liberation Sans
+dejavu-serif DejaVu Serif

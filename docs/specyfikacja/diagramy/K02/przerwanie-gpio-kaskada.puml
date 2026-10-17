@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "pin GPIO (np. INT dotyku)" as P
+participant "NVIC (linia portu, piny 0-15 albo 16-31)" as NV
+participant "cascade() w gpio-imxrt (D01)" as C
+participant "irq_handle_nested (K02)" as I
+participant "obsługa sterownika dotyku (D04)" as H
+    P -> NV : zbocze na pinie
+    NV -> C : irq_dispatch -> handler portu
+    C -> C : pending = ISR & IMR & połowa portu
+    C -> C : ISR = pending (kasowanie przed obsługą)
+    loop każdy ustawiony bit
+        C -> I : irq_handle_nested(irq_base + pin)
+        alt jest obsługa
+            I -> H : handler(virq, ctx)
+            H -> H : sem_give / event_set dla wątku
+        else brak obsługi
+            I -> C : chip->mask(pin)
+        end
+    end
+@enduml

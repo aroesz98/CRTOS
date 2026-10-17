@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "rdzeń (wejście w wyjątek)" as HW
+participant "PendSV_Handler" as PS
+participant "sched_switch (K05)" as S
+participant "sched_context_overflow (K05)" as O
+    HW -> PS : ramka sprzętowa na PSP wątku A
+    alt g_current == NULL albo TF_NOSAVE
+        PS -> PS : bez zapisu (pierwszy start albo wątek zakończony)
+    else 
+        PS -> PS : potrzebne miejsce: 40 B albo 104 B z FPU
+        alt PSP - miejsce < task_stack_limit
+            PS -> O : kontekst się nie zmieści
+            O -> O : raport, proc_kill, task_redirect_to_exit
+        else 
+            PS -> PS : vstmdb S16-S31 (FPU), stmdb CONTROL, R4-R11, EXC_RETURN
+            PS -> PS : A.sp = PSP
+        end
+    end
+    PS -> PS : BASEPRI = KERNEL_BASEPRI
+    PS -> S : wybór wątku B, MPU, rozliczenie czasu
+    PS -> PS : BASEPRI = 0
+    PS -> PS : ldmia B.sp: CONTROL (tylko nPRIV), R4-R11, EXC_RETURN, S16-S31
+    PS --> HW : PSP = B.sp, bx EXC_RETURN
+@enduml

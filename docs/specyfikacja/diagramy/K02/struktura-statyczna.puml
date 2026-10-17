@@ -1,0 +1,52 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class irq_cpp <<moduł>> {
+  -irq_desc s_irq[152]
+  -virq_desc s_virq[192]
+  -uint32_t* s_vectors
+  +irq_init()
+  +irq_dispatch()
+  +SysTick_Handler()
+  +irq_request(irq, handler, ctx, prio, name) : int
+  +irq_free(irq)
+  +irq_enable(irq)
+  +irq_disable(irq)
+  +irq_alloc_descs(count, chip, ctx) : int
+  +irq_handle_nested(irq)
+  +irq_set_type(irq, type) : int
+}
+class irq_desc <<struct>> {
+  +irq_handler_t handler
+  +void* ctx
+  +const char* name
+  +uint32_t count
+}
+class virq_desc <<struct>> {
+  +irq_handler_t handler
+  +void* ctx
+  +const char* name
+  +uint32_t count
+  +const irq_chip* chip
+  +void* chip_ctx
+  +uint16_t hwirq
+  +uint8_t allocated
+  +uint8_t enabled
+}
+interface irq_chip <<interfejs>> {
+  +const char* name
+  +mask(ctx, hwirq)
+  +unmask(ctx, hwirq)
+  +set_type(ctx, hwirq, type) : int
+}
+class irq_domain <<struct w device.cpp>> {
+  +device_node* np
+  +irq_xlate_t xlate
+  +void* ctx
+}
+irq_cpp *-- "152" irq_desc
+irq_cpp *-- "192" virq_desc
+virq_desc --> irq_chip
+irq_domain ..> irq_cpp : xlate zwraca numer
+gpio_imxrt ..|> irq_chip : implementuje (D01)
+@enduml

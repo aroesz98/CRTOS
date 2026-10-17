@@ -1,0 +1,24 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "terminal (getty / term / konsola)" as T
+participant "sh" as S
+participant "K08" as K
+participant "program" as P
+T -> S : linia "ping -c 3 10.0.0.1"
+S -> S : parse: argv, przekierowania, &
+S -> S : find_program: $PATH/ping.app
+S -> K : crtos_spawn(path, argv, envp, stdio, CAP_ALL)
+K -> K : caps &= caps(sh)
+K --> S : pid
+S -> T : TTY_IOC_SET_FG(pid)
+S -> K : crtos_wait(pid)
+P -> T : wynik (stdout = terminal)
+alt Ctrl-C
+  T -> K : crtos_kill(pid, -EINTR)
+  K --> S : kod -EINTR ("[pid interrupted]"),\nreszta wiersza pominięta (s_intr)
+else koniec
+  K --> S : kod wyjścia
+end
+S -> T : TTY_IOC_SET_FG(poprzedni: 0 w powłoce\nz terminala), znak zachęty
+@enduml

@@ -1,0 +1,16 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "aplikacja (libgfx)" as A
+participant "U03 gfxd" as G
+participant "S03 /dev/gpu2d (PXP)" as GPU
+participant "S03 /dev/fb0 (LCDIF)" as FB
+    A -> A : rysowanie w pamięci współdzielonej okna
+    A -> G : GFX_WIN_DAMAGE (prostokąt)
+    G -> G : czeka do chwili przed następną ramką (margines = zmierzony czas składania)
+    G -> GPU : GPU2D_IOC_HBATCH: tło, okna, dekoracje (tylko zmienione prostokąty)
+    GPU --> G : gotowe
+    G -> FB : FB_IOC_SHOW(ukryty bufor)
+    FB --> G : poll: POLLIN przy następnej ramce (vsync)
+    G -> A : GFX_EV_FRAME: zmiany są na ekranie
+@enduml

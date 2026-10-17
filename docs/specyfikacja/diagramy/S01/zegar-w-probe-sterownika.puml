@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "sterownik\n(np. lpi2c probe)" as D
+participant "clk.cpp" as C
+participant "K17 devres" as R
+participant "clk-imxrt (D01)" as P
+D -> C : devm_clk_get_enabled(dev, "per", &clk)
+C -> C : clock-names -> indeks, clocks -> <&ccm ID>
+alt dostawca niezarejestrowany
+  C --> D : -EPROBE_DEFER
+else
+  C -> R : devm_kzalloc(uchwyt), devm_add_action(clk_release)
+  C -> C : s_refs: licznik zegaru ID (0 -> 1)
+  C -> P : enable(ctx, ID) (bramka CCGR)
+  C --> D : 0, uchwyt
+end
+note over D, R : ... odłączenie urządzenia (remove, rmmod, nieudany probe) ...
+R -> C : clk_release(uchwyt): clk_disable tyle razy, ile włączył
+C -> P : disable(ctx, ID) przy liczniku 0
+@enduml

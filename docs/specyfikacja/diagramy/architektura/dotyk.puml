@@ -1,0 +1,17 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "GT911 (I2C)" as HW
+participant "D04 gt911 (ISR + wątek)" as D
+participant "S04 /dev/event1" as IN
+participant "U04 inputd" as ID
+participant "U03 gfxd" as G
+participant "aplikacja" as A
+    HW -> D : przerwanie GPIO (linia INT)
+    D -> D : wątek: odczyt punktów przez I2C
+    D -> IN : input_report(ABS_X, ABS_Y, BTN_TOUCH), input_sync()
+    IN -> ID : read(): struct input_event
+    ID -> G : GFX_INPUT (współrzędne ekranu)
+    G -> G : okno pod palcem, fokus, na wierzch
+    G -> A : GFX_EV_POINTER (współrzędne okna)
+@enduml

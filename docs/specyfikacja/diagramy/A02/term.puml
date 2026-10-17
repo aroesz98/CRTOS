@@ -1,0 +1,38 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class term_c <<program term.app>> {
+  -cell s_lines[200][80]
+  -long s_abs0
+  -int s_view
+  -bool s_block
+  -pos s_sa, s_se
+  -bool s_sel, s_selecting
+  -int s_in, s_out, s_pid
+  -ui_keyboard s_kbd
+  -ui_keys s_keys
+  +main() : int
+  -start_shell() : int
+  -term_write(p, n)
+  -csi(f)
+  -sgr()
+  -key(k)
+  -key_event(ev)
+  -mouse_pointer(ev)
+  -copy_selection()
+  -paste()
+  -scroll_view(lines)
+  -read_output()
+  -redraw()
+}
+class pos <<struct>> {
+  +long line
+  +int col
+}
+term_c *-- pos
+class cell <<struct>> {
+  +char ch
+  +uint8_t attr
+}
+term_c *-- cell
+@enduml

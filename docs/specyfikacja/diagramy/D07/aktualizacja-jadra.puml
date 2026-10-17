@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "deployd / mtd kernel" as P
+participant "kernel_update_ioctl" as K
+participant "kernel_update (RAM)" as U
+participant "HyperFlash" as H
+P -> K : ioctl(/dev/mtd0, MTD_IOC_KERNEL_UPDATE, {obraz, len, crc})
+K -> K : CAP_SYS? partycja kernel? 4 KB + 32 <= len <= 2 MB?
+K -> K : uaccess_ok(obraz), kopia do SDRAM jądra
+K -> K : tag FCFB, IVT 0xD1 pod 0x1000, CRC-32
+alt obraz zły
+  K --> P : -EINVAL (flash nietknięta)
+else
+  K -> K : printk, 300 ms (log wychodzi)
+  K -> U : mutex, quiet_enter (na stałe)
+  loop do 3 prób
+    U -> H : kasowanie bloków od 0, programowanie stron
+    U -> H : porównanie z obrazem
+    alt zgodne
+      U -> U : "kernel written and verified", NVIC_SystemReset
+    end
+  end
+  U -> U : komunikat co kilka sekund: potrzebny crtos flash (sonda)
+end
+@enduml

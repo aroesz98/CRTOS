@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "Boot ROM" as ROM
+participant "ResetISR" as R
+participant "main" as M
+participant "kernel_main" as K
+    ROM -> ROM : FCFB: FlexSPI dla HyperFlash, DCD: SEMC i SDRAM
+    ROM -> R : IVT (0x60001000): tablica wektorów jądra pod 0x60002000, wektor resetu
+    R -> R : SystemInit, tablica sekcji: data (DTCM, OCRAM), .ramfunc (ITCM), bss
+    R -> M : main()
+    M -> M : mpu_init (cache wyłączone -> regiony -> MPU -> cache włączone)
+    M -> M : piny konsoli, zegary 600 MHz
+    M -> K : kernel_main()
+    K -> K : tryb RUN (WFI nie zatrzymuje SysTick)
+    K -> K : fault_init, mm_init, irq_init, console_init
+    K -> K : log: wersja, zegar, przyczyna resetu (SRC_SRSR), poprzedni panic, pule pamięci
+    K -> K : sched_init (idle), kworker_init, timers_start (ktimer), kmon_start (+ kmon przez SWD)
+    alt obraz OS (CONFIG_OS)
+      K -> K : boot_start (wątek boot: karta, drzewo, moduły, init)
+    else obraz RTOS
+      K -> K : zadanie app: app_main() aplikacji
+    end
+    K -> K : sched_start: SysTick 1 ms, DWT, pierwszy PendSV
+@enduml

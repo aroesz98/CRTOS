@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "klawiatura HID" as K
+participant "usb_irq" as I
+participant "wątek usb (tuh_task)" as T
+participant "usb-hid.c" as U
+participant "S04 input" as N
+K -> I : przerwanie kontrolera (EHCI)
+I -> T : tusb_int_handler: zdarzenie do kolejki
+T -> U : tuh_hid_report_received_cb(raport boot, 8 B)
+U -> U : użycia HID -> kody Linuksa, modyfikatory
+U -> N : input_report(EV_KEY, kod, 1/0), input_sync
+note over T, U : powtarzanie: tuh_task_ext(timeout = usb_hid_repeat()) co 33 ms po 500 ms
+@enduml

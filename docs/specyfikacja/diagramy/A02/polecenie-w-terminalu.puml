@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Użytkownik" as U
+participant "term" as T
+participant "potok wejścia (PIPE_TTY)" as I
+participant "sh (A03)" as S
+participant "potok wyjścia" as O
+U -> T : klawisze (ekranowa klawiatura / GFX_EV_KEY)
+T -> T : tryb z TTY_IOC_GET_MODE: kanoniczny -> edycja linii, echo
+U -> T : Enter
+T -> I : write(linia)
+I -> S : read
+S -> O : write(wynik programu)
+O -> T : poll POLLIN, read_output
+T -> T : term_write: znaki, sekwencje CSI (kursor, kasowanie, kolory)
+T -> T : redraw: tylko zmienione wiersze, gfx_damage
+@enduml

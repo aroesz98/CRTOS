@@ -1,0 +1,55 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class lpi2c <<struct, lpi2c-imxrt>> {
+  +device* dev
+  +LPI2C_Type* base
+  +int irq
+  +lpi2c_master_handle_t handle
+  +semaphore done
+  +status_t status
+  +i2c_adapter* adap
+}
+class lpspi <<struct, lpspi-imxrt>> {
+  +device* dev
+  +LPSPI_Type* base
+  +int irq
+  +uint32_t clk_hz
+  +lpspi_master_handle_t handle
+  +semaphore done
+  +status_t status
+  +spi_controller* ctlr
+  +bool configured
+  +uint32_t cur_speed
+  +uint32_t cur_mode
+  +uint8_t cur_cs
+  +uint8_t tx[4096]
+  +uint8_t rx[4096]
+}
+class lpuart <<struct, lpuart-imxrt>> {
+  +device* dev
+  +LPUART_Type* base
+  +int irq
+  +uint32_t clk_hz
+  +uint32_t baud
+  +char name[12]
+  +ring rx
+  +ring tx
+  +event ev
+  +poll_head ph
+  +uint32_t overruns
+  +uint32_t dropped
+}
+class ring <<struct>> {
+  +uint8_t buf[2048]
+  +uint32_t head
+  +uint32_t tail
+}
+interface i2c_adapter_ops <<S02>>
+interface spi_controller_ops <<S02>>
+interface file_ops <<K13>>
+lpi2c ..|> i2c_adapter_ops
+lpspi ..|> spi_controller_ops
+lpuart ..|> file_ops
+lpuart *-- "2" ring
+@enduml

@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+class init_c <<program init.app>> {
+  -service s_svc[16]
+  -int s_nsvc
+  +main() : int
+  -parse_line(line)
+  -parse_caps(list) : uint32_t
+  -start(s) : int
+  -find(pid) : service*
+}
+class service <<struct>> {
+  +char name[16]
+  +int policy
+  +uint32_t caps
+  +char* argv[13]
+  +int pid
+  +uint64_t started_us
+  +uint32_t delay_ms
+  +uint64_t restart_at_us
+}
+enum policy {
+  P_ONCE
+  P_RESPAWN
+  P_WAIT
+  P_CONSOLE
+}
+init_c *-- "0..16" service
+service --> policy
+@enduml

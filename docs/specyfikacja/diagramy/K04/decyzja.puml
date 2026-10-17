@@ -1,0 +1,35 @@
+@startuml
+!include ../styl.iuml
+title fault_handle(): decyzja po błędzie procesora
+
+start
+:CFSR, HFSR, MMFAR/BFAR, kasowanie flag;
+if (błąd leniwego zapisu FPU\nw trybie obsługi?) then (tak)
+  :LSPACT = 0;
+  :wątek: TF_KILLED + TF_REDIRECT, PendSV;
+  note right: zakończy się przy przełączeniu
+  :powrót do przerwanej obsługi;
+  stop
+endif
+if (EXC_RETURN: tryb obsługi?) then (tak)
+  :panic: błąd w przerwaniu/wyjątku;
+  end
+elseif (nie PSP albo brak g_current?) then (tak)
+  :panic: przed startem schedulera;
+  end
+elseif (idle, BASEPRI/PRIMASK, sched_lock\nalbo błąd tablicy wektorów?) then (tak)
+  :panic;
+  end
+else (nie)
+  :raport w logu (printk);
+endif
+if (STKERR albo adres w strażniku stosu?) then (tak)
+  :dopisek: stack overflow (user/kernel stack);
+endif
+if (wątek programu?) then (tak)
+  :proc_kill(-EFAULT): pozostałe wątki procesu;
+endif
+:task_redirect_to_exit(-EFAULT), mpu_switch, nPRIV = 0;
+:powrót wyjątku do task_exit na stosie jądra;
+stop
+@enduml

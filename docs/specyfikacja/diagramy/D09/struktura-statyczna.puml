@@ -1,0 +1,54 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class sai <<struct, sai-imxrt.ko>> {
+  +device* dev
+  +I2S_Type* base
+  +int irq
+  +clk* mclk
+  +wm8960* codec
+  +uint32_t mclk_hz, rate, channels
+  +uint32_t ring[4096]
+  +volatile uint32_t head, tail
+  +volatile bool running, open
+  +bool dry
+  +uint32_t idle
+  +event ev
+  +poll_head ph
+  +mutex lock
+  +uint32_t played, underruns, fifo_errors
+  -sai_irq(irq, ctx)
+  -fill_fifo(s)
+  -start(s), stop_locked(s)
+  -set_rate(s, rate) : int
+}
+class wm8960 <<struct, sai-imxrt.ko>> {
+  +device* dev
+  +i2c_client* client
+  +uint32_t volume
+  -wm_write(c, reg, val) : int
+  -wm_setup(c) : int
+  -wm_set_rate(c, mclk, rate) : int
+  -wm_set_volume(c, volume) : int
+}
+interface audio_ops <<file_ops, /dev/audio>> {
+  +open(f) : int
+  +write(f, buf, len) : int
+  +ioctl(f, cmd, arg) : int
+  +poll(f, e) : int
+  +close(f) : int
+}
+class audio_stats <<struct, crtos/audio.h>> {
+  +uint32_t rate, buffer
+  +uint32_t played, underruns, fifo_errors
+}
+class i2c_client <<S02>>
+class clk <<S01, SAI1_ROOT>>
+class "SAI1 (FIFO 32 słowa)" as HW <<sprzęt>>
+sai --> wm8960 : s_codec (audio-codec = <&wm8960>)
+sai ..|> audio_ops
+audio_ops ..> audio_stats : AUDIO_IOC_GET_STATS
+wm8960 --> i2c_client : LPI2C1, 0x1a
+sai --> clk : 12,288 / 11,2896 MHz
+sai --> HW : TDR[0], TCSR, TFR
+@enduml

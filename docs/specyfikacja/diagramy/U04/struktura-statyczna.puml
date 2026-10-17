@@ -1,0 +1,68 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class inputd_c <<program inputd.app>> {
+  -dev s_dev[8]
+  -int s_gfx
+  -gfx* s_cg
+  -gfx_win* s_cursor
+  -int s_mx, s_my
+  -bool s_mdown
+  +main() : int
+  -add_device(name)
+  -remove_device(name)
+  -read_device(d)
+  -mouse_sync(d)
+  -pad_axis(d, code, value)
+  -pad_flush(d, now, force)
+  -pad_due_ms(now) : int
+  -send_input(kind, code, x, y, value)
+}
+class dev <<struct>> {
+  +bool used
+  +char name[24]
+  +int fd
+  +bool touch
+  +input_absinfo ax, ay
+  +int x, y
+  +bool down, sent_down, moved
+  +bool mouse
+  +int dx, dy, wheel, hwheel
+  +bool left
+  +bool pad
+  +input_absinfo abs[6]
+  +stick stick[3]
+  +uint16_t kcode[16]
+  +int32_t kvalue[16]
+  +int nkeys
+}
+class stick <<struct>> {
+  +int16_t x, y
+  +bool dirty
+  +uint64_t sent_us
+}
+class osk_c <<program osk.app>> {
+  -gfx* s_g
+  -gfx_win* s_w
+  -ui_keyboard s_kbd
+  -int s_input
+  -bool s_visible, s_keyboard
+  +main() : int
+  -keyboard_connected() : bool
+  -show(on)
+  -send_key(code, value)
+  -serve(port)
+}
+class osk_req <<struct protokołu>> {
+  +uint32_t op
+}
+class osk_state <<struct protokołu>> {
+  +uint8_t available
+  +uint8_t visible
+  +uint16_t height
+}
+inputd_c *-- "0..8" dev
+dev *-- "3" stick
+osk_c ..> osk_req
+osk_c ..> osk_state
+@enduml

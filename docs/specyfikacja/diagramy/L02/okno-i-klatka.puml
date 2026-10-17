@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "libgfx" as L
+participant "K11 (shm)" as M
+participant "gfxd (U03)" as G
+P -> L : gfx_open()
+L -> G : port_connect("gfx"), port zdarzeń, GFX_HELLO
+G --> L : szerokość, wysokość, format
+P -> L : gfx_win_create(w, h, flags)
+alt pula ma miejsce
+  L -> L : pool_alloc (przesunięcie w jednym obiekcie shm)
+else
+  L -> M : crtos_shm_create + crtos_shm_map
+end
+L -> G : GFX_WIN_CREATE (+ uchwyt shm, offset, stride, format)
+G --> L : id, pozycja
+P -> P : rysowanie w w->s (gfx_fill, gfx_text, TFTLIB)
+P -> L : gfx_present(w)
+L -> G : GFX_WIN_DAMAGE, frame_pending = true
+P -> L : gfx_wait_frame(w)
+G -> L : GFX_EV_FRAME(id)
+L -> L : frame_pending = false; inne zdarzenia do kolejki
+@enduml

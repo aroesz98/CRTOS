@@ -1,0 +1,21 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "inputd" as I
+participant "gfxd" as G
+participant "snes (okno MULTITOUCH)" as S
+participant "paint (okno zwykłe)" as P
+I -> G : GFX_INPUT(PTR_DOWN, palec 0, x, y nad snes)
+G -> G : s_grab[0] = snes, na wierzch, fokus
+G -> S : GFX_EV_POINTER(PTR_DOWN, code 0)
+I -> G : GFX_INPUT(PTR_DOWN, palec 1, x, y nad snes)
+G -> G : snes ma GFX_WIN_MULTITOUCH: s_grab[1] = snes (bez zmiany fokusu)
+G -> S : GFX_EV_POINTER(PTR_DOWN, code 1)
+I -> G : GFX_INPUT(PTR_MOVE, palec 0, ...)
+G -> S : GFX_EV_POINTER(PTR_MOVE, code 0)
+I -> G : GFX_INPUT(PTR_DOWN, palec 2, x, y nad paint)
+G -> G : paint bez MULTITOUCH: s_grab[2] = brak
+note right of P : palec 2 nie trafia do paint
+I -> G : GFX_INPUT(PTR_UP, palec 1, ...)
+G -> S : GFX_EV_POINTER(PTR_UP, code 1), s_grab[1] = brak
+@enduml

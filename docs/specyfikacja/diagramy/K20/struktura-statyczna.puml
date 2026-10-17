@@ -1,0 +1,69 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class vmem_region <<struct>> {
+  +vmem_region* next
+  +proc* proc
+  +uintptr_t base
+  +uint32_t size
+  +uint32_t first
+  +uint16_t* map
+  +uint32_t* stored
+}
+class frame <<struct>> {
+  +vmem_region* r
+  +uint32_t page
+  +uint8_t* data
+  +uint8_t dirty
+  +uint8_t ref
+}
+class vmem_cpp <<moduł, vmem.cpp>> {
+  +vmem_fault(t, frame, regs, exc_return, addr, ret) : bool
+  +vmem_pagein_call(addr)
+  +vmem_copy_in(dst, src, len) : int
+  +vmem_copy_out(dst, src, len) : int
+  +vmem_strncpy_in(dst, src, size) : int
+  +vmem_contains(p, addr, len) : bool
+  +vmem_proc_release(p)
+  +sys_vmem(op, arg) : int64_t
+  -page_fast(ctx, a, write, p) : int
+  -page_in(r, pg) : int
+  -frame_get(out) : int
+  -s_lock : mutex
+  -chunk[16], frames, lba, used
+}
+class emu <<struct, kernel.h>> {
+  +uint32_t* frame
+  +uint32_t* regs
+  +bool fpframe
+  +uintptr_t miss
+  +page(ctx, a, write, p) : int
+}
+class emulate_cpp <<moduł, arch/emulate.cpp>> {
+  +emulate_access(e) : int
+  -emulate16(e, hw)
+  -emulate32(e, hw1, hw2)
+  -single(), multiple(), exclusive(), vfp()
+}
+class proc <<struct, K08>> {
+  +vmem_region* vmem
+}
+class fat <<K14, fat.cpp>> {
+  +fat_swap_create(path, size, lba) : int
+  +fat_raw_io(lba, buf, count, write) : int
+}
+class fault <<K04, fault.cpp>> {
+  +fault_handle()
+}
+class context <<K01, context.cpp>> {
+  +syscall_enter_fault(frame, exc_return, id, arg) : uint32_t
+}
+proc o-- "0..*" vmem_region
+vmem_cpp o-- "*" frame
+frame --> vmem_region
+fault --> vmem_cpp : MemManage programu
+vmem_cpp --> emulate_cpp : wykonanie instrukcji
+emulate_cpp ..> emu
+vmem_cpp --> context : brakująca strona
+vmem_cpp --> fat : plik swap, bloki
+@enduml

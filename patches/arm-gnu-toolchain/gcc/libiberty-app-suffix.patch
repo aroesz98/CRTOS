@@ -1,0 +1,20 @@
+CRTOS: a program is the file NAME.app, and the shell starts it as NAME (argv[0]) from
+the PATH. GCC's driver finds its own directory from argv[0] (make_relative_prefix), and
+the prefixes of cc1, the specs and the headers from that; without the suffix it does not
+find itself and takes prefixes relative to the current directory. As ".exe" on Windows.
+
+--- a/libiberty/make-relative-prefix.c	2026-09-29 20:24:27.927765034 +0200
++++ b/libiberty/make-relative-prefix.c	2026-09-29 20:24:27.942818025 +0200
+@@ -89,6 +89,12 @@
+ #  define PATH_SEPARATOR ':'
+ #endif
+ 
++#ifdef __CRTOS__
++/* CRTOS: a program is the file NAME.app, started as NAME from the PATH */
++#  define HAVE_HOST_EXECUTABLE_SUFFIX
++#  define HOST_EXECUTABLE_SUFFIX ".app"
++#endif
++
+ #ifndef DIR_SEPARATOR_2
+ #  define IS_DIR_SEPARATOR(ch) ((ch) == DIR_SEPARATOR)
+ #else

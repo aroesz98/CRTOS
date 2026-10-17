@@ -1,0 +1,73 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class kmon_cpp <<moduł, kernel/rtos>> {
+  -kmon_cmd s_cmds[11]
+  -cmd_at(i) : const kmon_cmd*
+  +kmon_start()
+  +kmon_run(arg)
+  -readline(buf, max) : int
+  -split_args(line, argv, max) : int
+  -find_cmd(name) : const kmon_cmd*
+}
+class kmon_cmd <<struct>> {
+  +const char* name
+  +fn(argc, argv)
+  +const char* help
+}
+class swdcon_cpp <<moduł>> {
+  -bool s_host_away
+  +swdcon_start()
+  +kmon_console_path() : const char*
+  -swd_write(s, n)
+  -swd_getc(timeout) : int
+  -swdcon_thread(arg)
+}
+class swd_chan <<struct, DTCM>> {
+  +uint32_t magic
+  +uint32_t version
+  +uint32_t up_size
+  +uint32_t down_size
+  +uint32_t up_head
+  +uint32_t up_tail
+  +uint32_t down_head
+  +uint32_t down_tail
+  +uint8_t up[4096]
+  +uint8_t down[512]
+}
+class tests_cpp <<moduł, kernel/rtos>> {
+  -ktest s_tests[10]
+  +int ktest_failures
+  +kernel_tests(name)
+  -test_at(i) : const ktest*
+  -heap_free_total() : size_t
+}
+class ktest <<struct>> {
+  +const char* name
+  +fn()
+  +const char* what
+}
+class task <<struct, K05>> {
+  +con_write(s, n)
+  +con_getc(timeout) : int
+}
+class kmon_os_cpp <<moduł, kernel/os (CONFIG_OS)>> {
+  +kmon_cmd kmon_os_cmds[31]
+  -cmd_procs(), cmd_run(), cmd_exit()
+  -cmd_vmem(), cmd_net()
+}
+class tests_os_cpp <<moduł, kernel/os (CONFIG_OS)>> {
+  +ktest kernel_os_tests[5]
+  -uproc_start(), uproc_finish()
+}
+kmon_cpp *-- "11" kmon_cmd
+kmon_os_cpp *-- "31" kmon_cmd
+kmon_cpp ..> kmon_os_cpp : CONFIG_OS: po własnych
+swdcon_cpp --> swd_chan : g_swd_chan
+swdcon_cpp ..> kmon_cpp : kmon_run() w wątku kmon-swd
+swdcon_cpp ..> task : ustawia con_write, con_getc
+kmon_cpp ..> tests_cpp : test
+tests_cpp *-- "10" ktest
+tests_os_cpp *-- "5" ktest
+tests_cpp ..> tests_os_cpp : CONFIG_OS: po własnych
+@enduml

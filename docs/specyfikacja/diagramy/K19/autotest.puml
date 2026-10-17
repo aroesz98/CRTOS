@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "kmon" as M
+participant "kernel_tests" as T
+participant "test (np. usermem)" as F
+participant "proces testowy" as P
+M -> T : test all
+loop 13 grup
+  T -> T : 20 ms (sprzątanie poprzednich), wolna pamięć pul = before
+  T -> F : fn()
+  F -> P : proces odwołuje się do pamięci jądra
+  P -> P : MemManage -> proces zakończony (K04)
+  F -> F : CHECK: kod wyjścia -EFAULT, system działa
+  T -> T : wolna pamięć == before? (do 20 prób, programy w tle)
+  T -> T : mm_check() == 0?
+  T -> M : [nazwa] -> ok / FAILED
+end
+T -> M : 13 test(s), N failed
+@enduml

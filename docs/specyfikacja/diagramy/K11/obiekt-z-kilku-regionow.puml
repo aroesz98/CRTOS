@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program\n(libcrtosheap)" as P
+participant "shm.cpp" as K
+participant "K07 kmalloc_bounded\n(TLSF, pula SDRAM)" as M
+participant "K03 MPU" as U
+    P -> K : shm_create(23 MB)
+    K -> M : jeden region: 32 MB z podregionami 4 MB (24 MB), potem 64 MB
+    M --> K : brak miejsca
+    K -> M : kilka regionów: kroki 512 KB (1/64 z 32 MB),\nbez przekraczania granicy 64 MB
+    M -> M : najniższe albo najwyższe miejsce w wolnym bloku:\nto, które zostawia większą resztę
+    M --> K : blok 0x80580000..0x81D00000
+    K -> K : shm_cover(): 3 kawałki? (inaczej kfree i kroki 1 MB)
+    K -> K : zerowanie, uchwyt
+    K --> P : uchwyt
+    P -> K : shm_map(uchwyt)
+    K -> K : pokrycie: 0x80580000 +512 KB (region 1 MB),\n0x80600000 +10 MB (16 MB), 0x81000000 +13 MB (32 MB)
+    K -> U : mpu_encode_region() kawałków w wolne okna 9, 10, 11
+    K -> U : mpu_proc_changed(): regiony od razu
+    K --> P : adres (jeden obiekt, jedno odwołanie)
+    P -> K : write(fd, adres + 23 MB - 2 KB, 4 KB)
+    K -> K : uaccess_ok: shm_window_span() = 2 KB < 4 KB
+    K --> P : -EFAULT
+@enduml

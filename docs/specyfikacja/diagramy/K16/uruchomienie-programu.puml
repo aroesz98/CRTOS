@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "sys_spawn / boot / kmon run" as C
+participant "app.cpp" as A
+participant "elf.cpp" as E
+participant "K08" as P
+    C -> A : app_spawn(path, argv, envp, stdio, caps, prio)
+    A -> A : vfs_open, rozmiar pliku <= 16 MB
+    A -> E : app_peek: nagłówki sekcji -> rozmiar obrazu, wyrównanie, .crtos_app (stos, sterta, ABI)
+    A -> A : arena = obraz + sterta + stos + 2 strażniki + blok startowy
+    A -> P : proc_create(nazwa, arena)
+    A -> A : plik wczytany do przyszłej sterty (albo do SDRAM jądra)
+    A -> E : elf_check
+    alt sekcje .fast* i wolny obszar szybkiego kodu (K07 kmalloc_fastcode, K03 MPU_ATTR_USER_RX)
+        A -> E : elf_split_fast: dwa bloki + pule veneerów, elf_place_split(arena, blok)
+        A -> E : elf_symbols, elf_relocate (skoki między blokami przez veneery)
+        note right of A : przy błędzie: blok zwolniony,\nobraz w jednym bloku jak niżej
+    else jeden blok
+        A -> E : elf_layout (bez zmian od app_peek?), elf_place(arena)
+        A -> E : elf_symbols(app_resolve: tylko ~__exidx_*), elf_relocate
+    end
+    A -> A : _start (Thumb), init/fini_array, zerowanie miejsca po pliku
+    A -> A : clean D-cache, invalidate I-cache, heap_start = koniec obrazu
+    A -> P : blok szybkiego kodu -> okno 0 procesu (fastcode)
+    A -> A : build_startup: argv, envp, crtos_startup na szczycie areny
+    A -> P : uchwyty 0-2 = stdio, caps
+    A -> P : proc_thread_create(_start, R0 = blok startowy, stos)
+    A --> C : proc (odwołanie)
+@enduml

@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "boot / kmon insmod / devmgr" as B
+participant "module.cpp" as M
+participant "elf.cpp" as E
+participant "ksyms + eksporty modułów" as K
+participant "init() modułu" as I
+    B -> M : module_load("/sd/crtos/drivers/enet-imxrt.ko")
+    M -> M : vfs_load_file (SDRAM), s_mod_lock
+    M -> E : elf_check (nagłówek, sekcje w pliku)
+    M -> M : .crtos_depends: najpierw zależności (rekurencja, <= 4)
+    M -> E : elf_layout: rozmiar i wyrównanie wszystkich sekcji ALLOC
+    M -> M : kmalloc_aligned(KM_EXEC): OCRAM, potem SDRAM
+    M -> E : elf_place: kopia sekcji, zerowanie bss
+    M -> E : elf_symbols(mod_resolve)
+    E -> K : symbol jądra? eksport modułu? (dostawca: deps[], refs++)
+    M -> E : elf_relocate (ABS32, REL32, THM_CALL, MOVW/MOVT, ...)
+    M -> M : .crtos_module: magic, ABI 2, unikalna nazwa
+    M -> M : clean D-cache, invalidate I-cache
+    M -> I : konstruktory, init() (s_loading = m)
+    alt init != 0
+        M -> M : driver_unregister_owner(m), zwolnienie
+    else 
+        M --> B : module X loaded at adres (rozmiar)
+    end
+@enduml

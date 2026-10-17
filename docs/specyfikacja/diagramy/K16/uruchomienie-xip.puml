@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "sys_spawn / kmon run" as C
+participant "app.cpp" as A
+participant "K13 VFS\n(D10 flashfs)" as V
+participant "K08" as P
+    C -> A : app_spawn(path, argv, envp, stdio, caps, prio)
+    A -> V : vfs_open, nagłówek ELF
+    note right of A : e_type == ET_DYN:\napp_spawn_xip
+    A -> A : xip_peek: dwa segmenty PT_LOAD (tekst od 0, dane od 0x10000000),\nbez PT_INTERP/PT_TLS, wejście Thumb, .crtos_app, .rel.dyn, .got, tablice init/fini
+    A -> V : vfs_xip(f, &adres, &rozmiar)
+    alt plik ciągły we flashu, wyrównany do 32 B (/flash0)
+        V --> A : adres w oknie 0x60000000 (plik przypięty)
+        A -> A : tekst w miejscu, arena = dane + bss + sterta + stos
+    else inny system plików (karta, ramfs)
+        V --> A : -EOPNOTSUPP
+        A -> A : tekst <= 16 MB, arena = tekst + dane + bss + sterta + stos
+    end
+    A -> P : proc_create(nazwa, arena)
+    A -> V : [kopia] tekst do areny; segment danych do areny (bss = zera)
+    A -> A : xip_relocate: R_ARM_RELATIVE w danych,\nwartość < rozmiaru tekstu -> + adres tekstu, >= 0x10000000 -> + adres danych
+    A -> A : [kopia] clean D-cache tekstu; invalidate I-cache
+    A -> P : p->sb = adres GOT (r9), p->text;\n[w miejscu] p->text_size, p->xip_file = f (inaczej plik zamknięty)
+    A -> A : build_startup: argv, envp, init/fini_array (w danych)
+    A -> P : uchwyty 0-2 = stdio, caps
+    A -> P : proc_thread_create(tekst + e_entry, R0 = blok startowy, r9 = GOT)
+    A --> C : proc (odwołanie)
+    note over P : każdy nowy wątek procesu dostaje r9 = p->sb;\nxip_file zamykany w proc_release (koniec procesu)
+@enduml

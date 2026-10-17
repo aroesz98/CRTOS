@@ -1,0 +1,72 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class vfs_cpp <<moduł>> {
+  -mount s_mounts[8]
+  -mutex s_vfs_lock
+  -devnode s_devs[48]
+  -mutex s_devfs_lock
+  +vfs_open(path, flags, out) : int
+  +vfs_close(f) : int
+  +vfs_mount(mp, ops, fs) : int
+  +devfs_register(name, ops, dev) : int
+  +vfs_load_file(path, data, size, flags) : int
+  -lookup(path, rel) : mount*
+  -normalize(in, out, size) : int
+}
+class mount <<struct>> {
+  +char path[32]
+  +size_t len
+  +const vfs_fs_ops* ops
+  +void* fs
+  +uint32_t open_files
+}
+class file <<struct>> {
+  +const file_ops* ops
+  +void* priv
+  +void* dev
+  +uint32_t flags
+  +uint32_t refs
+  +void* mnt
+  +void* owner
+}
+class devnode <<struct>> {
+  +char name[24]
+  +const file_ops* ops
+  +void* dev
+}
+interface vfs_fs_ops <<interfejs>> {
+  +open(fs, rel, flags, f) : int
+  +opendir(fs, rel, f) : int
+  +stat(fs, rel, st) : int
+  +mkdir(fs, rel) : int
+  +unlink(fs, rel) : int
+  +rename(fs, from, to) : int
+  +statfs(fs, total, free) : int
+}
+interface file_ops <<interfejs>> {
+  +open(f) : int
+  +read(f, buf, len) : int
+  +write(f, buf, len) : int
+  +lseek(f, off, whence) : int64_t
+  +ioctl(f, cmd, arg) : int
+  +readdir(f, de) : int
+  +fstat(f, st) : int
+  +sync(f) : int
+  +close(f) : int
+  +poll(f, e) : int
+  +xip(f, addr, size) : int
+}
+class module <<struct, K16>> {
+}
+vfs_cpp *-- "8" mount
+vfs_cpp *-- "48" devnode
+mount --> vfs_fs_ops
+file --> file_ops
+file --> mount : mnt
+file --> module : owner (odwołanie)
+devnode --> file_ops
+fat_cpp ..|> vfs_fs_ops : K14
+ramfs_cpp ..|> vfs_fs_ops
+devfs ..|> vfs_fs_ops
+@enduml

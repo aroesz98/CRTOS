@@ -1,0 +1,1009 @@
+/*
+ * apu.c - the NES emulator core's APU (MIT licence, (c) 2023 Emmanuel Obara)
+ * with changes for CRTOS, marked "CRTOS": the channels' timers, mixing and filtering run only
+ * while the core's own sound path is on (never in the CRTOS program: nes_sound.c plays the
+ * channels instead and is told of every change first - nes_sound_sync()), and the length
+ * counters take new values only after a register write asked for it. The APU runs behind the
+ * CPU and catches up in bulk (apu_run: idle cycles skipped, the others stepped exactly) when
+ * the CPU accesses it or one of its events is due. Everything the CPU can observe (length
+ * counters, frame IRQ, DMC) behaves as before.
+ */
+#include <stdio.h>
+#include "apu.h"
+#include "emulator.h"
+#include "utils.h"
+#include "biquad.h"
+
+/* CRTOS: set while the samples go somewhere (apps/nes/port/nes_port.c) */
+extern int g_nes_audio_on;
+/* CRTOS: a write left a new length or halt flag for update_length_counter() */
+static uint8_t s_length_pending;
+/* CRTOS: the synthesizer (nes_sound.c) makes the samples up to now before a change */
+void nes_sound_sync(void);
+/* CRTOS: the CPU cycle the APU has reached (apu_run) */
+uint32_t g_apu_now;
+
+#define TND_LUT_SIZE 203
+#define PULSE_LUT_SIZE 31
+#define AUDIO_TO_FILE 0
+
+
+static const uint8_t length_counter_lookup[32] = {
+    // HI/LO 0   1   2   3   4   5   6   7    8   9   A   B   C   D   E   F
+    // ----------------------------------------------------------------------
+    /* 0 */ 10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
+    /* 1 */ 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
+};
+
+static uint8_t duty[4][8] =
+{
+    {0, 1, 0, 0, 0, 0, 0, 0}, // 12.5 %
+    {0, 1, 1, 0, 0, 0, 0, 0}, // 25 %
+    {0, 1, 1, 1, 1, 0, 0, 0}, // 50 %
+    {1, 0, 0, 1, 1, 1, 1, 1} // 25 % negated
+};
+
+static uint8_t tri_sequence[32] = {
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+};
+
+static uint16_t noise_period_lookup_NTSC[16] = {
+    4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
+};
+
+static uint16_t noise_period_lookup_PAL[16] = {
+    4, 8, 14, 30, 60, 88, 118, 148, 188, 236, 354, 472, 708, 944, 1890, 3778
+};
+
+/*
+Rate   $0   $1   $2   $3   $4   $5   $6   $7   $8   $9   $A   $B   $C   $D   $E   $F
+      ------------------------------------------------------------------------------
+NTSC  428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106,  84,  72,  54
+PAL   398, 354, 316, 298, 276, 236, 210, 198, 176, 148, 132, 118,  98,  78,  66,  50
+*/
+
+static uint16_t dmc_rate_index_NTSC[16] = {
+    428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106,  84,  72,  54
+};
+
+static uint16_t dmc_rate_index_PAL[16] = {
+    398, 354, 316, 298, 276, 236, 210, 198, 176, 148, 132, 118,  98,  78,  66,  50
+};
+
+
+/*
+Mode 0: 4-step sequence
+
+Action      Envelopes &     Length Counter& Interrupt   Delay to next
+            Linear Counter  Sweep Units     Flag        NTSC     PAL
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+$4017=$00   -               -               -           -       -
+Step 1      Clock           -               -           7457    8313
+Step 2      Clock           Clock           -           14913   16627
+Step 3      Clock           -               -           22371   24939
+                                        Set if enabled  29828   33252
+Step 4      Clock           Clock       Set if enabled  29829   33253
+                                        Set if enabled  29830/0 33254/0
+
+Mode 1: 5-step sequence
+
+Action      Envelopes &     Length Counter& Interrupt   CPU cycle
+            Linear Counter  Sweep Units     Flag        NTSC     PAL
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+$4017=$80   -               -               -           -       -
+Step 1      Clock           -               -           7457    8313
+Step 2      Clock           Clock           -           14913   16627
+Step 3      Clock           -               -           22371   24939
+Step 4      -               -               -           29829   33253
+Step 5      Clock           Clock           -           37281   41565
+            -               -               -           37282/0 41566/0
+*/
+
+static uint32_t NTSC_frame_sequence[2][6] = {
+    {7457, 14913, 22371, 29828, 29829, 29830},  // Mode 0
+    {7457, 14913, 22371, 29829, 37281, 37282}   // Mode 1
+};
+
+static uint32_t PAL_frame_sequence[2][6] = {
+    {8313, 16627, 24939, 33252, 33253, 33254},  // Mode 0
+    {8313, 16627, 24939, 33253, 41565, 41566}   // Mode 1
+};
+
+typedef enum {
+    FRAME_NONE,                      // Do nothing
+    FRAME_QUARTER       = 1,         // Clock quarter frame
+    FRAME_HALF          = 1 << 1,    // Clock half frame
+    FRAME_IRQ           = 1 << 2,    // Set frame IRQ flag
+    FRAME_IRQ_INHIBIT   = 1 << 3     // Set frame IRQ flag
+} FrameDirective;
+
+static uint8_t frame_sequence_directives[2][6] = {
+    // Mode 0
+    {
+        FRAME_QUARTER,
+        FRAME_QUARTER | FRAME_HALF,
+        FRAME_QUARTER,
+        FRAME_IRQ,
+        FRAME_QUARTER | FRAME_HALF | FRAME_IRQ,
+        FRAME_IRQ_INHIBIT,
+    },
+    // Mode 1
+    {
+        FRAME_QUARTER,
+        FRAME_QUARTER | FRAME_HALF,
+        FRAME_QUARTER,
+        FRAME_NONE,
+        FRAME_QUARTER | FRAME_HALF,
+        FRAME_NONE,
+    }
+};
+
+
+static float tnd_LUT[TND_LUT_SIZE];
+static float pulse_LUT[PULSE_LUT_SIZE];
+
+static void compute_mixer_LUT();
+
+static void init_audio_device(const APU* apu);
+
+static void init_pulse(Pulse *pulse, uint8_t id);
+
+static void init_triangle(Triangle *triangle);
+
+static void init_noise(Noise *noise);
+
+static void init_dmc(DMC* dmc);
+
+static void init_sampler(APU* apu, int frequency);
+
+static void length_sweep_pulse(Pulse *pulse);
+
+static uint8_t clock_divider(Divider *divider);
+
+static uint8_t clock_triangle(Triangle *triangle);
+
+static uint8_t clock_divider_inverse(Divider *divider);
+
+static void update_target_period(Pulse* pulse);
+
+static void clock_dmc(APU* apu);
+
+static void quarter_frame(APU *apu);
+
+static void half_frame(APU *apu);
+
+static void sample(APU* apu);
+
+static void set_frame_mode(APU* apu, uint8_t mode);
+
+static void update_length_counter(LengthCounter* counter);
+
+static void clock_length_counter(LengthCounter* counter);
+
+FILE *out_wav;
+
+void init_APU(struct Emulator *emulator) {
+    memset(&emulator->apu, 0, sizeof(APU));
+    compute_mixer_LUT();
+    APU *apu = &emulator->apu;
+    apu->volume = 1;
+    apu->emulator = emulator;
+    apu->cycles = 0;
+    apu->sequencer = 0;
+    apu->reset_sequencer_delay = 0;
+    apu->audio_start = 0;
+    apu->IRQ_inhibit = 0;
+
+    // For keeping track of queue_size statistics for use by the adaptive sampler
+    memset(apu->stat_window, 0, sizeof(apu->stat_window));
+    apu->stat = 0;
+    apu->stat_index = 0;
+
+    init_pulse(&apu->pulse1, 1);
+    init_pulse(&apu->pulse2, 2);
+    init_triangle(&apu->triangle);
+    init_noise(&apu->noise);
+    init_dmc(&apu->dmc);
+    // CRTOS: the rate register starts at index 0 (428 CPU cycles), not at 0 cycles (which
+    // clocked the DMC every cycle until a game wrote $4010)
+    apu->dmc.rate = (emulator->type == PAL ? dmc_rate_index_PAL[0] : dmc_rate_index_NTSC[0]) - 1;
+    init_sampler(apu, SAMPLING_FREQUENCY);
+    init_audio_device(apu);
+    SDL_PauseAudio(emulator->g_ctx.audio_stream, 1);
+    set_status(apu, 0);
+    set_frame_mode(apu, 0);
+    set_frame_counter_ctrl(apu, 0);
+    // On power, it's as if $4017 was written to 10 cycles before
+    // start of instructions.
+    // I have subtracted the sequencer reset delay on even clock (3 cycles)
+    apu->sequencer = 10 - 3;
+    apu->sequence_step = 0;
+    // suppress normal delay logic which is already factored in above
+    apu->reset_sequencer_delay = 0;
+#if AUDIO_TO_FILE
+    out_wav = fopen("test-aud.raw", "wb");
+#endif
+}
+
+void reset_APU(APU *apu) {
+    nes_sound_sync(); // CRTOS
+    set_status(apu, 0);
+    set_frame_mode(apu, 0);
+    apu->triangle.sequencer.step = 0;
+    apu->dmc.counter &= 1;
+    apu->frame_interrupt = 0;
+    interrupt_clear(&apu->emulator->cpu, APU_FRAME_IRQ);
+    apu->cycles = 0;
+    apu->sequencer = 10 - 3;
+    apu->sequence_step = 0;
+    apu->reset_sequencer_delay = 0;
+}
+
+void init_audio_device(const APU* apu) {
+
+    const SDL_AudioSpec spec = {
+        .format = SDL_AUDIO_S16,
+        .channels = 1,
+        .freq = SAMPLING_FREQUENCY
+    };
+
+    apu->emulator->g_ctx.audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (apu->emulator->g_ctx.audio_stream == NULL) {
+        LOG(ERROR , SDL_GetError());
+        quit(EXIT_FAILURE);
+    }
+}
+
+void exit_APU() {
+    if (out_wav)
+        fclose(out_wav);
+}
+
+/* CRTOS: @cycles of the APU at once. Cycles in which nothing but counting happens (the frame
+ * sequencer and the DMC timer counting towards their next step) are skipped together; the
+ * others go through execute_apu() one by one. */
+static int apu_pending(const APU *apu) {
+    return apu->reset_sequencer_delay || apu->irq_should_set || apu->irq_clear_delay ||
+           apu->suppress_frame_unit || s_length_pending || apu->dmc.toggle_delay ||
+           (apu->dmc.dma_scheduled && apu->dmc.ready);
+}
+
+/* CRTOS: @n cycles of an idle DMC (no sample, silent): its timer only counts down and each
+ * expiry counts the output unit's bits down (from 8 again after the last): nothing else */
+static void dmc_count(DMC *dmc, uint32_t n) {
+    if (n <= dmc->rate_index) {
+        dmc->rate_index -= n;
+        return;
+    }
+    uint32_t m = n - dmc->rate_index - 1u, period = (uint32_t)dmc->rate + 1u;
+    uint32_t expiries = 1u + m / period;
+    dmc->rate_index = (uint16_t)(dmc->rate - m % period);
+    uint32_t b = dmc->bits_remaining ? dmc->bits_remaining : 1u; /* 0: reloaded at once */
+    dmc->bits_remaining = (uint8_t)((b + 7u - expiries % 8u) % 8u + 1u);
+}
+
+void apu_run(APU *apu, uint32_t cycles) {
+    DMC *dmc = &apu->dmc;
+    while (cycles) {
+        uint32_t skip = 0;
+        int dmc_idle = 0;
+        if (!apu_pending(apu)) {
+            uint32_t target = apu->sequence[apu->sequence_step];
+            skip = target >= apu->sequencer ? target - apu->sequencer : cycles;
+            dmc_idle = dmc->silence && dmc->empty && !dmc->bytes_remaining;
+            if (!dmc_idle && dmc->rate_index < skip)
+                skip = dmc->rate_index;
+            if (skip > cycles)
+                skip = cycles;
+        }
+        if (skip) {
+            apu->sequencer += skip;
+            if (dmc_idle)
+                dmc_count(dmc, skip);
+            else
+                dmc->rate_index -= skip;
+            apu->cycles += skip;
+            g_apu_now += skip;
+            cycles -= skip;
+            continue;
+        }
+        execute_apu(apu);
+        g_apu_now++;
+        cycles--;
+    }
+}
+
+/* CRTOS: cycles until the APU does something the CPU can see (at least 1) */
+uint32_t apu_cycles_to_event(APU *apu) {
+    if (apu_pending(apu))
+        return 1;
+    uint32_t best = 0xffffffffu;
+    uint32_t target = apu->sequence[apu->sequence_step];
+    if (target >= apu->sequencer)
+        best = target - apu->sequencer + 1;
+    DMC *dmc = &apu->dmc;
+    if (dmc->bytes_remaining > 0 || !dmc->empty) {
+        /* the expiry that empties the output shift register fetches the next byte */
+        uint32_t b = dmc->bits_remaining ? dmc->bits_remaining - 1u : 0u;
+        uint32_t fetch = dmc->rate_index + 1u + b * ((uint32_t)dmc->rate + 1u);
+        if (fetch < best)
+            best = fetch;
+    }
+    return best ? best : 1;
+}
+
+void execute_apu(APU *apu) {
+    // Perform necessary reset after $4017 write
+    if (apu->reset_sequencer_delay) {
+        apu->reset_sequencer_delay--;
+        if (!apu->reset_sequencer_delay) {
+            apu->sequencer = 0;
+            apu->sequence_step = 0;
+            set_frame_mode(apu, apu->frame_mode);
+            if (apu->frame_mode == 1 && !apu->suppress_frame_unit) {
+                // immediately clock quarter and half frames
+                half_frame(apu);
+                quarter_frame(apu);
+            }
+        }
+    }
+
+    if (apu->irq_should_set) {
+        if (!apu->IRQ_inhibit)
+            interrupt(&apu->emulator->cpu, APU_FRAME_IRQ);
+        apu->irq_should_set = 0;
+    }
+
+    if (apu->irq_clear_delay) {
+        apu->irq_clear_delay--;
+        if (!apu->irq_clear_delay) {
+            apu->frame_interrupt = 0;
+            interrupt_clear(&apu->emulator->cpu, APU_FRAME_IRQ);
+        }
+    }
+
+    if (apu->sequencer == apu->sequence[apu->sequence_step]) {
+        uint8_t directive = apu->directive[apu->sequence_step];
+        if (!apu->suppress_frame_unit) {
+            if (directive & FRAME_QUARTER)
+                quarter_frame(apu);
+            if (directive & FRAME_HALF)
+                half_frame(apu);
+        }
+        if (directive & FRAME_IRQ) {
+            apu->frame_interrupt = 1;
+            // We need to delay IRQ line assertion by one clock
+            apu->irq_should_set = 1;
+        }
+        if (directive & FRAME_IRQ_INHIBIT) {
+            // frame interrupt set according to IRQ inhibit state
+            apu->frame_interrupt = !apu->IRQ_inhibit;
+            apu->irq_should_set = 1;
+        }
+        apu->sequence_step++;
+        apu->sequencer++;
+        if (apu->sequence_step == 6) {
+            apu->sequence_step = 0;
+            // Reset to 1 because the last sequence is technically 0
+            apu->sequencer = 1;
+        }
+    } else apu->sequencer++;
+
+    // CRTOS: without sound the channels' timers (the waveforms) are not clocked: nothing
+    // a game can read depends on them
+    if ((apu->cycles & 1) && g_nes_audio_on) {
+        // channel sequencer
+        clock_divider(&apu->pulse1.t);
+        clock_divider(&apu->pulse2.t);
+
+        // noise timer
+        if (clock_divider(&apu->noise.timer)) {
+            Noise *noise = &apu->noise;
+            uint8_t feedback = (noise->shift & BIT_0) ^ (((noise->mode ? BIT_6 : BIT_1) & noise->shift) > 0);
+            noise->shift >>= 1;
+            noise->shift |= feedback ? (1 << 14) : 0;
+        }
+    }
+
+    if (apu->suppress_frame_unit)
+        apu->suppress_frame_unit--;
+
+    // DMC
+    clock_dmc(apu);
+
+    // triangle timer
+    if (g_nes_audio_on)
+        clock_triangle(&apu->triangle);
+
+    // update length counters
+    if (s_length_pending) {
+        s_length_pending = 0;
+        update_length_counter(&apu->pulse1.l);
+        update_length_counter(&apu->pulse2.l);
+        update_length_counter(&apu->noise.l);
+        update_length_counter(&apu->triangle.l);
+    }
+
+    // sample
+    if (g_nes_audio_on)
+        sample(apu);
+
+    apu->cycles++;
+}
+
+static void update_length_counter(LengthCounter* counter) {
+    if (counter->new_counter) {
+        counter->counter = counter->new_counter;
+        counter->new_counter = 0;
+    }
+    if (counter->halt != counter->new_halt) {
+        counter->halt = counter->new_halt;
+        if (counter->envelope != NULL)
+            counter->envelope->loop = counter->halt;
+    }
+}
+
+static void clock_length_counter(LengthCounter* counter) {
+    if (counter->counter && !counter->halt) {
+        counter->counter--;
+        // ignore any changes to length if made during a length clock
+        counter->new_counter = 0;
+    }
+}
+
+void quarter_frame(APU *apu) {
+    nes_sound_sync(); // CRTOS
+    Triangle *triangle = &apu->triangle;
+    //envelope
+    clock_divider_inverse(&apu->pulse1.envelope);
+    clock_divider_inverse(&apu->pulse2.envelope);
+    clock_divider_inverse(&apu->noise.envelope);
+
+    // triangle linear counter
+    if (triangle->linear_reload_flag)
+        triangle->linear_counter = triangle->linear_reload;
+    else if (triangle->linear_counter)
+        triangle->linear_counter--;
+    // if halt is clear, clear linear reload flag
+    triangle->linear_reload_flag = triangle->l.halt ? triangle->linear_reload_flag : 0;
+    // suppress frame counter clocking for this and the next cycle
+    apu->suppress_frame_unit = 2;
+}
+
+void half_frame(APU *apu) {
+    nes_sound_sync(); // CRTOS
+    // length and sweep
+    length_sweep_pulse(&apu->pulse1);
+    length_sweep_pulse(&apu->pulse2);
+    // triangle length counter
+    Triangle *triangle = &apu->triangle;
+    clock_length_counter(&triangle->l);
+
+    // noise length counter
+    clock_length_counter(&apu->noise.l);
+    // suppress frame counter clocking for this and the next cycle
+    apu->suppress_frame_unit = 2;
+}
+
+void init_sampler(APU* apu, int frequency) {
+    float cycles_per_frame = apu->emulator->type == PAL? 33247.5: 29780.5;
+    float rate = apu->emulator->type == PAL? 50.0f : 60.0f;
+    Sampler* sampler = &apu->sampler;
+    // Q = 0.707 => BW = 1.414 (1 octave)
+    biquad_init(&apu->filter, HPF, 0, 20, frequency, 1);
+    // anti-aliasing filter.
+    biquad_init(&apu->aa_filter, LPF, 0, 20000, cycles_per_frame * rate, 1);
+
+    sampler->max_period = cycles_per_frame * rate / frequency;
+    sampler->min_period = sampler->max_period - 1;
+    sampler->period = sampler->min_period;
+    sampler->index = 0;
+    sampler->max_index = AUDIO_BUFF_SIZE;
+    sampler->samples = 0;
+    sampler->counter = 0;
+    sampler->factor_index = 0;
+    // basically the precision with which we vary the sampling rate
+    // 100 ->2 d.p, 1000->3 d.p, etc.
+    sampler->max_factor = 100;
+    // this may need to be calibrated to suit the current sampling frequency
+    // the current equilibrium is for 48000 hz
+    sampler->target_factor = sampler->equilibrium_factor = 48;
+}
+
+
+void sample(APU* apu) {
+    // CRTOS: with no sound output the mixing and the filters (double precision, every CPU
+    // cycle) are skipped - they were a third of the emulation time
+    if (!g_nes_audio_on)
+        return;
+    float sample = biquad(get_sample(apu), &apu->aa_filter);
+#if AVERAGE_DOWNSAMPLING
+    static float avg = -1;
+    // average samples in a bin
+    if(avg < 0)
+        avg = sample;
+    else
+        avg = (avg + sample)/2;
+#endif
+
+    Sampler* sampler = &apu->sampler;
+    sampler->counter++;
+    if(sampler->counter >= sampler->period) {
+#if AVERAGE_DOWNSAMPLING
+        apu->buff[sampler->index++] = 32767 * biquad(avg, &apu->filter);
+        // begin fresh average for the next bin
+        avg = -1;
+#else
+
+        apu->buff[sampler->index++] = 32000 * biquad(sample, &apu->filter) * apu->volume;
+#endif
+        if(sampler->index >= sampler->max_index) {
+            sampler->index = 0;
+        }
+        sampler->samples++;
+        sampler->counter = 0;
+        if(apu->sampler.factor_index <= apu->sampler.target_factor) {
+            sampler->period = sampler->max_period;
+        }else {
+            sampler->period = sampler->min_period;
+        }
+        sampler->factor_index++;
+        if(sampler->factor_index > sampler->max_factor) {
+            sampler->factor_index = 0;
+        }
+    }
+}
+
+
+void queue_audio(APU *apu, struct GraphicsContext *ctx) {
+    uint32_t queue_size = SDL_GetAudioStreamQueued(ctx->audio_stream);
+    apu->stat = apu->stat - apu->stat_window[apu->stat_index] + queue_size;
+    apu->stat_window[apu->stat_index++] = queue_size;
+    if(apu->stat_index >= STATS_WIN_SIZE)
+        apu->stat_index = 0;
+
+    size_t avg = apu->stat / STATS_WIN_SIZE;
+    // printf("queue size %d, avg: %llu \n", queue_size, avg);
+
+    // From here we tweak the sampling rate ever so slightly to prevent underruns and runaway latency
+    // by minimising deviation from the nominal queue size with a bit of control engineering
+    float delta_f, error = (float)avg - NOMINAL_QUEUE_SIZE;
+    Sampler* s = &apu->sampler;
+    if(error >= 0) {
+        delta_f = (s->max_factor - s->equilibrium_factor) * error / NOMINAL_QUEUE_SIZE;
+    }else {
+        delta_f = (s->equilibrium_factor * error / NOMINAL_QUEUE_SIZE);
+    }
+    // printf("delta %f, error %f \n", delta_f, error);
+    s->target_factor = s->equilibrium_factor + delta_f;
+    if(s->target_factor > s->max_factor) {
+        s->target_factor = s->max_factor;
+    }
+    // printf("target_f %d \n", s->target_factor);
+
+    SDL_PutAudioStreamData(ctx->audio_stream, apu->buff, s->index * 2);
+    // wait till queue is filled to prevent early onset underruns
+    if(!apu->audio_start && queue_size >= NOMINAL_QUEUE_SIZE) {
+        SDL_PauseAudio(apu->emulator->g_ctx.audio_stream, 0);
+        apu->audio_start = 1;
+    }
+#if AUDIO_TO_FILE
+    if(out_wav)
+        fwrite(apu->buff, 2, s->index, out_wav);
+#endif
+    memset(apu->buff, 0, AUDIO_BUFF_SIZE * 2);
+    // reset sampler
+    s->index = 0;
+}
+
+
+float get_sample(APU *apu) {
+    uint8_t pulse_out = 0, tnd_out = 0;
+
+    if (apu->pulse1.enabled && apu->pulse1.l.counter && !apu->pulse1.mute)
+        pulse_out += (apu->pulse1.const_volume ? apu->pulse1.envelope.period : apu->pulse1.envelope.step) * (duty[apu->
+            pulse1.duty][apu->pulse1.t.step]);
+
+    if (apu->pulse2.enabled && apu->pulse2.l.counter && !apu->pulse2.mute)
+        pulse_out += (apu->pulse2.const_volume ? apu->pulse2.envelope.period : apu->pulse2.envelope.step) * (duty[apu->
+            pulse2.duty][apu->pulse2.t.step]);
+
+    if (apu->triangle.enabled && apu->triangle.sequencer.period > 1)
+        tnd_out += tri_sequence[apu->triangle.sequencer.step] * 3;
+
+    if (apu->noise.enabled && !(apu->noise.shift & BIT_0) && apu->noise.l.counter > 0)
+        tnd_out += 2 * (apu->noise.const_volume ? apu->noise.envelope.period : apu->noise.envelope.step);
+
+    tnd_out += apu->dmc.counter;
+
+    float amp = pulse_LUT[pulse_out] + tnd_LUT[tnd_out];
+
+    // clamp to within 1 just in case
+    return amp > 1 ? 1 : amp;
+}
+
+
+void set_status(APU *apu, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    apu->pulse1.enabled = (value & BIT_0) > 0;
+    apu->pulse2.enabled = (value & BIT_1) > 0;
+    apu->triangle.enabled = (value & BIT_2) > 0;
+    apu->noise.enabled = (value & BIT_3) > 0;
+    apu->dmc.enabled = (value & BIT_4) > 0;
+
+    if(apu->dmc.enabled && apu->dmc.bytes_remaining == 0) {
+        // restart it
+        apu->dmc.bytes_remaining = apu->dmc.sample_length;
+        apu->dmc.current_addr = apu->dmc.sample_addr;
+        if (apu->dmc.empty && apu->dmc.bytes_remaining > 0)
+            // schedule DMC DMA immediately
+            apu->dmc.dma_scheduled = 1;
+    }
+
+    // toggle DMC ready status after 2 or 3 cycles on a get or put cycle respectively.
+    if (apu->dmc.enabled != apu->dmc.ready)
+        apu->dmc.toggle_delay = 2 + (apu->cycles & 1);
+
+    apu->dmc.interrupt = 0;
+    interrupt_clear(&apu->emulator->cpu, APU_DMC_IRQ);
+
+
+    // reset length counters if disabled
+    apu->pulse1.l.counter = apu->pulse1.enabled ? apu->pulse1.l.counter : 0;
+    apu->pulse2.l.counter = apu->pulse2.enabled ? apu->pulse2.l.counter : 0;
+    apu->triangle.l.counter = apu->triangle.enabled ? apu->triangle.l.counter : 0;
+    apu->noise.l.counter = apu->noise.enabled ? apu->noise.l.counter : 0;
+}
+
+
+uint8_t read_apu_status(APU *apu) {
+    uint8_t status = (apu->pulse1.l.counter > 0);
+    status |= (apu->pulse2.l.counter > 0 ? BIT_1 : 0);
+    status |= (apu->triangle.l.counter > 0 ? BIT_2 : 0);
+    status |= (apu->noise.l.counter > 0 ? BIT_3 : 0);
+    status |= (apu->frame_interrupt ? BIT_6 : 0);
+    status |= (apu->dmc.interrupt ? BIT_7 : 0);
+    status |= (apu->dmc.bytes_remaining && apu->dmc.enabled? BIT_4: 0);
+    // clear frame interrupt
+    apu->irq_clear_delay = 1 + (apu->cycles & 1);
+    return status;
+}
+
+
+void set_frame_counter_ctrl(APU *apu, uint8_t value) {
+    // $4017
+    apu->IRQ_inhibit = (value & BIT_6) > 0;
+    apu->frame_mode = (value & BIT_7) > 0;
+    // clear interrupt if IRQ disable set
+    if (apu->IRQ_inhibit) {
+        apu->frame_interrupt = 0;
+        interrupt_clear(&apu->emulator->cpu, APU_FRAME_IRQ);
+    }
+    // Writing to 4017 on a PUT cycle delays sequencer reset by 4 cycles
+    // If it is on a GET cycle, we delay by only 3 cycles
+    // This is needed for emulation of clock jitter
+    apu->reset_sequencer_delay = 3 + (apu->cycles & 1);
+}
+
+static void set_frame_mode(APU* apu, uint8_t mode) {
+    if (apu->emulator->type == PAL)
+        apu->sequence = PAL_frame_sequence[mode];
+    else
+        apu->sequence = NTSC_frame_sequence[mode];
+    apu->directive = frame_sequence_directives[mode];
+}
+
+void set_pulse_ctrl(Pulse *pulse, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    pulse->const_volume = (value & BIT_4) > 0;
+    pulse->l.new_halt = (value & BIT_5) > 0;
+    s_length_pending = 1;
+    pulse->envelope.period = value & 0xF;
+    pulse->envelope.counter = pulse->envelope.period;
+    // reload divider step counter
+    // this should be set on next envelope clock but this will do for now
+    pulse->envelope.step = 15;
+    pulse->duty = value >> 6;
+}
+
+void set_pulse_timer(Pulse *pulse, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    pulse->t.period = pulse->t.period & ~0xff | value;
+    update_target_period(pulse);
+}
+
+void set_pulse_sweep(Pulse *pulse, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    pulse->enable_sweep = (value & BIT_7) > 0;
+    pulse->sweep.period = ((value & PULSE_PERIOD) >> 4) + 1;
+    pulse->sweep.counter = pulse->sweep.period;
+    pulse->shift = value & PULSE_SHIFT;
+    pulse->neg = value & BIT_3;
+    pulse->sweep_reload = 1;
+    update_target_period(pulse);
+}
+
+void set_pulse_length_counter(Pulse *pulse, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    pulse->t.period = pulse->t.period & 0xff | (value & 0x7) << 8;
+    // phase reset
+    pulse->t.step = 0;
+    if (pulse->enabled)
+        pulse->l.new_counter = length_counter_lookup[value >> 3];
+    s_length_pending = 1;
+    update_target_period(pulse);
+    pulse->envelope.step = 15;
+}
+
+void set_tri_counter(Triangle *triangle, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    triangle->linear_reload = value & 0x7f;
+    triangle->l.new_halt = (value & BIT_7) > 0;
+    s_length_pending = 1;
+}
+
+void set_tri_timer_low(Triangle *triangle, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    triangle->sequencer.period = triangle->sequencer.period & ~0xff | value;
+}
+
+void set_tri_length(Triangle *triangle, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    triangle->sequencer.period = triangle->sequencer.period & 0xff | (value & 0x7) << 8;
+    triangle->linear_reload_flag = 1;
+    if (triangle->enabled)
+        triangle->l.new_counter = length_counter_lookup[value >> 3];
+    s_length_pending = 1;
+}
+
+void set_noise_ctrl(Noise *noise, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    noise->const_volume = (value & BIT_4) > 0;
+    noise->l.new_halt = (value & BIT_5) > 0;
+    s_length_pending = 1;
+    noise->envelope.period = value & 0xF;
+}
+
+void set_noise_period(APU* apu, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    Noise* noise = &apu->noise;
+    if(apu->emulator->type == PAL)
+        noise->timer.period = noise_period_lookup_PAL[value & 0xF];
+    else
+        noise->timer.period = noise_period_lookup_NTSC[value & 0xF];
+    noise->mode = (value & BIT_7) > 0;
+}
+
+void set_noise_length(Noise *noise, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    if (noise->enabled)
+        noise->l.new_counter = length_counter_lookup[value >> 3];
+    s_length_pending = 1;
+    noise->envelope.step = 15;
+}
+
+void set_dmc_ctrl(APU* apu, uint8_t value) {
+    apu->dmc.loop = (value & BIT_6) > 0;
+    apu->dmc.IRQ_enable = (value & BIT_7) > 0;
+    if(!apu->dmc.IRQ_enable) {
+        apu->dmc.interrupt = 0;
+        interrupt_clear(&apu->emulator->cpu, APU_DMC_IRQ);
+    }
+    if(apu->emulator->type == NTSC)
+        apu->dmc.rate = dmc_rate_index_NTSC[value & 0xf] - 1;
+    else
+        apu->dmc.rate = dmc_rate_index_PAL[value & 0xf] - 1;
+}
+
+void set_dmc_da(DMC* dmc, uint8_t value) {
+    nes_sound_sync(); // CRTOS
+    dmc->counter = value & 0x7F;
+}
+
+void set_dmc_addr(DMC* dmc, uint8_t value) {
+    dmc->sample_addr = 0xC000 + (uint16_t)value * 64;
+}
+
+void set_dmc_length(DMC* dmc, uint8_t value) {
+    dmc->sample_length = (uint16_t)value * 16 + 1;
+}
+
+void dmc_complete(APU* apu) {
+    DMC* dmc = &apu->dmc;
+    dmc->empty = 0;
+    if(dmc->current_addr == 0xffff)
+        dmc->current_addr = 0x8000;
+    else
+        dmc->current_addr++;
+
+    if(dmc->bytes_remaining == 1) {
+        if(dmc->loop) {
+            dmc->current_addr = dmc->sample_addr;
+            dmc->bytes_remaining = dmc->sample_length;
+        }else {
+            if(dmc->IRQ_enable) {
+                dmc->interrupt = 1;
+                interrupt(&apu->emulator->cpu, APU_DMC_IRQ);
+            }
+            // implicit stop
+            // leave bytes_remaining = 1 so DMA can still start and be aborted later
+            dmc->enabled = 0;
+            dmc->toggle_delay = 2 + (apu->cycles & 1);
+        }
+    } else if (dmc->bytes_remaining) {
+        dmc->bytes_remaining--;
+    }
+}
+
+void clock_dmc(APU* apu) {
+    DMC* dmc = &apu->dmc;
+
+    if(dmc->rate_index > 0) {
+        dmc->rate_index--;
+    } else {
+        dmc->rate_index = dmc->rate;
+
+        if(dmc->bits_remaining > 0) {
+            // clamped counter update
+            if(!dmc->silence) {
+                nes_sound_sync(); // CRTOS: the level changes
+                if(dmc->bits & 1) {
+                    dmc->counter+=2;
+                    dmc->counter = dmc->counter > 127 ? 127 : dmc->counter;
+                }
+                else if(dmc->counter > 1)
+                    dmc->counter-=2;
+                dmc->bits >>= 1;
+            }
+            dmc->bits_remaining--;
+        }
+        if(dmc->bits_remaining == 0) {
+            if(dmc->bytes_remaining > 0) {
+                // reload DMA is always scheduled when sample buffer becomes empty
+                // it will however only start if DMC is enabled and ready
+                dmc->dma_scheduled = 1;
+            }
+            if(dmc->empty)
+                dmc->silence = 1;
+            else {
+                dmc->bits = dmc->sample;
+                dmc->empty = 1;
+                dmc->silence = 0;
+            }
+            dmc->bits_remaining = 8;
+        }
+    }
+
+    // scheduled dma only starts if DMC is ready
+    if (dmc->dma_scheduled && dmc->ready) {
+        schedule_dma(&apu->emulator->cpu, DMA_DMC, dmc->current_addr, &dmc->sample,1, 0);
+        dmc->dma_scheduled = 0;
+    }
+
+    // DMC ready status only changes 2 or 3 cycles after $4015 write or sample exhaustion
+    if (dmc->toggle_delay && --dmc->toggle_delay == 0) {
+        dmc->ready = dmc->enabled;
+        if (!dmc->ready) {
+            // abort DMC DMA
+            apu->emulator->cpu.dmc.abort = 1;
+            dmc->bytes_remaining = 0;
+        }
+    }
+
+}
+
+static void compute_mixer_LUT() {
+    pulse_LUT[0] = 0;
+    for (int i = 1; i < PULSE_LUT_SIZE; i++)
+        pulse_LUT[i] = 95.52f / (8128.0f / (float) i + 100);
+    tnd_LUT[0] = 0;
+    for (int i = 1; i < TND_LUT_SIZE; i++)
+        tnd_LUT[i] = 163.67f / (24329.0f / (float) i + 100);
+}
+
+static void init_pulse(Pulse *pulse, uint8_t id) {
+    pulse->id = id;
+    pulse->t.step = 0;
+    pulse->t.from = 0;
+    pulse->t.limit = 7;
+    pulse->t.loop = 1;
+    pulse->sweep.limit = 0;
+    pulse->enabled = 0;
+    pulse->sweep_reload = 0;
+    pulse->l.envelope = &pulse->envelope;
+}
+
+static void init_triangle(Triangle *triangle) {
+    triangle->sequencer.step = 0;
+    triangle->sequencer.limit = 31;
+    triangle->sequencer.from = 0;
+    triangle->enabled = 0;
+}
+
+static void init_noise(Noise *noise) {
+    noise->enabled = 0;
+    noise->timer.limit = 0;
+    noise->shift = 1;
+    noise->l.envelope = &noise->envelope;
+}
+
+static void init_dmc(DMC* dmc) {
+    dmc->empty = 1;
+    dmc->silence = 1;
+}
+
+static uint8_t clock_divider(Divider *divider) {
+    if (divider->counter) {
+        divider->counter--;
+        return 0;
+    }
+
+    divider->counter = divider->period;
+    divider->step++;
+    if (divider->limit && divider->step > divider->limit)
+        divider->step = divider->from;
+    // trigger clock
+    return 1;
+}
+
+static uint8_t clock_triangle(Triangle *triangle) {
+    Divider *divider = &triangle->sequencer;
+    if (divider->counter) {
+        divider->counter--;
+        return 0;
+    }
+
+    divider->counter = divider->period;
+    if (triangle->l.counter && triangle->linear_counter)
+        divider->step++;
+    if (divider->limit && divider->step > divider->limit)
+        divider->step = divider->from;
+    // trigger clock
+    return 1;
+}
+
+static uint8_t clock_divider_inverse(Divider *divider) {
+    if (divider->counter) {
+        divider->counter--;
+        return 0;
+    }
+    divider->counter = divider->period;
+    if (divider->limit && divider->step == 0 && divider->loop)
+        divider->step = divider->limit;
+    else if (divider->step)
+        divider->step--;
+    // trigger clock
+    return 1;
+}
+
+static void update_target_period(Pulse* pulse) {
+    int change = pulse->t.period >> pulse->shift;
+    change = pulse->neg ? pulse->id == 1 ? - change - 1 : -change : change;
+    // add 1 (2's complement) for pulse 2
+    change = pulse->t.period + change;
+    pulse->target_period = change < 0 ? 0 : change;
+    if(pulse->t.period < 8 || pulse->target_period > 0x7ff) {
+        pulse->mute = 1;
+    }else {
+        pulse->mute = 0;
+    }
+}
+
+static void length_sweep_pulse(Pulse *pulse) {
+    if (pulse->sweep_reload) {
+        // trigger a reload
+        pulse->sweep_reload = 0;
+        pulse->sweep.counter = 0;
+    }
+
+    if(clock_divider(&pulse->sweep)) {
+        if(pulse->enable_sweep && pulse->shift > 0 && !pulse->mute) {
+            pulse->t.period = pulse->target_period;
+            update_target_period(pulse);
+        }
+    }
+
+    // length counter
+    clock_length_counter(&pulse->l);
+}

@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek programu\n(send pod blokadą lwIP)" as P
+participant "lwIP netif->linkoutput" as W
+participant "crtos_lwip_xmit" as L
+participant "enet_xmit" as E
+participant "przerwanie ENET" as I
+participant "ENET" as H
+P -> W : tcp_write / udp_send (segment w jednym pbuf,\nsumy IP/TCP/UDP = 0)
+W -> L : ramka
+L -> E : nd->ops->xmit(frame, len)
+alt brak łącza albo ramka za długa
+  E --> L : -ENETDOWN / -EMSGSIZE (tx_dropped)
+else
+  E -> E : mutex tx_lock
+  loop tx_frame, do 20 czekań
+    alt wolny deskryptor
+      E -> H : kopia do bufora bez cache, clear_csums,\nREADY | LAST, TDAR
+    else pierścień pełny
+      E -> H : włącz przerwanie TXF
+      H -> I : ramka wysłana
+      I -> E : wyłącz TXF, sem_give(tx_sem)
+      E -> E : sem_take(tx_sem, 5 ms)
+    end
+  end
+  H -> H : sumy IP i TCP/UDP/ICMP wstawione\n(store and forward)
+  E --> L : 0 albo -EAGAIN
+end
+@enduml

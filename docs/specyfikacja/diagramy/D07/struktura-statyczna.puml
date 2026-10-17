@@ -1,0 +1,54 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class mtd <<struct>> {
+  +device* dev
+  +FLEXSPI_Type* base
+  +uint32_t podf, root_hz
+  +uint32_t slow_podf, slow_hz
+  +mutex lock
+  +part parts[4]
+  +int nparts
+  +uint32_t page[128]
+}
+class part <<struct>> {
+  +mtd* m
+  +char name[8]
+  +char label[16]
+  +uint32_t off
+  +uint32_t size
+  +bool ro
+  +bool kernel
+}
+class opened <<struct, na otwarcie>> {
+  +part* p
+  +uint32_t pos
+}
+class quiet <<struct>> {
+  +uint32_t primask
+  +bool dc
+  +bool ic
+}
+class flexspi_mtd <<moduł .ko, OCRAM>> {
+  -uint32_t s_lut[40]
+  -quiet_enter(q), quiet_leave(q)
+  -ip(b, addr, type, seq, nseq, data, size) : status_t
+  -wait_ready(b) : status_t
+  -set_clock(m, podf, hz)
+  -erase_sector(m, addr) : status_t
+  -program(m, addr, len) : status_t
+  -kernel_update(m, img, len)
+  -kernel_update_ioctl(p, ku) : int
+  -mtd_read / mtd_write / mtd_ioctl
+}
+class mtd_kernel_update <<struct ABI>> {
+  +uint64_t image
+  +uint32_t len
+  +uint32_t crc32
+}
+mtd *-- "1..4" part
+opened --> part
+flexspi_mtd ..> mtd
+flexspi_mtd ..> quiet
+flexspi_mtd ..> mtd_kernel_update
+@enduml

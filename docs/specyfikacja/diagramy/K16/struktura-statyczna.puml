@@ -1,0 +1,116 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class elf_ctx <<struct>> {
+  +const uint8_t* file
+  +size_t size
+  +const char* who
+  +const Elf32_Ehdr* eh
+  +const Elf32_Shdr* sh
+  +const char* shstr
+  +uint32_t* secaddr
+  +uint32_t* symaddr
+  +const Elf32_Sym* syms
+  +uint32_t nsyms
+  +const char* strtab
+}
+class elf_cpp <<moduł>> {
+  +elf_check(c) : int
+  +elf_layout(c, size, align) : int
+  +elf_place(c, base)
+  +elf_symbols(c, resolve, ctx) : int
+  +elf_relocate(c) : int
+  +elf_section(c, name, index) : Elf32_Shdr*
+  +elf_symbol(c, name) : uint32_t
+  +elf_release(c)
+  -apply_reloc(c, P, type, S, rela, addend) : int
+}
+class module <<struct>> {
+  +char name[24]
+  +uint8_t* base
+  +uint32_t size
+  +const module_info* info
+  +const ksym* exports
+  +uint32_t nexports
+  +module* deps[16]
+  +int ndeps
+  +uint32_t refs
+  +bool going
+  +list_head node
+}
+class module_info <<struct, sekcja .crtos_module>> {
+  +uint32_t magic
+  +uint32_t abi
+  +const char* name
+  +const char* description
+  +const char* depends
+  +init() : int
+  +exit()
+}
+class ksym <<struct>> {
+  +const char* name
+  +const void* addr
+}
+class crtos_app_info <<struct, sekcja .crtos_app>> {
+  +uint32_t magic
+  +uint32_t abi
+  +uint32_t stack_size
+  +uint32_t heap_size
+  +uint32_t flags
+}
+class crtos_startup <<struct, szczyt areny>> {
+  +uint32_t magic
+  +int32_t argc
+  +char~** argv
+  +char~** envp
+  +init_array, init_count
+  +fini_array, fini_count
+  +void* arena
+  +uint32_t arena_size
+  +int32_t pid
+}
+class module_cpp <<moduł>> {
+  -list_head s_modules
+  -mutex s_mod_lock
+  -module* s_loading
+  +module_load(path, out) : int
+  +module_unload(name) : int
+  -mod_resolve(name, ctx) : uintptr_t
+  -load_dependencies(c, path, depth) : int
+}
+class app_cpp <<moduł>> {
+  +app_spawn(parent, path, argv, envp, stdio, caps, prio, err) : proc*
+  -app_peek(f, fsize, isize, ialign, info) : int
+  -build_startup(p, argv, envp, tmpl) : uint32_t
+  -app_resolve(name, ctx) : uintptr_t
+  -app_spawn_xip(parent, path, f, fsize, eh, ...) : proc*
+  -xip_peek(f, fsize, eh, x) : int
+  -xip_relocate(x, text, data, path) : int
+}
+class xip_image <<struct, program XIP (ET_DYN)>> {
+  +uint32_t text_size
+  +uint32_t data_vaddr, data_off
+  +uint32_t data_filesz, data_memsz, data_align
+  +uint32_t entry
+  +uint32_t got
+  +uint32_t rel_off, rel_count
+  +pre, npre, ini, nini, fini, nfini
+  +crtos_app_info info
+}
+app_cpp ..> xip_image
+xip_image *-- crtos_app_info
+class vfs_cpp <<K13>> {
+  +vfs_xip(f, addr, size) : int
+}
+app_cpp ..> vfs_cpp : "tekst w miejscu (/flash0)"
+module_cpp ..> elf_cpp
+app_cpp ..> elf_cpp
+elf_cpp ..> elf_ctx
+module_cpp o-- module
+module --> module_info
+module o-- ksym : eksporty (.crtos_ksymtab)
+module --> module : deps
+app_cpp ..> crtos_app_info
+app_cpp ..> crtos_startup
+ksyms_cpp o-- ksym : eksporty jądra (237)
+@enduml

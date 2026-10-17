@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek gt911 (D04)" as D
+participant "input.cpp" as I
+participant "inputd (U04)\n(read /dev/event1)" as R
+R -> I : read(): kolejka pusta -> event_wait
+D -> I : input_report(EV_ABS, ABS_X, x)
+I -> I : każdemu klientowi: zdarzenie do kolejki (pełna: najstarsze -> dropped)
+D -> I : input_report(EV_ABS, ABS_Y, y), (EV_KEY, BTN_TOUCH, 1)
+D -> I : input_sync(): EV_SYN
+I -> R : event_set(bit 0), poll_notify
+R -> I : kopia rekordów z kolejki
+I --> R : n x 16 B
+@enduml

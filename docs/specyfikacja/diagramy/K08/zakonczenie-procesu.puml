@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wołający (sys_kill, błąd, sys_exit)" as K
+participant "proc.cpp" as P
+participant "wątki procesu" as T
+participant "kworker" as W
+participant "rodzic (proc_wait_child)" as R
+    opt sys_kill własnego procesu (abort)
+        K -> P : proc_put(p): odwołanie z proc_get_by_pid\n(proc_kill już nie wróci)
+    end
+    K -> P : proc_kill(p, code)
+    P -> P : ALIVE -> EXITING, exit_code = code
+    P -> T : task_kill() każdego wątku (poza wołającym)
+    opt wołający jest wątkiem tego procesu
+        P -> P : task_exit(code) wołającego (na końcu)
+    end
+    T -> T : -EINTR / koniec wywołania / przekierowanie do task_exit
+    T -> P : proc_thread_exited() (każdy)
+    P -> P : ostatni: DEAD, wake exit_wq, wake parent.child_wq
+    P -> W : kworker_queue(proc_death_work)
+    W -> P : proc_release(): handle_close_all, shm_unmap_all, mpu_forget_proc
+    W -> W : sieroty (dzieci) bez rodzica, kfree(arena), proc_put(własne)
+    R -> P : proc_wait_child(): znaleziony DEAD, kod, proc_put(rodzica)
+    P -> P : refs == 0: proc_free() (struktura, tablica uchwytów)
+@enduml

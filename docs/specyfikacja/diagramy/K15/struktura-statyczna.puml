@@ -1,0 +1,67 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class printk_cpp <<moduł>> {
+  -char s_log[16384]
+  -uint32_t s_log_head
+  -uint32_t s_con_tail
+  -uint32_t s_log_lost
+  -panic_record s_panic_rec
+  +printk(fmt) : int
+  +log_write(s, len)
+  +log_write_wait(s, len)
+  +log_console_read_locked(dst, max) : size_t
+  +log_snapshot(dst, max) : size_t
+  +panic(fmt)
+  +log_panic_write(s, len)
+  +log_panic_previous()
+  +cprintf(fmt) : int
+}
+class panic_record <<struct, DTCM .noinit>> {
+  +uint32_t magic
+  +uint32_t len
+  +uint32_t sum
+  +char text[1012]
+}
+class console_lpuart_cpp <<moduł>> {
+  -uint8_t s_rx[4096]
+  -uint32_t s_rx_head
+  -uint32_t s_rx_tail
+  -int s_focus
+  -wait_queue s_rx_wq
+  +console_init()
+  +console_kick()
+  +console_read_as(who, buf, max, timeout, flags) : int
+  +console_set_focus(who)
+  +console_panic_write(s, len)
+  -con_irq(irq, ctx)
+}
+class tty_cpp <<moduł>> {
+  -tty s_tty
+  +tty_init()
+  +tty_rx_filter(c) : bool
+  +tty_rx_notify()
+  +tty_open_console() : file*
+  -tty_read(f, buf, len) : int
+  -tty_write(f, buf, len) : int
+  -tty_ioctl(f, cmd, arg) : int
+  -canon_input(c) : int
+}
+class tty <<struct>> {
+  +mutex rlock
+  +uint32_t mode
+  +int fg_pid
+  +char line[256]
+  +uint32_t len
+  +uint32_t pos
+  +bool ready
+  +bool eof
+  +poll_head ph
+}
+printk_cpp *-- panic_record
+tty_cpp *-- tty
+console_lpuart_cpp ..> printk_cpp : TX: log_console_read_locked
+printk_cpp ..> console_lpuart_cpp : console_kick
+console_lpuart_cpp ..> tty_cpp : Ctrl-C, powiadomienie o wejściu
+tty_cpp ..> printk_cpp : echo, zapis (log_write_wait)
+@enduml

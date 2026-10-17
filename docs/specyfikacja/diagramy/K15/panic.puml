@@ -1,0 +1,17 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "dowolny kontekst" as C
+participant "panic()" as P
+participant "panic_record (DTCM .noinit)" as R
+participant "następny start (kernel_main)" as B
+    C -> P : panic("BUG at ...")
+    P -> P : cpsid i, druga panika = pętla
+    P -> P : log_panic_flush: niewysłany log synchronicznie
+    P -> R : ~*** KERNEL PANIC (task ...): powód
+    P -> P : czekanie 10 s na licznik cykli ('r' restart, 'h' zatrzymanie)
+    P -> P : NVIC_SystemReset
+    B -> R : log_panic_previous: magic i suma poprawne?
+    R --> B : tekst do logu: ~*** the previous run ended with a panic
+    B -> R : magic = 0
+@enduml

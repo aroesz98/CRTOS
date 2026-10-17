@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "jądro /dev/uevent" as K
+participant "devmgr" as M
+participant "inputd" as C
+M -> K : open(O_NONBLOCK): add dla istniejących (coldplug)
+C -> M : SUBSCRIBE("event", port zdarzeń)
+M --> C : 0
+M -> C : EV_ADD event0, EV_ADD event1 (istniejące)
+note over K : np. podłączona mysz USB (tryb host)
+K -> M : "add event2" (poll: POLLIN)
+M -> C : EV_ADD event2
+C -> C : open(/dev/event2)
+@enduml

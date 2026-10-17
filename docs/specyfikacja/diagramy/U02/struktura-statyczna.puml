@@ -1,0 +1,33 @@
+@startuml
+!include ../styl.iuml
+class devmgr_c <<program devmgr.app>> {
+  -char s_dev[64][24]
+  -int s_ndev
+  -sub s_sub[16]
+  +main() : int
+  -read_uevents(fd) : int
+  -device_event(add, name)
+  -subscribe(mi, q)
+  -list(mi, q)
+  -notify(s, type, name)
+}
+class sub <<struct>> {
+  +bool used
+  +int port
+  +int pid
+  +char prefix[24]
+}
+class devmgr_subscribe <<struct protokołu>> {
+  +uint16_t type
+  +uint16_t size
+  +char prefix[24]
+}
+class devmgr_event <<struct protokołu>> {
+  +uint16_t type
+  +uint16_t size
+  +char name[24]
+}
+devmgr_c *-- "0..16" sub
+devmgr_c ..> devmgr_subscribe
+devmgr_c ..> devmgr_event
+@enduml

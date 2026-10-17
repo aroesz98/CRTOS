@@ -1,0 +1,89 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class fb <<struct, s_fb[2]>> {
+  +fb_info info
+  +const fb_ops* ops
+  +void* ctx
+  +char devname[8]
+  +bool used
+  +uint32_t frames
+  +uint32_t shown
+  +uint32_t opens
+  +bool resizing
+  +poll_head ph
+  +shm* shm[2]
+}
+class fb_cpp <<moduł>> {
+  +fb_register(info, ops, ctx) : int
+  +fb_suggest_size(w, h) : int
+}
+class fb_info <<struct>> {
+  +uint16_t width
+  +uint16_t height
+  +uint32_t stride
+  +uint32_t format
+  +uint32_t bpp
+  +uint32_t nbuffers
+  +uint32_t buffer_size
+  +uintptr_t buffer[2]
+  +uint32_t refresh_mhz
+}
+class fb_file <<struct, na otwarcie>> {
+  +fb* fb
+  +uint32_t pos
+  +uint32_t seen
+}
+interface fb_ops <<interfejs>> {
+  +show(ctx, index) : int
+  +wait_vsync(ctx, timeout) : int
+  +blank(ctx, blank) : int
+  +set_size(ctx, w, h, info) : int
+}
+class gpu2d_cpp <<moduł>> {
+  -const gpu2d_ops* s_ops
+  -void* s_ctx
+  -mutex s_lock
+  +gpu2d_fill(dst, r, argb) : int
+  +gpu2d_blit(dst, dx, dy, src, sr, flags) : int
+  -soft_fill(d, r, argb) : int
+  -soft_blit(d, dx, dy, s, sr, flags) : int
+  -resolve(hs, s, ref) : int
+  -hbatch(b) : int
+}
+class gpu2d_hsurface <<struct, od programu>> {
+  +int32_t handle
+  +uint32_t offset
+  +uint16_t width
+  +uint16_t height
+  +uint32_t stride
+  +uint32_t format
+}
+class gpu2d_surface <<struct, w jądrze>> {
+  +uintptr_t addr
+  +uint16_t width
+  +uint16_t height
+  +uint32_t stride
+  +uint32_t format
+}
+interface gpu2d_ops <<interfejs>> {
+  +fill(ctx, dst, r, argb) : int
+  +blit(ctx, dst, dx, dy, src, sr, flags) : int
+}
+class shm <<struct, K11>>
+fb *-- fb_info
+fb --> fb_ops
+fb_cpp --> fb : s_fb[]
+class gt911 <<D04>>
+gt911 ..> fb_cpp : fb_suggest_size
+fb o-- shm : bufory jako shm (shm_wrap)
+fb_file --> fb
+gpu2d_cpp --> gpu2d_ops
+gpu2d_cpp ..> gpu2d_hsurface : resolve()
+gpu2d_cpp ..> gpu2d_surface
+gpu2d_hsurface ..> shm : handle
+class lcdif_imxrt <<D03>>
+class pxp_imxrt <<D03>>
+lcdif_imxrt ..|> fb_ops
+pxp_imxrt ..|> gpu2d_ops
+@enduml

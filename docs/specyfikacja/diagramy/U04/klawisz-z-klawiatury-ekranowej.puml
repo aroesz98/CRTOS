@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wm (pasek zadań)" as W
+participant "osk" as O
+participant "gfxd" as G
+participant "program z fokusem" as P
+W -> O : OSK_TOGGLE (port osk)
+O -> G : GFX_WIN_SHOW(okno klawiatury)
+O --> W : osk_state {available, visible, height}
+G -> O : GFX_EV_POINTER (dotyk klawisza; okno NOFOCUS)
+O -> G : GFX_INPUT(GFX_KEY, KEY_LEFTSHIFT 1) (gdy wielka litera)
+O -> G : GFX_INPUT(GFX_KEY, KEY_A 1), (KEY_A 0)
+G -> P : GFX_EV_KEY (jak z klawiatury)
+@enduml

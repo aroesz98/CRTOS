@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "devmgr (U02)\n/ driver core" as D
+participant "wm_probe\n(wlf,wm8960)" as WP
+participant "sai_probe\n(fsl,imxrt1050-sai)" as SP
+participant "clk-imxrt (D01)" as K
+participant "WM8960\n(I2C 0x1a)" as C
+D -> WP : dziecko &lpi2c1 (audio-codec@1a)
+WP -> C : RESET, zasilanie, trasa DAC -> miksery -> wyjścia, I2S 16-bit slave
+WP -> C : głośność (LOUT1/ROUT1, LOUT2/ROUT2)
+alt brak odpowiedzi
+  WP --> D : -EIO ("no answer at 0x1a")
+else
+  WP -> WP : s_codec = c
+end
+D -> SP : węzeł &sai1
+alt s_codec nie jest węzłem z audio-codec
+  SP --> D : -EPROBE_DEFER (ponowna próba po związaniu kodeka)
+end
+SP -> K : bramka SAI1, clk_set_rate(SAI1_ROOT, 12288000)
+K -> K : PLL audio 786,432 MHz, / 4 / 16
+SP -> SP : GPR1: MCLK1 = korzeń SAI1, pin MCLK wyjściem
+SP -> SP : SAI_Init, I2S master 16-bit stereo, znacznik FIFO 16
+SP -> C : CLOCK1: DACDIV dla 48 kHz
+SP -> SP : irq_request(SAI1, priorytet 3), devfs_register("audio")
+@enduml

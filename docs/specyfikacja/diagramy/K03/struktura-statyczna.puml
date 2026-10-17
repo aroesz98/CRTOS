@@ -1,0 +1,39 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class mpu_cpp <<moduł>> {
+  +uint32_t task_stack_limit
+  -proc* s_mpu_proc
+  +mpu_init()
+  +mpu_switch(prev, next)
+  +mpu_set_guard(t, stack_base)
+  +mpu_set_user_guards(t)
+  +mpu_encode_region(region, base, size, attr, rbar, rasr) : int
+  +mpu_proc_changed(p)
+  +mpu_forget_proc(p)
+  -region_load(rbar, rasr)
+}
+class task <<struct, K05>> {
+  +uint32_t guard_rbar
+  +uint32_t guard_rasr
+  +uint32_t kguard_rbar
+  +uint32_t kguard_rasr
+  +uint32_t stack_limit
+  +proc* proc
+}
+class proc <<struct, K08>> {
+  +uint8_t* arena
+  +uint32_t arena_size
+  +uint32_t arena_rbar
+  +uint32_t arena_rasr
+  +shm_window win[3]
+}
+class shm_window <<struct>> {
+  +shm* shm
+  +uint32_t rbar
+  +uint32_t rasr
+}
+mpu_cpp ..> task : region 14, 15
+mpu_cpp ..> proc : region 8
+proc *-- "3" shm_window : regiony 9-11
+@enduml

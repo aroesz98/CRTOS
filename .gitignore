@@ -1,0 +1,26 @@
+# build results ("crtos build" -> build/, for a board other than the default build-<board>/;
+# MCUXpresso IDE -> Release/, Debug/)
+/build/
+/build-*/
+/Release/
+/Debug/
+
+# the third-party sources: fetched at the commits of third_party/sources.txt (tools/thirdparty.py,
+# on every build's configure; NetSurf with "crtos setup --netsurf")
+/third_party/*
+!/third_party/sources.txt
+
+# local backups (7z archives of the project)
+/backups/
+/*.7z
+
+__pycache__/
+/.cache/
+*.pyc
+.vs/
+*.swp
+.DS_Store
+screenshot-*.png
+/dts/*.dtb
+# the board "crtos board NAME" chose
+/.crtos-board

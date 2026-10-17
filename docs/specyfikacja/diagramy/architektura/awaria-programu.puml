@@ -1,0 +1,19 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek programu" as T
+participant "K04 fault_handle" as F
+participant "K08 proc_kill" as P
+participant "K05 kworker" as W
+    T -> F : MemManage (np. zapis poza arenę albo przepełnienie stosu)
+    F -> F : raport: przyczyna, adres, rejestry, proces, arena
+    alt przerwanie, sekcja krytyczna, idle, scheduler zablokowany
+        F -> F : panic(): raport synchroniczny, zapis do .noinit, restart po 10 s
+    else wątek
+        F -> P : proc_kill(-EFAULT): pozostałe wątki procesu
+        F -> F : task_redirect_to_exit(): kontekst na stosie jądra, tryb uprzywilejowany
+        F --> T : powrót do task_exit(-EFAULT)
+        T -> P : proc_thread_exited(): ostatni wątek, proces martwy
+        P -> W : proc_release: uchwyty, shm, arena
+    end
+@enduml

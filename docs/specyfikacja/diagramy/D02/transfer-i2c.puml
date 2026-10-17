@@ -1,0 +1,26 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "gt911 (D04)" as C
+participant "S02 i2c_transfer" as F
+participant "lpi2c_xfer" as D
+participant "LPI2C + SDK" as H
+participant "lpi2c_irq" as I
+C -> F : i2c_write_read(adres 0x5D, rejestr 0x814E, 1 B)
+F -> F : mutex magistrali
+F -> D : xfer([zapis 2 B, odczyt 1 B])
+D -> D : zapis <= 4 B + odczyt tego samego adresu: jedna transakcja (subaddress)
+D -> H : LPI2C_MasterTransferNonBlocking
+D -> D : sem_take(done, 100 ms)
+H -> I : przerwania FIFO/końca
+I -> H : LPI2C_MasterTransferHandleIRQ
+H -> D : xfer_done(status): sem_give
+alt limit czasu
+  D -> H : LPI2C_MasterTransferAbort
+  D --> F : -ETIMEDOUT
+else NAK
+  D --> F : -ENXIO
+else
+  D --> F : 2
+end
+@enduml

@@ -1,0 +1,2 @@
+	.hidden __mulsf3
+	.hidden __aeabi_fmul

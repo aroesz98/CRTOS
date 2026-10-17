@@ -1,0 +1,31 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class trng <<struct, trng-imxrt>> {
+  +device* dev
+  +TRNG_Type* base
+  +int irq
+  +mutex lock
+  +semaphore ready
+  +uint32_t pool[16]
+  +uint32_t avail
+  +uint32_t errors
+  -trng_irq(irq, ctx)
+  -generate(t) : int
+  -trng_read(f, buf, len) : int
+}
+class srtc <<struct, rtc-snvs>> {
+  +device* dev
+  +SNVS_Type* base
+  -counter(b) : uint64_t
+  -srtc_read(ctx, us) : int
+  -srtc_set(ctx, us) : int
+}
+interface file_ops <<K13>>
+interface rtc_ops <<K09>> {
+  +read(ctx, us) : int
+  +set(ctx, us) : int
+}
+trng ..|> file_ops
+srtc ..|> rtc_ops
+@enduml

@@ -1,0 +1,29 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "użytkownik" as U
+participant "terminal (UART / getty / term)" as T
+participant "sh" as S
+participant "plik" as F
+U -> T : cat /dev/mtd1, Enter
+T -> S : wiersz (edit_line, tryb surowy)
+S -> T : TTY_IOC_SET_MODE(CANON | ECHO)
+S -> S : run_pipeline: same polecenia wbudowane
+S -> T : watch(true): TTY_IOC_SET_MODE(0),\nO_NONBLOCK
+loop copy_stream: co 4 KB
+  S -> F : fread
+  S -> T : fwrite (dane)
+  S -> T : interrupted(): poll(0), read
+end
+U -> T : Ctrl-C
+note right of T
+  tryb surowy: terminal nie kończy
+  procesu, tylko podaje bajt 3
+end note
+T -> S : bajt 3
+S -> S : s_intr = true
+S -> T : "^C\\n"
+S -> S : cat kończy się (kod 130),\nreszta wiersza pominięta
+S -> T : watch(false): TTY_IOC_SET_MODE(CANON | ECHO)
+S -> T : nowy znak zachęty (edit_line; klawisze\nwpisane w trakcie z s_ahead)
+@enduml

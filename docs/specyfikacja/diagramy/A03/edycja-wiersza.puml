@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "użytkownik" as U
+participant "terminal (UART / getty / term)" as T
+participant "sh: edit_line" as S
+participant "plik historii" as F
+S -> T : TTY_IOC_SET_MODE(0): tryb surowy
+S -> T : "\\r" + znak zachęty + ESC[K
+U -> T : strzałka w górę
+T -> S : ESC [ A
+S -> S : poprzedni wiersz z historii
+S -> T : "\\r" + znak zachęty + wiersz + ESC[K + ESC[nC
+U -> T : Home, Insert, litera
+T -> S : ESC [ H, ESC [ 2 ~, znak
+S -> T : ESC[2 q (kursor blokowy), wiersz z nadpisanym znakiem
+U -> T : Enter
+T -> S : CR
+S -> T : "\\n", ESC[0 q, TTY_IOC_SET_MODE(CANON | ECHO)
+S -> F : dopisanie wiersza (hist_add)
+S -> S : run_line(wiersz): program na pierwszym planie (TTY_IOC_SET_FG)
+@enduml

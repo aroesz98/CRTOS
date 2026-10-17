@@ -1,0 +1,326 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * ST STM32H7S78-DK board description for CRTOS. Pins as ST's BSP (STM32CubeH7RS
+ * Drivers/BSP/STM32H7S78-DK) and the board's user manual UM3289 have them.
+ */
+/dts-v1/;
+
+#include "stm32h7s7.dtsi"
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "ST STM32H7S78-DK";
+	compatible = "st,stm32h7s78-dk", "st,stm32h7s7";
+
+	aliases {
+		serial4 = &uart4;
+		serial7 = &uart7;
+		mmc0 = &sdmmc1;
+		display0 = &ltdc;
+	};
+
+	chosen {
+		stdout-path = "serial4:1000000n8";
+		crtos,init = "/sd/crtos/sbin/init.app";
+	};
+
+	/* files on the NOR flash beyond the kernel, programs there run in place (drivers/fs/flashfs.c) */
+	flashfs {
+		compatible = "crtos,flashfs";
+		partition = <&flash0_part>;
+		mountpoint = "/flash0";
+	};
+
+	psram: memory@90000000 {
+		device_type = "memory";
+		reg = <0x90000000 0x2000000>;
+	};
+
+	/* The 5" RK050HR18 panel (800x480, 24-bit RGB) with its GT911 touch controller: DISP
+	 * on PE15, the backlight on PG15 */
+	panel: panel {
+		compatible = "rocktech,rk050hr18";
+		enable-gpios = <&gpioe 15 GPIO_ACTIVE_HIGH>;
+		backlight-gpios = <&gpiog 15 GPIO_ACTIVE_HIGH>;
+
+		display-timings {
+			native-mode = <&timing0>;
+
+			/* ST's BSP values; 25 MHz typical, PLL3 R gives 24.576 MHz (59.9 Hz) */
+			timing0: timing-800x480 {
+				clock-frequency = <25000000>;
+				hactive = <800>;
+				vactive = <480>;
+				hfront-porch = <8>;
+				hback-porch = <8>;
+				hsync-len = <4>;
+				vfront-porch = <8>;
+				vback-porch = <8>;
+				vsync-len = <4>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <1>;
+				pixelclk-active = <1>;
+			};
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_keys>;
+
+		user-button {
+			label = "USER";
+			gpios = <&gpioc 13 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_HOME>;
+			debounce-interval = <20>;
+		};
+	};
+
+	/* A DualSense (Edge) pad over Bluetooth through the ESP32 bridge (esp32-s3-bt-mod/):
+	 * ESP32 GPIO17 (UART2 TX) -> D0 of the Arduino connector (PE7, UART7 RX), GND -> GND.
+	 * The driver (drivers/input/esp32-pad) reads the bridge's frames from UART7 (uart-stm32,
+	 * /dev/ttyS7) and makes the pad an input device. */
+	gamepad {
+		compatible = "crtos,esp32-pad";
+		port = "/dev/ttyS7";
+		current-speed = <460800>;
+	};
+
+	/* the TCP/IP stack (lwIP, drivers/net/lwip): sockets on every network interface */
+	tcpip {
+		compatible = "crtos,lwip";
+	};
+};
+
+&pinctrl {
+	/* the touch controller and the audio codec */
+	pinctrl_i2c1: i2c1grp {
+		pinmux = <STM32_PINMUX(B, 6, AF4)>, <STM32_PINMUX(B, 9, AF4)>;
+		drive-open-drain;
+		bias-pull-up;
+	};
+
+	/* GT911 INT */
+	pinctrl_touch: touchgrp {
+		pinmux = <STM32_PINMUX(E, 3, GPIO)>;
+		bias-pull-down;
+	};
+
+	/* I2S6 to the WM8904: MCK, CK, WS, SDO (SDI on PG12 is the codec's ADC, unused) */
+	pinctrl_i2s6: i2s6grp {
+		pinmux = <STM32_PINMUX(A, 3, AF5)>, <STM32_PINMUX(A, 5, AF8)>, <STM32_PINMUX(A, 4, AF8)>,
+			 <STM32_PINMUX(B, 5, AF8)>;
+		slew-rate = <STM32_SLEW_HIGH>;
+	};
+
+	/* LTDC: R0-R7, G0-G7, B0-B7, DE, CLK, HSYNC, VSYNC */
+	pinctrl_ltdc: ltdcgrp {
+		pinmux = <STM32_PINMUX(F, 9, AF13)>, <STM32_PINMUX(F, 10, AF14)>, <STM32_PINMUX(F, 0, AF11)>,
+			 <STM32_PINMUX(B, 4, AF13)>, <STM32_PINMUX(B, 3, AF13)>, <STM32_PINMUX(A, 15, AF13)>,
+			 <STM32_PINMUX(G, 1, AF13)>, <STM32_PINMUX(G, 0, AF13)>,
+			 <STM32_PINMUX(F, 7, AF13)>, <STM32_PINMUX(F, 15, AF13)>, <STM32_PINMUX(A, 1, AF13)>,
+			 <STM32_PINMUX(A, 0, AF13)>, <STM32_PINMUX(B, 13, AF10)>, <STM32_PINMUX(B, 12, AF13)>,
+			 <STM32_PINMUX(B, 11, AF13)>, <STM32_PINMUX(B, 15, AF10)>,
+			 <STM32_PINMUX(F, 11, AF14)>, <STM32_PINMUX(G, 14, AF13)>, <STM32_PINMUX(A, 12, AF13)>,
+			 <STM32_PINMUX(A, 11, AF13)>, <STM32_PINMUX(A, 10, AF14)>, <STM32_PINMUX(A, 9, AF14)>,
+			 <STM32_PINMUX(A, 8, AF13)>, <STM32_PINMUX(A, 6, AF12)>,
+			 <STM32_PINMUX(B, 14, AF13)>, <STM32_PINMUX(G, 13, AF13)>, <STM32_PINMUX(G, 2, AF13)>,
+			 <STM32_PINMUX(E, 11, AF11)>;
+		slew-rate = <STM32_SLEW_HIGH>;
+	};
+
+	/* Ethernet RMII to the LAN8742A, its MDIO (MDC on PC1 needs JP6 in that position) */
+	pinctrl_eth: ethgrp {
+		pinmux = <STM32_PINMUX(D, 7, AF4)>, <STM32_PINMUX(A, 7, AF11)>, <STM32_PINMUX(C, 4, AF11)>,
+			 <STM32_PINMUX(C, 5, AF11)>, <STM32_PINMUX(G, 11, AF11)>, <STM32_PINMUX(B, 0, AF11)>,
+			 <STM32_PINMUX(B, 1, AF11)>, <STM32_PINMUX(A, 2, AF11)>, <STM32_PINMUX(C, 1, AF11)>;
+		slew-rate = <STM32_SLEW_HIGH>;
+	};
+
+	/* USB1 (OTG_HS): D-, D+, and the CC lines of its USB-C connector (UCPD1); USB2 (OTG_FS):
+	 * D-, D+ */
+	pinctrl_usb_hs: usbhsgrp {
+		pinmux = <STM32_PINMUX(M, 5, AF10)>, <STM32_PINMUX(M, 6, AF10)>, <STM32_PINMUX(M, 0, ANALOG)>,
+			 <STM32_PINMUX(M, 1, ANALOG)>;
+	};
+
+	/* the TCPP03 of USB1: ENABLE (PM9), FLGn (PM8, a fault: unused) */
+	pinctrl_tcpp: tcppgrp {
+		pinmux = <STM32_PINMUX(M, 9, GPIO)>, <STM32_PINMUX(M, 8, GPIO)>;
+		bias-pull-up;
+	};
+
+	pinctrl_usb_fs: usbfsgrp {
+		pinmux = <STM32_PINMUX(M, 12, AF10)>, <STM32_PINMUX(M, 11, AF10)>;
+	};
+
+	/* the panel's DISP and backlight */
+	pinctrl_panel: panelgrp {
+		pinmux = <STM32_PINMUX(E, 15, GPIO)>, <STM32_PINMUX(G, 15, GPIO)>;
+	};
+
+	/* the USER button (B2): high when pressed */
+	pinctrl_keys: keysgrp {
+		pinmux = <STM32_PINMUX(C, 13, GPIO)>;
+		bias-pull-down;
+	};
+
+	/* UART7 on the Arduino connector: D0 (PE7, RX) and D1 (PE8, TX); RX pulled up, so a line
+	 * without the ESP32 bridge stays idle */
+	pinctrl_uart7: uart7grp {
+		pinmux = <STM32_PINMUX(E, 7, AF7)>, <STM32_PINMUX(E, 8, AF7)>;
+		bias-pull-up;
+	};
+};
+
+/* the console: the ST-LINK's virtual COM port (the kernel's own driver) */
+&uart4 {
+	current-speed = <1000000>;
+	status = "okay";
+};
+
+/* micro SD slot (the kernel's own driver: the system boots from it) */
+&sdmmc1 {
+	bus-width = <4>;
+	cd-gpios = <&gpiom 14 GPIO_ACTIVE_LOW>;
+	status = "okay";
+};
+
+&i2c1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c1>;
+	clock-frequency = <100000>;
+	status = "okay";
+
+	/* the panel's touch controller (the board has no reset line for it: address 0x5d) */
+	touchscreen@5d {
+		compatible = "goodix,gt911";
+		reg = <0x5d>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_touch>;
+		interrupt-parent = <&gpioe>;
+		interrupts = <3 IRQ_TYPE_EDGE_RISING>;
+	};
+
+	/* the protection of the USB-C connector USB1, whose gate drivers put the board's 5 V on
+	 * its VBUS (usb-stm32: the host side there) */
+	usb1_vbus: usb-power@34 {
+		compatible = "st,tcpp03";
+		reg = <0x34>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_tcpp>;
+		enable-gpios = <&gpiom 9 GPIO_ACTIVE_HIGH>;
+	};
+
+	/* sound: the headphone jack (i2s-stm32, /dev/audio) */
+	wm8904: audio-codec@1a {
+		compatible = "wlf,wm8904";
+		reg = <0x1a>;
+	};
+};
+
+/* the serial port of the Arduino connector (D0/D1): the ESP32 pad bridge, 460800 baud */
+&uart7 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart7>;
+	current-speed = <460800>;
+	status = "okay";
+};
+
+&i2s6 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2s6>;
+	audio-codec = <&wm8904>;
+	status = "okay";
+};
+
+/* Ethernet: the LAN8742A PHY at MDIO address 0, which makes the 50 MHz RMII clock */
+&mac {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_eth>;
+	phy-mode = "rmii";
+	phy-handle = <&ethphy0>;
+	status = "okay";
+
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		ethphy0: ethernet-phy@0 {
+			reg = <0>;
+		};
+	};
+};
+
+/* USB1 (USB-C, high speed): keyboards, mice and hubs - through an adapter to USB-A as well.
+ * VBUS goes on when the UCPD sees a device on the CC lines (TCPP03 above). */
+&usbotg_hs {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usb_hs>;
+	clocks = <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_OTGHS)>, <&rcc STM32_CLK(STM32_AHB1ENR, STM32_AHB1_USBPHYC)>,
+		 <&rcc STM32_CLK(STM32_APB1ENR2, STM32_APB12_UCPD1)>;
+	clock-names = "otg", "phy", "typec";
+	dr_mode = "host";
+	vbus-supply = <&usb1_vbus>;
+	typec-controller = <&ucpd1>;
+	status = "okay";
+};
+
+/* USB2 (a sink-only USB-C port): the board as a USB serial port of the computer (/dev/ttyACM0,
+ * a shell by getty). Jumper JP1 picks the board's 5 V source: STLK (the ST-LINK's USB, the
+ * default) or USB2 (then the computer on USB2 powers the board). */
+&usbotg_fs {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usb_fs>;
+	dr_mode = "peripheral";
+	status = "okay";
+};
+
+/* the date across resets (the RTC counts the 32.768 kHz LSE crystal in the backup domain) */
+&rtc {
+	status = "okay";
+};
+
+/* entropy: /dev/random */
+&rng {
+	status = "okay";
+};
+
+/* the 2D accelerator of the graphics server (gpu2d-stm32, /dev/gpu2d) */
+&gpu2d {
+	status = "okay";
+};
+
+&ltdc {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_ltdc &pinctrl_panel>;
+	display = <&panel>;
+	status = "okay";
+};
+
+/* the NOR flash: the kernel image in the first 2 MB, the rest is the file system /flash0 */
+&xspi2 {
+	status = "okay";
+
+	flash@0 {
+		compatible = "mxicy,mx66uw1g45g";
+		reg = <0>;
+		size = <0x8000000>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			partition@0 {
+				label = "kernel";
+				reg = <0x0 0x200000>;
+				read-only;
+			};
+			flash0_part: partition@200000 {
+				label = "flash0";
+				reg = <0x200000 0x7e00000>;
+			};
+		};
+	};
+};

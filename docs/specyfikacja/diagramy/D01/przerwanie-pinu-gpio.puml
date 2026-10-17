@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "pin GPIO5_IO00 (SW8)" as P
+participant "NVIC: GPIO5 0-15" as N
+participant "cascade() (gpio-imxrt)" as C
+participant "irq_handle_nested (K02)" as K
+participant "key_irq (gpio-keys, D04)" as H
+P -> N : zbocze (ICR/EDGE_SEL z DT: oba zbocza)
+N -> C : irq_dispatch
+C -> C : pending = ISR & IMR & 0x0000FFFF
+C -> C : ISR = pending (kasowanie)
+loop bity pending
+  C -> K : irq_handle_nested(irq_base + pin)
+  K -> H : obsługa: event_set / sem_give dla wątku
+end
+C -> C : dsb
+@enduml

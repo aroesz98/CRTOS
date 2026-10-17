@@ -1,0 +1,32 @@
+CRTOS: the compiler that runs on the board is built for the host arm-none-eabi, which
+config.host does not know:
+  - CRTOS' file systems (FAT, ramfs, flashfs) have no inode numbers (st_ino is always 0),
+    so directories are told apart by their canonical names (HOST_LACKS_INODE_NUMBERS, as
+    on Windows) - otherwise every include directory after the first looks like a
+    duplicate of it;
+  - the ARM target's driver asks the host for its processor (-mcpu=native:
+    host_detect_local_cpu, config/arm/driver-arm.cc) whenever the host is an ARM, so it
+    needs that object. (It reads /proc/cpuinfo, which CRTOS does not have: -mcpu=native
+    gives no processor, and the configured default, the Cortex-M7, stays.)
+
+--- a/gcc/config.host	2026-09-29 19:56:07.847733046 +0200
++++ b/gcc/config.host	2026-09-29 19:56:07.866818078 +0200
+@@ -108,6 +108,18 @@
+ 	;;
+     esac
+     ;;
++  arm*-*-eabi*)
++    # CRTOS (the compiler that runs on the board): its file systems (FAT) have no inode
++    # numbers, so directories are told apart by name (incpath.cc); -mcpu=native as on
++    # other ARM hosts
++    host_xm_defines="HOST_LACKS_INODE_NUMBERS"
++    case ${target} in
++      arm*-*-*)
++	host_extra_gcc_objs="driver-arm.o"
++	host_xmake_file="${host_xmake_file} arm/x-arm"
++	;;
++    esac
++    ;;
+   arm*-*-freebsd* | arm*-*-netbsd* | arm*-*-linux* | arm*-*-fuchsia*)
+     case ${target} in
+       arm*-*-*)

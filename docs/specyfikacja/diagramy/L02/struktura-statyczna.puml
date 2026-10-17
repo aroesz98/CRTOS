@@ -1,0 +1,138 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class gfx <<struct, gfx.c>> {
+  -int port
+  -int evport
+  -int width, height
+  -uint32_t format
+  -gfx_event q[32]
+  -int qhead, qtail
+  -gfx_win* wins[32]
+  -pool* pool
+}
+class gfx_win <<struct>> {
+  +gfx* g
+  +int id
+  +int shm
+  +uint32_t offset
+  +bool pooled
+  +gfx_surface s
+  +int x, y
+  +uint32_t flags
+  +bool frame_pending
+  +bool resize_pending
+  +old_* (poprzednie piksele)
+}
+class gfx_surface <<struct>> {
+  +void* pix
+  +int w, h
+  +int stride
+  +uint32_t format
+}
+class pool <<struct, gfx.c>> {
+  +int shm
+  +uint8_t* base
+  +uint32_t size
+  +int n
+  +blk[32] {off, size}
+}
+class GFXfont <<struct>> {
+  +uint8_t* bitmap
+  +GFXglyph* glyph
+  +uint16_t first, last
+  +uint8_t yAdvance
+}
+class ui_list <<struct>> {
+  +ui_rect r
+  +int row_h, count
+  +int top, sel
+  +draw_row(s, r, row, sel, ctx)
+  +void* ctx
+  +bool no_bg
+}
+class ui_settings <<struct, settings.c>> {
+  +int scale
+  +char font[24]
+  +uint32_t accent
+  +bool transparency
+  +int opacity
+  +bool rounded
+  +char wallpaper[96]
+  +int fit
+  --
+  +ui_settings_load(s) : int
+  +ui_settings_save(s) : int
+  +ui_settings_set(s, key, value) : int
+  +ui_settings_apply(s)
+  +ui_px(px) : int
+  +ui_font_families(ids, names, max) : int
+  +ui_family_font(id) : GFXfont*
+}
+class ui_theme <<struct>> {
+  +uint32_t bg, panel, text, text_dim
+  +uint32_t accent, accent_text
+  +uint32_t button, button_pressed, button_text, border
+  +GFXfont* font, bold, mono, heading
+  +int scale
+  +int radius
+  +uint8_t alpha
+}
+class wallpaper <<funkcje, wallpaper.c>> {
+  +gfx_wallpaper_builtin(i) : char*
+  +gfx_wallpaper_draw(s, spec, fit) : int
+}
+class clipboard <<funkcje, gfx.c>> {
+  +gfx_clip_set(g, text, len) : int
+  +gfx_clip_get(g, buf, size) : int
+  +gfx_clip_watch(g)
+}
+class remote <<funkcje, gfx.c>> {
+  +gfx_send_input(g, kind, code, x, y, value) : int
+  +gfx_screen_watch(g, shm, stride) : int
+  +gfx_screen_take(g, rects) : int
+  +gfx_wm_keys(g, all)
+}
+class font_file <<funkcje, fonts.c>> {
+  +gfx_font_load(path) : GFXfont*
+}
+class gfx_image <<struct, image.c>> {
+  +int w, h
+  +uint32_t* pix (0xAARRGGBB)
+  --
+  +gfx_image_load(path) : gfx_image*
+  +gfx_image_scale(img, w, h) : gfx_image*
+  +gfx_image_draw(s, x, y, img)
+  +gfx_icon_load(name, size) : gfx_image*
+}
+class ui_keyboard <<struct>> {
+  +ui_rect r
+  +int mode
+  +bool ctrl
+  +int pressed
+}
+class ui_keys <<struct>> {
+  +bool shift, ctrl, caps
+}
+class TFTLIB_8BIT <<C++, TFTLIB>> {
+  +fillScreen(), drawPixel()
+  +fillSmoothCircle(), drawArc()
+  +drawString(), setFreeFont()
+}
+gfx *-- "0..32" gfx_win
+gfx *-- "0..1" pool
+gfx_win *-- gfx_surface
+gfx_win ..> pool : pooled
+ui_list ..> gfx_surface
+ui_keyboard ..> gfx_surface
+TFTLIB_8BIT ..> gfx_surface : piksele XRGB8888
+gfx_surface ..> GFXfont : gfx_text
+gfx_image ..> gfx_surface : gfx_image_draw
+clipboard ..> gfx : port gfx (GFX_CLIP_*)
+remote ..> gfx : port gfx
+ui_settings ..> ui_theme : ui_settings_apply
+ui_theme ..> GFXfont : czcionki skali
+font_file ..> GFXfont : plik .fnt
+wallpaper ..> gfx_surface : tapeta
+gfx ..> ui_settings : gfx_open, GFX_EV_SETTINGS
+@enduml

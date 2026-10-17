@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "S03 FB_IOC_SHOW(1)" as F
+participant "lcdif_show" as D
+participant "eLCDIF" as H
+participant "lcdif_irq" as I
+F -> D : show(1)
+D -> H : NEXT_BUF = bufor 1, pending = 1
+H -> H : koniec bieżącej ramki: CUR_BUF = NEXT_BUF
+H -> I : przerwanie CurFrameDone
+I -> I : frames++, shown = (CUR_BUF == bufor 1)
+I -> I : pending == shown? pending = -1
+I -> F : event_set(vsync), fb_vsync(0, shown)
+@enduml

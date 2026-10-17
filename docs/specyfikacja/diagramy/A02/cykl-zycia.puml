@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wm / files / sh" as S
+participant "K08" as K
+participant "program" as P
+participant "libgfx (L02)" as L
+participant "gfxd (U03)" as G
+S -> K : crtos_spawn(program.app, caps)
+K -> P : _start -> main
+P -> L : gfx_open()
+L -> G : GFX_HELLO (+ port zdarzeń)
+P -> L : gfx_win_create(RESIZABLE)
+L -> G : GFX_WIN_CREATE (+ uchwyt shm pikseli)
+loop pętla zdarzeń
+  P -> P : rysowanie w w->s
+  P -> L : gfx_damage / gfx_present
+  L -> G : GFX_WIN_DAMAGE
+  G -> L : GFX_EV_FRAME / POINTER / KEY / CONFIGURE
+  L --> P : gfx_next_event
+end
+G -> L : GFX_EV_CLOSE ([x] w ramce)
+P -> L : gfx_close()
+P -> K : exit -> zwolnienie areny, uchwytów, okien
+@enduml

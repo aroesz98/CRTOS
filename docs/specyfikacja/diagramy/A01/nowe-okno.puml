@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "Użytkownik" as U
+participant "wm" as W
+participant "K08 / K09" as K
+participant "program" as P
+participant "gfxd (U03)" as G
+U -> W : stuknięcie w menu, pozycja „Paint”
+W -> K : crtos_spawn(paint.app, caps = launcher.cfg & własne)
+K --> W : pid
+P -> G : GFX_WIN_CREATE (x = -1)
+G -> W : GFX_EV_WM_CREATE(id, pid, w, h, tytuł, kind = 1: do rozmieszczenia)
+W -> W : place(): kaskada, managed m
+W -> G : GFX_WIN_CREATE(ramka: tytuł, HIDDEN | NOFOCUS)
+W -> G : GFX_WM_ATTACH(id, ramka, 0, 20)
+opt okno RESIZABLE
+  W -> G : GFX_WIN_CREATE(uchwyt 24x24, ALPHA)
+end
+G -> W : GFX_EV_WM_MAP(id, 1)
+W -> G : GFX_WIN_SHOW(ramka), pasek zadań przerysowany
+@enduml

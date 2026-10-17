@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "urządzenie" as HW
+participant "NVIC" as NV
+participant "irq_dispatch (ITCM)" as D
+participant "obsługa sterownika (ISR)" as H
+participant "K06 semafor / zdarzenie" as S
+participant "wątek sterownika" as W
+    HW -> NV : żądanie przerwania
+    NV -> D : wektor (wszystkie linie peryferiów)
+    D -> D : IPSR - 16, licznik
+    D -> H : handler(irq, ctx)
+    H -> HW : kasowanie flag, odczyt statusu
+    H -> S : sem_give() / event_set()
+    S -> S : sched_wake(): wątek gotowy, PendSV jeśli wyższy priorytet
+    H --> NV : powrót
+    NV -> W : PendSV: przełączenie na wątek sterownika
+    W -> HW : przetwarzanie (np. odbiór ramek, odczyt dotyku przez I2C)
+@enduml

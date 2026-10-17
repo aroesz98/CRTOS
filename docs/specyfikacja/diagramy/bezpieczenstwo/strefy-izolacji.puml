@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+rectangle "Strefa uprzywilejowana (brak izolacji wewnątrz)" as priv #FFF3E0 {
+  component "L0 jądro\nK01–K19, S01–S05" as K
+  component "L1 moduły .ko\nD01–D08" as D
+}
+rectangle "Strefa programów (tryb nieuprzywilejowany)" as user #E8F5E9 {
+  component "proces A\narena: region 8\nshm: regiony 9–11" as PA
+  component "proces B\narena: region 8\nshm: regiony 9–11" as PB
+}
+rectangle "Sprzęt" as hw #ECEFF1 {
+  component "peryferia z DMA\n(ENET, USDHC, LCDIF, PXP, USB)" as DMA
+  component "SDRAM / OCRAM / DTCM / ITCM / flash" as MEM
+}
+PA --> K : SVC (K09: numer, wskaźniki,\nuchwyty, uprawnienia)
+PB --> K : SVC
+PA ..> PB : tylko przez jądro:\nIPC (kopia), shm (uchwyt)
+K --> D : wywołania funkcji (wspólna przestrzeń)
+D --> DMA : konfiguracja DMA (bez MPU)
+DMA --> MEM : dostęp do całej pamięci
+K --> MEM : MPU: regiony 1–7 tylko uprzywilejowane,\nstrażnicy 12–15
+@enduml

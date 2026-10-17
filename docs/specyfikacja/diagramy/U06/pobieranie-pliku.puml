@@ -1,0 +1,30 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "crtos scp (T01)" as H
+participant "deployd" as D
+participant "karta SD" as S
+H -> D : TCP 5555, AUTH <token>
+D --> H : OK
+H -> D : STAT /sd/crtos/tmp/a%20b
+D -> D : url_decode, read_ok
+D -> S : stat
+D --> H : OK d 0 <czas>
+H -> D : LIST /sd/crtos/tmp/a%20b
+D -> S : opendir, readdir (liczenie), rewinddir
+D --> H : OK <n>
+loop każdy wpis
+  D -> S : stat
+  D --> H : "<d|f> <rozmiar> <czas> <nazwa %XX>"
+end
+H -> D : GET /sd/crtos/tmp/a%20b/plik.bin
+D --> H : OK <rozmiar>
+loop po 64 KB
+  D -> S : read
+  D -> D : CRC-32
+  D --> H : dane (błąd odczytu: zera)
+end
+D --> H : OK <crc32> (albo ERR <powód>)
+H -> H : CRC zgodne? zapis pliku
+H -> D : QUIT
+@enduml

@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "sterownik (probe)" as D
+participant "irq.cpp" as I
+participant "NVIC" as NV
+participant "obsługa sterownika" as H
+    D -> I : device_get_irq(dev, 0)
+    I --> D : numer (DT: interrupts)
+    D -> I : irq_request(n, handler, ctx, prio, name)
+    I -> I : prio w 2..15? linia wolna?
+    I -> NV : disable, priorytet, enable (pod irq_lock)
+    note over NV : później: zgłoszenie linii n
+    NV -> I : irq_dispatch() (wektor w RAM)
+    I -> I : n = IPSR - 16, count++
+    I -> H : handler(n, ctx)
+    H --> NV : powrót (EXC_RETURN)
+@enduml

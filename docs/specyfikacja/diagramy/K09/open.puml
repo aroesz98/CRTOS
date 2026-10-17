@@ -1,0 +1,20 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "sys_open" as F
+participant "K08 uchwyty" as H
+participant "K13 VFS" as V
+    P -> F : open("../dev/fb0", O_RDWR)
+    F -> F : user_path(): cwd + ścieżka programu (strncpy_from_user), vfs_normalize
+    F -> F : dev_allowed("/dev/fb0"): CAP_DEV?
+    alt brak uprawnienia
+        F --> P : -EACCES
+    else 
+        F -> V : vfs_open(ścieżka, flagi)
+        V --> F : struct file (odwołanie)
+        F -> H : handle_install(H_FILE)
+        H --> F : najniższy wolny numer
+        F --> P : fd
+    end
+@enduml

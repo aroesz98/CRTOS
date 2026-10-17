@@ -1,0 +1,108 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "komputer: katalog toolchainu (build/toolchain/arm-crtos, SDK)" {
+  class launcher <<arm-crtos-gcc, -g++, -cpp, ...>> {
+    +main(argv)
+    -find_gcc_bin() : CRTOS_GCC_BIN, lib/gcc-bin.txt, PATH
+    -cpu_flags : dodawane, gdy brak
+    -run(prog, argv) : bez powłoki
+  }
+  class crtos_specs <<lib/crtos.specs>> {
+    %include nano.specs
+    self_spec : -DCRTOS_USER, sekcje, -fno-common; -mxip -> PIC z r9
+    cc1plus : bez wyjątków i RTTI
+    link : -r ... -T crtos-app.ld | -mxip: -pie -z text -T crtos-xip.ld
+    startfile : crtos-crt0.o crtos-memops.o crtos-cxxrt.o (xip/ dla -mxip)
+    lib : -lcrtos -lc_nano -lm | -mxip: -lcrtos -lc -lm (+ -lgcc)
+  }
+  class crtos_app_ld <<lib/crtos-app.ld>> {
+    .init_array wg priorytetu
+    .fini_array wg priorytetu
+  }
+  class crtos_xip_ld <<lib/crtos-xip.ld>> {
+    tekst od 0 : nagłówki, kod, stałe, .rel.dyn
+    dane od 0x10000000 : tablice init/fini, .got, .data, .bss
+  }
+  class biblioteki <<lib/, lib/xip/>> {
+    libcrtos.a (z appinfo.o), libgfx.a, libtftlib.a
+    crtos-crt0.o, crtos-memops.o, crtos-cxxrt.o
+    xip/ : te same PIC + newlib, libm, libstdc++, libgcc (przepis)
+  }
+  class naglowki <<include/>> {
+    crtos.h, pthread.h, gfx.h, ...
+    crtos/ : nagłówki ABI jądra
+    nakładki newlib : sys/stat.h, fcntl.h, utime.h
+    tftlib/
+  }
+  class crtos_app_tool <<crtos-app (C)>> {
+    +info(program)
+    +set(program, stack, heap)
+    +check(program) : ET_REL albo ET_DYN (XIP)
+  }
+}
+package "toolchain/native (Linux / WSL)" {
+  class build_sh <<build.sh>> {
+    +fetch : źródła Arm GNU 14.3.Rel1 (SHA-256) + patches/
+    +cross : etap A, cross GCC z bibliotekami PIC (r9)
+    +native : etap B, binutils + GCC dla hosta arm-none-eabi
+    +install : build/toolchain/native (flash0/, sd/, debug/)
+  }
+  class native_specs <<native-specs.py>> {
+    +convert(crtos.specs, nano.specs) : specs płytki
+  }
+  class patches <<patches/arm-gnu-toolchain/gcc/*.patch>> {
+    arm-eabi-host : HOST_LACKS_INODE_NUMBERS, driver-arm.o
+    libiberty-app-suffix, specs-options
+    ggc-page-memalign : strony GC z memalign
+    libiberty-tmpdir : pliki pośrednie na karcie
+  }
+}
+package "płytka" {
+  class flash0 <</flash0 (D10), programy XIP>> {
+    bin/ : gcc, g++, cpp, ar, nm, objcopy, objdump, ...
+    gcc/libexec/.../14.3.1 : cc1, cc1plus, collect2, as, ld
+  }
+  class usr <</sd/crtos/usr>> {
+    lib/gcc/arm-none-eabi/14.3.1 : specs, include/, libgcc.a
+    arm-none-eabi : sysroot (newlib, libstdc++, lib/, lib/xip/)
+    include/ : nagłówki CRTOS
+  }
+}
+class arm_none_eabi <<Arm GNU Toolchain 14.3>> {
+  gcc, cc1, cc1plus, as, collect2, ld
+  newlib-nano, libstdc++_nano, libgcc
+}
+class xiplibs <<cmake/xiplibs.cmake>> {
+  +crtos_xiplibs(lib/xip)
+  recipe.txt : copy, gen, set, dir, cc
+  gen/ : newlib.h, c++config.h, tm.h, .vis ...
+  third_party/newlib, third_party/gcc
+}
+class recipe_py <<tools/xiplibs_recipe.py>> {
+  +make -n w kopii drzew etapu A
+  +zestawy opcji, pliki configure
+}
+class cmake <<cmake/crtos-app.cmake (T01)>> {
+  +crtos_app(... XIP)
+}
+class loader <<K16: loader programów>>
+launcher --> arm_none_eabi : uruchamia arm-none-eabi-<narzędzie>
+launcher ..> crtos_specs : -specs, -B, -L (lib/xip dla -mxip), -isystem
+cmake ..> crtos_specs : te same reguły
+arm_none_eabi ..> crtos_specs : czyta
+crtos_specs ..> crtos_app_ld
+crtos_specs ..> crtos_xip_ld
+crtos_specs ..> biblioteki
+crtos_app_tool ..> loader : te same reguły co przy ładowaniu
+xiplibs ..> biblioteki : lib/xip/libc.a, libm.a,\nlibgcc.a, libstdc++.a, libsupc++.a
+xiplibs ..> arm_none_eabi : kompiluje (plugin/include)
+recipe_py ..> build_sh : przepis z etapu A
+build_sh ..> native_specs
+build_sh ..> patches
+build_sh ..> flash0 : install (crtos toolchain install)
+build_sh ..> usr : install
+native_specs ..> crtos_specs : przepisuje
+flash0 ..> usr : specs, nagłówki, biblioteki
+flash0 ..> loader : wykonywane w miejscu
+@enduml

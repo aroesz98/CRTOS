@@ -1,0 +1,32 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "program" as P
+participant "VFS (K13)" as V
+participant "flashfs" as F
+participant "flexspi-mtd (D07)" as M
+P -> V : open("/flash0/bin/x.app", O_CREAT|O_TRUNC|O_WRONLY)
+V -> F : fs_open: rodzic jest katalogiem?
+F -> F : largest_free(): największy wolny ciąg bloków -> B_WRITING
+opt rozmiar znany (deployd)
+  P -> V : ioctl(FLASHFS_IOC_RESERVE, rozmiar)
+  V -> F : w_reserve: najkrótszy wolny ciąg, który mieści plik (fitting_free)
+  note right of F : brak takiego ciągu: -ENOSPC od razu
+end
+P -> V : write(…) wiele razy
+V -> F : w_write: bufor 512 B, CRC-32 danych
+F -> F : blok jeszcze nieprzygotowany: block_erased()?
+alt blok nie jest pusty (dane starego pliku)
+  F -> M : mtd_part_erase (system stoi do ~0,5 s)
+end
+F -> M : mtd_part_program(strona 512 B) (system stoi ~0,5 ms)
+P -> V : close()
+V -> F : w_close: reszta bufora
+F -> M : rekord R_FILE (nazwa, bloki, rozmiar, czas, CRC) na koniec dziennika
+note right of F
+  dopiero teraz plik istnieje; przerwanie
+  wcześniej zostawia poprzedni stan
+end note
+F -> F : apply(): stary plik o tej nazwie znika\n(jego bloki wolne od razu albo po ostatnim zamknięciu)
+F -> F : niewykorzystane bloki rezerwacji -> B_FREE
+@enduml

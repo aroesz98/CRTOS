@@ -1,0 +1,54 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class syscall_cpp <<moduł>> {
+  -int64_t s_rt_offset_us
+  -const rtc_ops* s_rtc
+  -mutex s_rtc_lock
+  +syscall_dispatch(id, a0..a5) : int64_t
+  +rtc_register(ops, ctx, name) : int
+  -sys_exit(code)
+  -sys_thread_exit(code, done)
+  -sys_time_set(lo, hi) : int64_t
+  -sys_cache_sync(addr, len) : int64_t
+}
+class sys_fs_cpp <<moduł>> {
+  +sys_open(path, flags) : int64_t
+  +sys_read(fd, buf, len) : int64_t
+  +sys_write(fd, buf, len) : int64_t
+  +sys_ioctl(fd, cmd, arg) : int64_t
+  +sys_stat, sys_readdir, sys_mkdir, sys_unlink, sys_rename
+  +sys_chdir, sys_getcwd, sys_dup, sys_dup2, sys_fsync
+  -user_path(upath, out) : int
+  -dev_allowed(path) : bool
+}
+class sys_proc_cpp <<moduł>> {
+  +sys_sbrk(incr) : int64_t
+  +sys_spawn(sp) : int64_t
+  +sys_wait(pid, status, timeout) : int64_t
+  +sys_kill(pid, code) : int64_t
+  +sys_thread_create(entry, arg, stack, size, prio) : int64_t
+  +sys_futex_wait / sys_futex_wake
+  +sys_proc_info / sys_task_info / sys_sys_info
+  +sys_module_load / sys_module_unload
+  +sys_reboot() : int64_t
+  -clamp_prio(p, prio) : int
+}
+interface rtc_ops <<interfejs>> {
+  +read(ctx, us) : int
+  +set(ctx, us) : int
+}
+class crtos_spawn <<struct ABI>> {
+  +const char* path
+  +const char* const* argv
+  +const char* const* envp
+  +int32_t stdio[3]
+  +uint32_t caps
+  +int32_t prio
+  +uint32_t flags
+}
+syscall_cpp ..> sys_fs_cpp
+syscall_cpp ..> sys_proc_cpp
+syscall_cpp ..> rtc_ops
+sys_proc_cpp ..> crtos_spawn : kopiuje z programu
+@enduml

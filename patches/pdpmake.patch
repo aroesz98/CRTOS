@@ -1,0 +1,67 @@
+diff --git a/main.c b/main.c
+index a5980ab..70ada12 100644
+--- a/main.c
++++ b/main.c
+@@ -474,6 +474,15 @@ mark_special(const char *special, uint32_t oflag, uint16_t nflag)
+ 	}
+ }
+ 
++#ifdef __CRTOS__
++/* CRTOS: no confstr(); the shell is $SHELL or the system's (system() uses the same) */
++static char *
++get_shell(void)
++{
++	const char *s = getenv("SHELL");
++	return xstrdup(s && *s ? s : "/sd/crtos/bin/sh.app");
++}
++#else
+ static char *
+ get_shell(void)
+ {
+@@ -506,6 +515,7 @@ get_shell(void)
+ 	free(file);
+ 	return xstrdup("/bin/sh");
+ }
++#endif
+ 
+ int
+ main(int argc, char **argv)
+diff --git a/make.c b/make.c
+index ea90dac..e27538b 100644
+--- a/make.c
++++ b/make.c
+@@ -268,8 +268,15 @@ make1(struct name *np, struct cmd *cp, char *oodate, char *allsrc,
+ static int
+ timespec_le(const struct timespec *t, const struct timespec *p)
+ {
++#ifdef __CRTOS__
++	/* CRTOS: FAT keeps times in 2-second steps, so a target made right after its
++	 * prerequisites usually has their time: equal counts as up to date (as in GNU make) */
++	if (t->tv_nsec == 0 || p->tv_nsec == 0)
++		return t->tv_sec < p->tv_sec;
++#else
+ 	if (t->tv_nsec == 0 || p->tv_nsec == 0)
+ 		return t->tv_sec <= p->tv_sec;
++#endif
+ 	else if (t->tv_sec < p->tv_sec)
+ 		return TRUE;
+ 	else if (t->tv_sec == p->tv_sec)
+diff --git a/rules.c b/rules.c
+index 964b69a..4a5c3fd 100644
+--- a/rules.c
++++ b/rules.c
+@@ -251,8 +251,14 @@ dyndep(struct name *np, struct rule *infrule, const char **ptsuff)
+ #define MACROS_2024 \
+ 	"CC=c17\n"
+ 
++#ifdef __CRTOS__
++/* CRTOS: the board's compiler is gcc (there is no cc) */
++#define MACROS_EXT \
++	"CC=gcc\n"
++#else
+ #define MACROS_EXT \
+ 	"CC=cc\n"
++#endif
+ 
+ /*
+  * Read the built-in rules using a fake fgets-like interface.

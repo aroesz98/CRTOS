@@ -1,0 +1,28 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wołający (sys_open)" as C
+participant "vfs_open" as V
+participant "devfs_open" as D
+participant "K16 module_get_addr" as M
+participant "sterownik (file_ops.open)" as S
+    C -> V : vfs_open("/dev/fb0", flagi)
+    V -> V : normalize, file_alloc (refs = 1)
+    V -> V : lock: lookup -> montowanie /dev, open_files++, unlock
+    V -> D : open(fs, "/fb0", flagi, f)
+    D -> D : lock devfs: węzeł "fb0"
+    D -> M : odwołanie na moduł, do którego należą ops
+    alt moduł jest właśnie usuwany
+        M --> D : -ENODEV
+    else 
+        D -> D : f.ops, f.dev, f.owner
+        D -> S : ops.open(f) (np. stan na otwarcie)
+    end
+    D --> V : 0
+    V --> C : f
+    note over C, S : ... read/write/ioctl/poll przez f.ops ...
+    C -> V : vfs_close(f): refs == 0
+    V -> S : ops.close(f)
+    V -> M : module_put(owner)
+    V -> V : open_files~--, kfree(f)
+@enduml

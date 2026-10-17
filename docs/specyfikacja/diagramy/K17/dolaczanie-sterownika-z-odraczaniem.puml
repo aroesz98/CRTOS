@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "moduł (init)" as M
+participant "device.cpp" as C
+participant "S01 pinctrl" as P
+participant "probe sterownika" as D
+    M -> C : driver_register(drv)
+    loop urządzenia niepodłączone
+        C -> C : match: compatible z of_match_table
+        C -> P : pinctrl_select_state(dev, "default")
+        alt kontroler pinów bez sterownika
+            P --> C : -EPROBE_DEFER
+        else 
+            C -> D : probe(dev)
+            D -> D : devm_clk_get, gpiod_get, device_get_irq, irq_request, ...
+            alt zasób niegotowy
+                D --> C : -EPROBE_DEFER: DEV_DEFERRED, zwolnienie devm
+            else sukces
+                D --> C : 0: DEV_BOUND, bound to 'drv'
+            end
+        end
+    end
+    alt coś się dołączyło
+        C -> C : retry_deferred(): DEV_DEFERRED ponownie, do braku postępu
+    end
+@enduml

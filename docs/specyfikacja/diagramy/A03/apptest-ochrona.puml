@@ -1,0 +1,15 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "apptest" as A
+participant "K08" as K
+participant "apptest crash-kernel (dziecko)" as C
+participant "K04" as F
+A -> K : crtos_spawn(apptest.app, "crash-kernel")
+K -> C : start
+C -> C : odczyt pamięci jądra (0x20000000)
+C -> F : MemManage
+F -> K : koniec procesu z kodem -EFAULT
+K --> A : crtos_wait: -EFAULT
+A -> A : check(kod == -EFAULT), system działa dalej
+@enduml

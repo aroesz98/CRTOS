@@ -1,0 +1,21 @@
+CRTOS: the compiler on the board reads the CRTOS rules (toolchain/crtos.specs) from its
+own specs file, where arm-crtos-gcc on the PC gives them with -specs=. GCC accepts an
+option it does not know only when a -specs= file handles it, so -mxip (a program that
+runs in place) was refused on the board. The specs file's options count as those of a
+-specs= file.
+
+--- a/gcc/gcc.cc	2026-09-29 20:51:41.859345278 +0200
++++ b/gcc/gcc.cc	2026-09-29 20:51:41.873797354 +0200
+@@ -8479,9 +8479,10 @@
+   just_machine_suffix = concat (spec_machine, dir_separator_str, NULL);
+ 
+   specs_file = find_a_file (&startfile_prefixes, "specs", R_OK, true);
+-  /* Read the specs file unless it is a default one.  */
++  /* Read the specs file unless it is a default one.  (CRTOS: the options it
++     handles are valid, as those of a -specs= file: -mxip) */
+   if (specs_file != 0 && strcmp (specs_file, "specs"))
+-    read_specs (specs_file, true, false);
++    read_specs (specs_file, true, true);
+   else
+     init_spec ();
+ 

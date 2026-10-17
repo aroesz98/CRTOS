@@ -1,0 +1,58 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+package "flashfs.ko (drivers/fs/flashfs.c)" {
+  class fs <<system plików>> {
+    part : mtd_part
+    geo : mtd_geometry
+    bmap[] : B_FREE, B_FILE, B_WRITING
+    ents[] : ent
+    log, seq, next_slot
+    +replay() / mount() / format()
+    +append(rec) / compact()
+    +check()
+  }
+  class ent <<wpis>> {
+    id, type (plik, katalog)
+    name
+    block, nblocks, size, mtime, dcrc
+    opens, gone
+  }
+  class writer <<plik zapisywany>> {
+    first, avail : zarezerwowane bloki
+    size, crc, erased
+    buf[512]
+    +w_write() / w_ioctl(RESERVE) / w_close()
+  }
+  class reader <<plik czytany>> {
+    pos
+    +r_read() / r_xip()
+  }
+  class rec <<rekord dziennika, 256 B>> {
+    magic, type, id
+    block, nblocks, size
+    mtime, dcrc, name
+    crc
+  }
+  class ctl <<"/dev/flashfs0">> {
+    INFO, FILE, CHECK, FORMAT
+  }
+}
+class mtd <<flexspi-mtd.ko (D07)>> {
+  +mtd_part_of_node()
+  +mtd_part_claim()
+  +mtd_part_program()
+  +mtd_part_erase()
+}
+class vfs <<VFS (K13)>> {
+  +vfs_mount("/flash0")
+  file_ops.xip
+}
+fs "1" *-- "*" ent
+writer --> fs
+reader --> ent : przypina (opens)
+fs ..> rec : dopisuje, odtwarza
+fs --> mtd : programuje, kasuje, czyta okno
+fs --> vfs : vfs_fs_ops
+ctl --> fs
+@enduml

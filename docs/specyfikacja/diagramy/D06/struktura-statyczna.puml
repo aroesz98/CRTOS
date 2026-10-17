@@ -1,0 +1,67 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class usb_imxrt <<moduł, usb-imxrt.c>> {
+  -port s_ports[2]
+  -uint32_t s_asserts
+  -usb_probe(dev) : int
+  -usb_remove(dev)
+  -usb_irq(irq, port)
+  -usb_thread(port)
+  -device_loop(port)
+  -port_of_side(device) : port*
+  -clock_phy_init(n)
+  -vbus_present(port) : bool
+}
+class port <<struct, jeden kontroler>> {
+  +device* dev
+  +int rhport : 0 = USB1 (J9), 1 = USB2 (J10)
+  +int irq
+  +bool device : strona urządzenia albo hosta
+  +task_t* thread : usb1 / usb2
+  +bool ready
+  +bool stop
+  +semaphore done
+}
+class usb_acm <<moduł, usb-acm.c>> {
+  -ring rx
+  -ring tx
+  -event ev
+  -poll_head ph
+  -bool carrier
+  -bool work_queued
+  -bool rx_held
+  -uint8_t tmp[512]
+  -char serial[20]
+  +usb_acm_ready()
+  +usb_acm_poll()
+  -acm_read(f, buf, len) : int
+  -acm_write(f, buf, len) : int
+  -acm_work(arg)
+}
+class usb_hid <<moduł, usb-hid.c>> {
+  -hid_dev keyboards, mice
+  +usb_hid_repeat() : uint32_t
+  +tuh_hid_mount_cb(...)
+  +tuh_hid_set_protocol_complete_cb(...)
+  +tuh_hid_report_received_cb(...)
+  -parse_mouse(desc, len, layout)
+  -switch_protocols() : bool
+  -mouse_report(h, r, len)
+  -field_value(r, len, f) : int32_t
+}
+class TinyUSB <<zewnętrzny 0.21.0>> {
+  stos urządzenia: tud_task_ext, dcd (ChipIdea), CDC
+  stos hosta: tuh_task_ext, hcd (EHCI), HID, hub
+  tusb_int_handler(rhport) : wg roli portu
+}
+interface file_ops <<K13>>
+class input_dev <<S04>>
+usb_imxrt *-- "2" port
+usb_imxrt --> TinyUSB : każdy stos tylko z wątku swojego kontrolera
+usb_acm ..|> file_ops
+usb_acm ..> TinyUSB : usbd_defer_func(acm_work)
+usb_hid ..> input_dev
+TinyUSB ..> usb_hid : callbacki (wątek kontrolera hosta)
+TinyUSB ..> usb_acm : callbacki (wątek kontrolera urządzenia)
+@enduml

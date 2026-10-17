@@ -1,0 +1,13 @@
+@startuml
+!include ../styl.iuml
+participant "main (MSP)" as M
+participant "sched_start_asm" as A
+participant "PendSV_Handler" as PS
+participant "pierwszy wątek (najwyższy priorytet)" as I
+    M -> A : sched_start()
+    A -> A : cpsid i, MSP = _vStackTop, BASEPRI = 0
+    A -> A : ICSR.PENDSVSET, cpsie i
+    A -> PS : PendSV (g_current == NULL)
+    PS -> I : odtworzenie ramki zbudowanej przez task_build_frame
+    note over A : pętla b 1b nigdy nie jest kontynuowana
+@enduml

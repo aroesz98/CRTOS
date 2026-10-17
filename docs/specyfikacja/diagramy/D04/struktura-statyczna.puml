@@ -1,0 +1,78 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class gt911 <<struct, gt911.ko>> {
+  +device* dev
+  +i2c_client* client
+  +input_dev* input
+  +int irq
+  +semaphore sem
+  +task_t* thread
+  +uint32_t res_x, res_y
+  +uint32_t size_x, size_y
+  +int swap_xy
+  +int down
+  +uint32_t empty_since
+  -gt_irq(irq, ctx)
+  -gt_thread(arg)
+  -gt_poll(g)
+  -maybe_release(g)
+}
+class gkeys <<struct, gpio-keys.ko>> {
+  +device* dev
+  +gkey keys[8]
+  +int n
+  +uint32_t debounce_ms
+  +input_dev* input
+  +semaphore sem
+  +task_t* thread
+  -key_irq(irq, ctx)
+  -keys_thread(arg)
+}
+class gkey <<struct>> {
+  +gpio_desc* gpio
+  +uint32_t code
+  +int irq
+  +int state
+  +const char* label
+}
+class ft5406 <<struct, ft5406.ko>> {
+  +i2c_client* client
+  +input_dev* input
+  +int irq
+  +task_t* thread
+}
+class pad <<struct, esp32-pad.ko>> {
+  +device* dev
+  +const char* port
+  +uint32_t baud
+  +input_dev* input
+  +task_t* thread
+  +file* f
+  +uint8_t frame[13]
+  +int len
+  +uint32_t reported
+  +uint32_t stick
+  +uint32_t quiet_ms
+  +uint32_t frames, bad
+  +bool alive
+  -pad_thread(arg)
+  -feed(p, buf, n)
+  -frame_done(p)
+  -stick_axis(held, v, neg, pos)
+  -report(p, state)
+}
+class file <<K13, /dev/ttyS3>>
+class i2c_client <<S02>>
+class input_dev <<S04>>
+class gpio_desc <<S01>>
+gt911 --> i2c_client
+gt911 --> input_dev
+ft5406 --> i2c_client
+ft5406 --> input_dev
+gkeys *-- "1..8" gkey
+gkey --> gpio_desc
+gkeys --> input_dev
+pad --> file : vfs_read (O_NONBLOCK)
+pad --> input_dev
+@enduml

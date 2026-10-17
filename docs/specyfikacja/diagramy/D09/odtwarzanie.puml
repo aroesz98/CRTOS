@@ -1,0 +1,38 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program\n(write)" as P
+participant "audio_write\n(wątek programu)" as W
+participant "pierścień\n4096 ramek" as R
+participant "sai_irq\n(priorytet 3)" as I
+participant "SAI1 TX\n(FIFO 32 słowa)" as S
+participant "WM8960\n(DAC)" as C
+P -> W : write(próbki 16-bit, mono albo stereo)
+W -> R : ramki L | R << 16 (mono: ta sama próbka dwa razy)
+alt nadajnik stoi
+  W -> S : fill_fifo, SAI_TxEnable, FRIE | FEIE
+end
+opt pierścień pełny (bez O_NONBLOCK)
+  W -> W : event_wait(EV_SPACE)
+end
+loop co 8 ramek (FIFO ≤ 16 słów; 6000 razy/s przy 48 kHz)
+  S -> I : FIFO request
+  opt FEF (FIFO puste - przerwanie za późno)
+    I -> S : kasowanie FEF, reset FIFO (następna ramka od lewej próbki)
+  end
+  I -> R : ramki do (32 - słowa w FIFO) / 2
+  alt pierścień pusty
+    I -> S : cisza (underruns++ raz na przerwę, gdy urządzenie otwarte)
+  else
+    I -> S : TDR[0] = lewa, TDR[0] = prawa
+  end
+  opt zwolniło się ≥ 1/4 pierścienia i ktoś czeka
+    I -> W : event_set(EV_SPACE), poll_notify
+  end
+  opt zamknięte, pusto, 100 ms ciszy
+    I -> S : stop: TE = 0, bez przerwań
+  end
+end
+S -> C : I2S: BCLK = 32 fs, LRCLK = fs, dane 16-bit
+C -> C : DAC -> mikser wyjściowy -> słuchawki J12, głośniki
+@enduml

@@ -1,0 +1,65 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class ipc_cpp <<moduł>> {
+  -list_head s_registry
+  -wait_queue s_reg_wq
+  -list_head s_calls
+  -uint32_t s_next_token
+  +sys_port_create(name, flags) : int64_t
+  +sys_port_connect(name, timeout) : int64_t
+  +sys_msg_send(h, data, len, xh, timeout) : int64_t
+  +sys_msg_call(h, call, timeout) : int64_t
+  +sys_msg_recv(h, buf, max, info, timeout) : int64_t
+  +sys_msg_reply(token, data, len, xh) : int64_t
+  +port_close_recv(pt)
+  +port_poll(pt, rights, e) : int
+  -msg_build(p, data, len, xh, out) : int
+  -enqueue(pt, m, timeout) : int
+  -take_handle(p, type, rights, obj) : int32_t
+}
+class port <<struct>> {
+  +uint32_t refs
+  +char name[24]
+  +bool dead
+  +bool registered
+  +int owner_pid
+  +list_head reg_node
+  +list_head queue
+  +uint32_t qlen
+  +wait_queue recv_wq
+  +wait_queue send_wq
+  +poll_head ph
+}
+class kmsg <<struct>> {
+  +list_head node
+  +ipc_call* call
+  +int pid
+  +uint32_t len
+  +uint8_t xtype
+  +uint8_t xrights
+  +void* xobj
+  +uint8_t data[len]
+}
+class ipc_call <<struct call, na stosie nadawcy>> {
+  +list_head node
+  +uint32_t token
+  +port* port
+  +wait_queue wq
+  +uint8_t state
+  +int result
+  +kmsg* msg
+  +kmsg* reply
+}
+enum call_state {
+  CALL_QUEUED
+  CALL_RECEIVED
+  CALL_DONE
+}
+ipc_cpp o-- port : rejestr nazw
+port o-- "0..32" kmsg : queue
+kmsg --> ipc_call : gdy msg_call
+ipc_cpp o-- ipc_call : s_calls (odebrane, bez odpowiedzi)
+ipc_call --> call_state
+ipc_call --> kmsg : reply
+@enduml

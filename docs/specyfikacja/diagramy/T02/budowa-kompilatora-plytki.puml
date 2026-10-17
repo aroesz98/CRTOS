@@ -1,0 +1,23 @@
+@startuml
+!include ../styl.iuml
+autonumber
+actor "użytkownik" as U
+participant "crtos toolchain\n(T01)" as C
+participant "build.sh\n(WSL, ~/crtos-toolchain)" as B
+participant "etap A:\ncross GCC (Linux)" as A
+participant "etap B:\nGCC dla płytki" as N
+participant "deployd (U06)\n+ flashfs (D10)" as D
+U -> C : crtos toolchain native
+C -> C : crtos toolchain (katalog arm-crtos: libcrtos, nagłówki, specs)
+C -> B : wsl --exec env CRTOS_TC_OUT=... bash build.sh
+B -> B : fetch: źródła 14.3.Rel1, SHA-256, patches/
+B -> A : cross: binutils, GCC, newlib (pełna i nano), libstdc++, libgcc\nz -fPIC -msingle-pic-base -mpic-register=r9
+B -> N : native: --build=x86_64 --host=arm-none-eabi --target=arm-none-eabi\nCC = etap A + crtos.specs -mxip (każdy program to XIP)
+note right of N : binutils (as, ld, ar, ...), GCC all-gcc\n(cc1, cc1plus, collect2, gcc, g++, cpp)
+B -> B : install: strip, crtos-app set (stos, sterta), check;\nspecs = native-specs.py(crtos.specs, nano.specs);\nnagłówki i biblioteki z Arm GNU (PC) i arm-crtos
+B --> C : build/toolchain/native: flash0/, sd/crtos/usr/, debug/
+U -> C : crtos toolchain install
+C -> D : PUT /flash0/... (stara wersja usunięta, rezerwacja na rozmiar)
+C -> D : PUT /sd/crtos/usr/... (nagłówki, biblioteki, specs)
+C -> C : manifest build/deployed.json (tylko zmienione pliki)
+@enduml

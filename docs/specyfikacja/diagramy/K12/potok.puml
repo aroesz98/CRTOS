@@ -1,0 +1,14 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "piszący" as W
+participant "pipe" as PI
+participant "czytający" as R
+    R -> PI : read(): rlock, pusto, są piszący -> sched_block(rq)
+    W -> PI : write(dane): wlock, miejsce? kopia do bufora
+    PI -> R : head += n, wake rq, poll_notify
+    R -> PI : kopia z bufora, tail += n, wake wq
+    W -> PI : close (ostatni piszący)
+    PI -> R : writers = 0, wake rq
+    R -> PI : read(): pusto i brak piszących -> 0 (koniec pliku)
+@enduml

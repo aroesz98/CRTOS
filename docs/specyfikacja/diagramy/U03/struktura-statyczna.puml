@@ -1,0 +1,94 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class gfxd_c <<program gfxd.app>> {
+  -client s_client[16]
+  -window s_win[48]
+  -int s_z[48]
+  -client* s_wm
+  -window* s_grab[GFX_FINGERS]
+  -window* s_focus
+  -window* s_hover
+  -region s_damage
+  -region s_prev
+  -gpu2d_hop s_ops[64]
+  -int s_front, s_back
+  -bool s_flip_pending
+  -uint64_t s_vsync_us
+  -uint32_t s_period_us
+  -uint32_t s_recent_us
+  -gfx_stats s_st
+  -bool s_wm_keys
+  -held s_held[16]
+  -char* s_clip
+  -uint32_t s_clip_len, s_clip_serial
+  -watch s_watch
+  -int s_desk
+  +main() : int
+  -handle(mi, buf, n)
+  -compose()
+  -copy_to_watcher(src)
+  -compose_time(now) : uint64_t
+  -compose_rect(dst, r)
+  -do_key(code, value)
+  -send_ptr_event(w, type, kind, code, x, y, value, flags)
+  -hover_leave(w)
+  -do_clip_put(mi, q), do_clip_get(mi, q)
+  -do_screen_watch(mi, q), do_screen_take(mi)
+  -draw_desktop()
+  -settings_changed()
+  -do_create, do_damage, do_input, do_wm_attach, ...
+}
+class client <<struct>> {
+  +bool used
+  +int pid
+  +int evport
+  +bool clip_watch
+}
+class held <<struct>> {
+  +uint16_t code
+  +bool wm
+  +window* w
+}
+class watch <<struct>> {
+  +client* c
+  +int shm
+  +gpu2d_hsurface surf
+  +region pending
+  +bool told
+}
+class window <<struct>> {
+  +int id
+  +client* c
+  +int shm
+  +gpu2d_hsurface surf
+  +int x, y, w, h
+  +uint32_t flags
+  +bool mapped, visible, managed
+  +window* frame
+  +window* child
+  +window* deco
+  +int fx, fy
+  +uint64_t born_us
+  +bool frame_wanted
+  +bool in_flip
+  +char title[32]
+}
+class region <<struct>> {
+  +rect r[8]
+  +int n
+}
+class rect <<struct>> {
+  +int x, y, w, h
+}
+gfxd_c *-- "0..16" client
+gfxd_c *-- "0..48" window
+window --> client
+window --> window : frame / child / deco
+gfxd_c *-- "2" region
+region *-- "0..8" rect
+gfxd_c *-- "0..16" held
+held --> window
+gfxd_c *-- "1" watch
+watch --> client
+@enduml

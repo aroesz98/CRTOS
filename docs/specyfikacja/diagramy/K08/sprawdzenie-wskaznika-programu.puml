@@ -1,0 +1,24 @@
+@startuml
+!include ../styl.iuml
+title uaccess_ok(ptr, len)
+
+start
+if (wątek jądra (proc == NULL) albo len == 0?) then (tak)
+  :1 (dozwolone);
+  stop
+endif
+if (ptr w arenie procesu?) then (tak)
+  :dostępne = koniec areny - ptr;
+elseif (ptr w oknie pamięci współdzielonej procesu?) then (tak)
+  :dostępne = koniec okna\n(bez wyłączonych podregionów) - ptr;
+else (nie)
+  :0 (-EFAULT u wołającego);
+  stop
+endif
+if (len <= dostępne i obszar nie dotyka\nstrażnika stosu bieżącego wątku?) then (tak)
+  :1 (dozwolone);
+else (nie)
+  :0 (-EFAULT u wołającego);
+endif
+stop
+@enduml

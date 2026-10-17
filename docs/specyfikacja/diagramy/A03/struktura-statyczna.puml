@@ -1,0 +1,65 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class sh_c <<program sh.app>> {
+  -int s_jobs[JOBS_MAX]
+  -int s_status
+  -builtin s_builtins[24]
+  +main(argc, argv) : int
+  -run_line(line) : int
+  -parse(line, c) : int
+  -find_program(name, path) : bool
+  -run_program(c) : int
+  -reap_jobs()
+  -edit_line(prompt, line, size) : int
+  -read_key() : int
+  -ed_refresh(e)
+  -hist_load(), hist_add(line)
+  -b_ls(), b_cat(), b_ps(), b_kill(), b_clear(), b_history(), ...
+}
+class editor <<struct>> {
+  +char buf[LINE_MAX]
+  +int len, pos
+  +const char* prompt
+  +int cols
+  +int hidx
+  +char* typed
+}
+class where_c <<program where.app>> {
+  +main(argc, argv) : int
+  -search_dir(dir, name, deep) : int
+  -matches(name, entry) : bool
+}
+class cmd <<struct>> {
+  +char* argv[ARGS_MAX + 1]
+  +int argc
+  +char* in
+  +char* out
+  +bool append
+  +bool background
+}
+class builtin <<struct>> {
+  +const char* name
+  +int (*fn)(cmd*, FILE*)
+  +const char* help
+}
+class apptest_c <<program apptest.app>> {
+  -int s_checks, s_fail
+  +main(argc, argv) : int
+  -child_main(mode, arg) : int
+  -t_files_ram() ... t_lifecycle()
+}
+class appearance_c <<program appearance.app>> {
+  +main(argc, argv) : int
+  -show(s)
+}
+class "ui_settings (L02)" as uiset <<struct>> {
+  +ui_settings_load(s) : int
+  +ui_settings_set(s, key, value) : int
+  +ui_settings_save(s) : int
+}
+appearance_c ..> uiset : ui.cfg
+sh_c *-- "24" builtin
+sh_c ..> cmd
+sh_c ..> editor
+@enduml

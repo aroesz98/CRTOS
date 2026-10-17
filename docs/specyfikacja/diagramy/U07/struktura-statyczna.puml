@@ -1,0 +1,25 @@
+@startuml
+!include ../styl.iuml
+class getty_c <<program getty.app>> {
+  -const char* s_dev
+  -int s_tty
+  -int s_in
+  -int s_out
+  -int s_pid
+  -char s_line[256]
+  -int s_len
+  -int s_esc
+  -char s_prev
+  +main(argc, argv) : int
+  -serve()
+  -start_shell() : int
+  -stop_shell()
+  -input(p, n)
+  -interrupt()
+  -tty_mode() : uint32_t
+  -shell_output() : bool
+  -put(p, n)
+  -send(p, n)
+  -own_caps() : uint32_t
+}
+@enduml

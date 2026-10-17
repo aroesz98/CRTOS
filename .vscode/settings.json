@@ -1,0 +1,22 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.generator": "Ninja",
+    "cmake.configureOnOpen": false,
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "git.repositoryScanIgnoredFolders": ["third_party", "attic", "backups", "build", "netsurf", "netsurf-libs", "node_modules"],
+    "git.detectSubmodules": false,
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/Release/**": true,
+        "**/attic/**": true,
+        "**/backups/**": true,
+        "**/third_party/netsurf*/**": true
+    },
+    "search.exclude": {
+        "build": true,
+        "Release": true,
+        "attic": true,
+        "backups": true
+    }
+}

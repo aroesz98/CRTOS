@@ -1,0 +1,11 @@
+@startuml
+!include ../styl.iuml
+participant "sterownik (probe)" as DRV
+participant "devfs" as DF
+participant "K17 uevent" as UE
+participant "U02 devmgr" as DM
+    DRV -> DF : devfs_register("event1", ops, dev)
+    DF -> DF : unikalna nazwa, wolny wpis
+    DF -> UE : uevent_emit("add", "event1")
+    UE -> DM : linia "add event1" w /dev/uevent
+@enduml

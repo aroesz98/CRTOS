@@ -1,0 +1,329 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * i.MX RT1052 SoC description for CRTOS.
+ * Peripherals are disabled here and enabled/configured by the board file.
+ */
+#include <dt-bindings/clock/imxrt1050-clock.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include "imxrt1050-pinfunc.h"
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "fsl,imxrt1052";
+	interrupt-parent = <&nvic>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-m7";
+			reg = <0>;
+			clock-frequency = <600000000>;
+		};
+	};
+
+	/* FlexRAM default fuse split and external memories */
+	itcm: memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x20000>;
+	};
+	dtcm: memory@20000000 {
+		device_type = "memory";
+		reg = <0x20000000 0x20000>;
+	};
+	ocram: memory@20200000 {
+		device_type = "memory";
+		reg = <0x20200000 0x40000>;
+	};
+
+	nvic: interrupt-controller@e000e100 {
+		compatible = "arm,armv7m-nvic";
+		reg = <0xe000e100 0xc00>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		arm,num-irq-priority-bits = <4>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		ccm: clock-controller@400fc000 {
+			compatible = "fsl,imxrt1050-ccm";
+			reg = <0x400fc000 0x4000>, <0x400d8000 0x1000>;
+			#clock-cells = <1>;
+		};
+
+		iomuxc: pinctrl@401f8000 {
+			compatible = "fsl,imxrt1050-iomuxc";
+			reg = <0x401f8000 0x4000>, <0x400a8000 0x1000>, <0x400ac000 0x1000>;
+			clocks = <&ccm IMXRT1050_CLK_IOMUXC>, <&ccm IMXRT1050_CLK_IOMUXC_GPR>;
+		};
+
+		gpio1: gpio@401b8000 {
+			compatible = "fsl,imxrt1050-gpio";
+			reg = <0x401b8000 0x4000>;
+			interrupts = <80>, <81>;
+			clocks = <&ccm IMXRT1050_CLK_GPIO1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio2: gpio@401bc000 {
+			compatible = "fsl,imxrt1050-gpio";
+			reg = <0x401bc000 0x4000>;
+			interrupts = <82>, <83>;
+			clocks = <&ccm IMXRT1050_CLK_GPIO2>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio3: gpio@401c0000 {
+			compatible = "fsl,imxrt1050-gpio";
+			reg = <0x401c0000 0x4000>;
+			interrupts = <84>, <85>;
+			clocks = <&ccm IMXRT1050_CLK_GPIO3>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio4: gpio@401c4000 {
+			compatible = "fsl,imxrt1050-gpio";
+			reg = <0x401c4000 0x4000>;
+			interrupts = <86>, <87>;
+			clocks = <&ccm IMXRT1050_CLK_GPIO4>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		gpio5: gpio@400c0000 {
+			compatible = "fsl,imxrt1050-gpio";
+			reg = <0x400c0000 0x4000>;
+			interrupts = <88>, <89>;
+			clocks = <&ccm IMXRT1050_CLK_GPIO5>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		lpuart1: serial@40184000 {
+			compatible = "fsl,imxrt1050-lpuart";
+			reg = <0x40184000 0x4000>;
+			interrupts = <20>;
+			clocks = <&ccm IMXRT1050_CLK_LPUART1>, <&ccm IMXRT1050_CLK_UART_ROOT>;
+			clock-names = "ipg", "per";
+			status = "disabled";
+		};
+
+		lpuart2: serial@40188000 {
+			compatible = "fsl,imxrt1050-lpuart";
+			reg = <0x40188000 0x4000>;
+			interrupts = <21>;
+			clocks = <&ccm IMXRT1050_CLK_LPUART2>, <&ccm IMXRT1050_CLK_UART_ROOT>;
+			clock-names = "ipg", "per";
+			status = "disabled";
+		};
+
+		lpuart3: serial@4018c000 {
+			compatible = "fsl,imxrt1050-lpuart";
+			reg = <0x4018c000 0x4000>;
+			interrupts = <22>;
+			clocks = <&ccm IMXRT1050_CLK_LPUART3>, <&ccm IMXRT1050_CLK_UART_ROOT>;
+			clock-names = "ipg", "per";
+			status = "disabled";
+		};
+
+		lpi2c1: i2c@403f0000 {
+			compatible = "fsl,imxrt1050-lpi2c";
+			reg = <0x403f0000 0x4000>;
+			interrupts = <28>;
+			clocks = <&ccm IMXRT1050_CLK_LPI2C1>, <&ccm IMXRT1050_CLK_LPI2C_ROOT>;
+			clock-names = "ipg", "per";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		lpi2c2: i2c@403f4000 {
+			compatible = "fsl,imxrt1050-lpi2c";
+			reg = <0x403f4000 0x4000>;
+			interrupts = <29>;
+			clocks = <&ccm IMXRT1050_CLK_LPI2C2>, <&ccm IMXRT1050_CLK_LPI2C_ROOT>;
+			clock-names = "ipg", "per";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		lpspi1: spi@40394000 {
+			compatible = "fsl,imxrt1050-lpspi";
+			reg = <0x40394000 0x4000>;
+			interrupts = <32>;
+			clocks = <&ccm IMXRT1050_CLK_LPSPI1>, <&ccm IMXRT1050_CLK_LPSPI_ROOT>;
+			clock-names = "ipg", "per";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		lpspi3: spi@4039c000 {
+			compatible = "fsl,imxrt1050-lpspi";
+			reg = <0x4039c000 0x4000>;
+			interrupts = <34>;
+			clocks = <&ccm IMXRT1050_CLK_LPSPI3>, <&ccm IMXRT1050_CLK_LPSPI_ROOT>;
+			clock-names = "ipg", "per";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		usdhc1: mmc@402c0000 {
+			compatible = "fsl,imxrt1050-usdhc";
+			reg = <0x402c0000 0x4000>;
+			interrupts = <110>;
+			clocks = <&ccm IMXRT1050_CLK_USDHC1>, <&ccm IMXRT1050_CLK_USDHC1_ROOT>;
+			clock-names = "ipg", "per";
+			bus-width = <4>;
+			status = "disabled";
+		};
+
+		lcdif: display-controller@402b8000 {
+			compatible = "fsl,imxrt1050-lcdif";
+			reg = <0x402b8000 0x4000>;
+			interrupts = <42>;
+			clocks = <&ccm IMXRT1050_CLK_LCD>, <&ccm IMXRT1050_CLK_LCD_PIXEL>, <&ccm IMXRT1050_CLK_LCDIF_PIX>;
+			clock-names = "axi", "pix-gate", "pix";
+			status = "disabled";
+		};
+
+		/* secure non-volatile storage: its low-power part keeps a real-time counter
+		 * through resets (and power-off with a coin cell on VDD_SNVS) */
+		snvs_rtc: rtc@400d4000 {
+			compatible = "fsl,imxrt1050-snvs-rtc";
+			reg = <0x400d4000 0x4000>;
+			clocks = <&ccm IMXRT1050_CLK_SNVS_HP>, <&ccm IMXRT1050_CLK_SNVS_LP>;
+			clock-names = "hp", "lp";
+			status = "okay";
+		};
+
+		trng: rng@400cc000 {
+			compatible = "fsl,imxrt1050-trng";
+			reg = <0x400cc000 0x4000>;
+			interrupts = <53>;
+			clocks = <&ccm IMXRT1050_CLK_TRNG>;
+			status = "okay";
+		};
+
+		pxp: pxp@402b4000 {
+			compatible = "fsl,imxrt1050-pxp";
+			reg = <0x402b4000 0x4000>;
+			interrupts = <44>;
+			clocks = <&ccm IMXRT1050_CLK_PXP>;
+			status = "disabled";
+		};
+
+		enet: ethernet@402d8000 {
+			compatible = "fsl,imxrt1050-enet";
+			reg = <0x402d8000 0x4000>;
+			interrupts = <114>, <115>;
+			interrupt-names = "enet", "1588";
+			clocks = <&ccm IMXRT1050_CLK_ENET>, <&ccm IMXRT1050_CLK_IPG>, <&ccm IMXRT1050_CLK_ENET_REF>;
+			clock-names = "ipg", "bus", "ref";
+			status = "disabled";
+		};
+
+		usbphy1: usbphy@400d9000 {
+			compatible = "fsl,imxrt1050-usbphy";
+			reg = <0x400d9000 0x1000>;
+			clocks = <&ccm IMXRT1050_CLK_USB1_PLL>;
+			status = "disabled";
+		};
+
+		usb1: usb@402e0000 {
+			compatible = "fsl,imxrt1050-usb", "usb-ehci";
+			reg = <0x402e0000 0x200>, <0x402e0800 0x200>;
+			interrupts = <113>;
+			clocks = <&ccm IMXRT1050_CLK_USBOH3>;
+			fsl,usbphy = <&usbphy1>;
+			status = "disabled";
+		};
+
+		usbphy2: usbphy@400da000 {
+			compatible = "fsl,imxrt1050-usbphy";
+			reg = <0x400da000 0x1000>;
+			clocks = <&ccm IMXRT1050_CLK_USB1_PLL>;
+			status = "disabled";
+		};
+
+		usb2: usb@402e0200 {
+			compatible = "fsl,imxrt1050-usb", "usb-ehci";
+			reg = <0x402e0200 0x200>, <0x402e0804 0x200>;
+			interrupts = <112>;
+			clocks = <&ccm IMXRT1050_CLK_USBOH3>;
+			fsl,usbphy = <&usbphy2>;
+			status = "disabled";
+		};
+
+		flexspi: spi@402a8000 {
+			compatible = "fsl,imxrt1050-flexspi";
+			reg = <0x402a8000 0x4000>, <0x60000000 0x4000000>;
+			reg-names = "regs", "memory";
+			interrupts = <108>;
+			clocks = <&ccm IMXRT1050_CLK_FLEXSPI>, <&ccm IMXRT1050_CLK_FLEXSPI_ROOT>;
+			clock-names = "ipg", "per";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		gpt1: timer@401ec000 {
+			compatible = "fsl,imxrt1050-gpt";
+			reg = <0x401ec000 0x4000>;
+			interrupts = <100>;
+			clocks = <&ccm IMXRT1050_CLK_GPT1>, <&ccm IMXRT1050_CLK_PERCLK>;
+			status = "disabled";
+		};
+
+		sai1: sai@40384000 {
+			compatible = "fsl,imxrt1050-sai";
+			reg = <0x40384000 0x4000>;
+			interrupts = <56>;
+			clocks = <&ccm IMXRT1050_CLK_SAI1>, <&ccm IMXRT1050_CLK_SAI1_ROOT>;
+			clock-names = "bus", "mclk";
+			status = "disabled";
+		};
+
+		pit: timer@40084000 {
+			compatible = "fsl,imxrt1050-pit";
+			reg = <0x40084000 0x4000>;
+			interrupts = <122>;
+			clocks = <&ccm IMXRT1050_CLK_PIT>, <&ccm IMXRT1050_CLK_PERCLK>;
+			status = "disabled";
+		};
+
+		edma: dma-controller@400e8000 {
+			compatible = "fsl,imxrt1050-edma";
+			reg = <0x400e8000 0x4000>, <0x400ec000 0x4000>;
+			interrupts = <0>, <1>, <2>, <3>, <4>, <5>, <6>, <7>,
+			             <8>, <9>, <10>, <11>, <12>, <13>, <14>, <15>, <16>;
+			clocks = <&ccm IMXRT1050_CLK_DMA>;
+			#dma-cells = <2>;
+			dma-channels = <32>;
+			status = "disabled";
+		};
+	};
+};

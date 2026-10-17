@@ -1,0 +1,22 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "wątek T" as T
+participant "sched.cpp" as S
+participant "SysTick (sched_tick)" as ST
+participant "budzący (wątek albo ISR)" as W
+    T -> S : irq_lock(), warunek niespełniony
+    T -> S : sched_block(wq, timeout, key)
+    S -> S : rq_del(T), BLOCKED, wait_result = -ETIMEDOUT
+    S -> S : wq_insert(wq, T) (wg priorytetu)
+    S -> S : sleepq_add(T, ticks + timeout) (posortowana)
+    S -> S : PendSV, irq_unlock -> przełączenie
+    alt zdarzenie przed czasem
+        W -> S : sched_wake(T, 0)
+        S -> S : usunięcie z wq i sleepq, sched_ready(T)
+    else limit czasu
+        ST -> S : czoło sleepq: wake_tick <= now
+        S -> S : sched_wake(T, -ETIMEDOUT)
+    end
+    S --> T : sched_block zwraca wait_result
+@enduml

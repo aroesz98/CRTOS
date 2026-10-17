@@ -1,0 +1,41 @@
+@startuml
+!include ../styl.iuml
+left to right direction
+class mutex <<struct>> {
+  +task_t* owner
+  +uint32_t count
+  +wait_queue wq
+  +list_head held_node
+}
+class semaphore <<struct>> {
+  +int32_t count
+  +int32_t max
+  +wait_queue wq
+}
+class event <<struct>> {
+  +uint32_t bits
+  +wait_queue wq
+}
+class wait_queue <<struct>> {
+  +list_head waiters
+}
+class task <<struct, K05>> {
+  +uint8_t prio
+  +uint8_t base_prio
+  +mutex* blocked_on_mutex
+  +list_head mutexes_held
+  +uintptr_t futex_key
+}
+class futex_table <<moduł sys_proc.cpp>> {
+  -wait_queue s_futex[16]
+  +sys_futex_wait(addr, expected, timeout) : int64_t
+  +sys_futex_wake(addr, count) : int64_t
+}
+mutex *-- wait_queue
+semaphore *-- wait_queue
+event *-- wait_queue
+mutex --> task : owner
+task o-- mutex : mutexes_held
+task --> mutex : blocked_on_mutex
+futex_table *-- "16" wait_queue
+@enduml

@@ -1,0 +1,23 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program (recv)" as P
+participant "net.cpp" as N
+participant "net-lwip (D05)" as L
+participant "wątek enet (D05)" as E
+P -> N : recvfrom(h, buf, len)
+N -> N : gniazdo? uaccess_ok(buf)
+loop do danych, błędu albo limitu czasu
+  N -> N : seen = ks.events
+  N -> L : recv(s, buf, len, MSG_DONTWAIT)
+  alt dane
+    L --> N : liczba bajtów (kopia w wątku programu)
+  else -EAGAIN i gniazdo blokujące
+    N -> N : sock_wait: events == seen? sched_block(ks.wq, SO_RCVTIMEO)
+    E -> N : netdev_rx(ramka) (przerwanie ENET -> wątek)
+    N -> L : rx(ramka): TCP/IP pod blokadą rdzenia lwIP
+    L -> N : net_sock_event(ks): events++, wake, poll_notify
+  end
+end
+N --> P : bajty / -EAGAIN (limit czasu) / -EINTR
+@enduml

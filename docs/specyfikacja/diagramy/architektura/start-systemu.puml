@@ -1,0 +1,27 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "Boot ROM" as ROM
+participant "main() (MSP)" as M
+participant "kernel_main()" as K
+participant "wątek boot" as B
+participant "init (proces 1)" as I
+    ROM -> ROM : FCFB, DCD: FlexSPI i SDRAM
+    ROM -> M : reset, XIP z HyperFlash
+    M -> M : mpu_init(), piny konsoli, zegary 600 MHz
+    M -> K : kernel_main()
+    K -> K : fault_init, mm_init, irq_init, console_init
+    K -> K : sched_init (idle), kworker_init, kmon_start
+    K -> B : boot_start(): kthread "boot"
+    K -> K : sched_start(): SysTick, pierwszy PendSV
+    B -> B : vfs_init, tty_init, uevent_init, gpu2d_init, /ram
+    B -> B : sdcard_init, fat_mount("/sd")
+    alt SW8 wciśnięty (tryb awaryjny)
+        B -> B : tylko drzewo urządzeń, bez modułów i init
+    else normalnie
+        B -> B : of_init(board.dtb), device_populate()
+        B -> B : moduły .ko wg modules.alias (probe)
+        B -> I : app_spawn(/sd/crtos/sbin/init.app, CAP_ALL)
+        I -> I : usługi i programy z etc/init.cfg
+    end
+@enduml

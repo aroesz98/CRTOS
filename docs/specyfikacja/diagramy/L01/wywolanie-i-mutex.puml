@@ -1,0 +1,18 @@
+@startuml
+!include ../styl.iuml
+autonumber
+participant "program" as P
+participant "libcrtos" as L
+participant "K09" as K
+P -> L : open("/dev/fb0")
+L -> K : svc #0 (R12 = SYS_OPEN)
+K --> L : R0 = -EACCES
+L --> P : -1, errno = EACCES
+== muteks z rywalizacją ==
+P -> L : crtos_mutex_lock(m)
+L -> L : CAS state 0 -> 1 nieudany; state = 2
+L -> K : SYS_FUTEX_WAIT(&state, 2)
+note right of K : wątek śpi do futex_wake
+K --> L : obudzony przez crtos_mutex_unlock innego wątku
+L -> L : exchange state = 2 -> właściciel
+@enduml

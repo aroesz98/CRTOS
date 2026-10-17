@@ -1,0 +1,20 @@
+CRTOS: TMPDIR of programs is the RAM disk /ram, which takes its memory from the same SDRAM
+as the compiler's heap; a large file's assembly there took what cc1 needed (and the RAM
+disk ran out while cc1 held nearly all the free memory). GCC's temporary files go to the
+card (/sd/crtos/tmp) instead; GCC_TMPDIR chooses another directory.
+--- a/libiberty/make-temp-file.c	2026-09-30 00:15:27.689208105 +0200
++++ b/libiberty/make-temp-file.c	2026-09-30 00:15:27.689232024 +0200
+@@ -127,6 +127,13 @@
+ #ifdef VMS
+       /* Try VMS standard temp logical.  */
+       base = try_dir ("/sys$scratch", base);
++#elif defined (__CRTOS__)
++      /* CRTOS: the compiler's temporary files (the assembly between cc1 and as, collect2's)
++	 go to the card: TMPDIR is the RAM disk, whose memory the compiler's heap needs.
++	 GCC_TMPDIR chooses another place.  */
++      base = try_dir (getenv ("GCC_TMPDIR"), base);
++      base = try_dir ("/sd/crtos/tmp", base);
++      base = try_dir (getenv ("TMPDIR"), base);
+ #else
+       base = try_dir (getenv ("TMPDIR"), base);
+       base = try_dir (getenv ("TMP"), base);

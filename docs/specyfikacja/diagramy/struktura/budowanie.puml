@@ -1,0 +1,49 @@
+@startuml
+!include ../styl.iuml
+title Budowanie CRTOS (crtos build: CMake + Ninja)
+left to right direction
+
+package "Źródła" {
+  folder "kernel/rtos\n(rdzeń RTOS)" as KR
+  folder "kernel/os, subsys\n(część OS)" as KO
+  folder "drivers/" as D
+  folder "system/\n(lib, services,\ncommands, apps)" as S
+  folder "apps/, tests/,\nexamples/\n(opcjonalne)" as X
+  folder "examples/rtos/blinky\n(aplikacja RTOS)" as RA
+  folder "dts/" as T
+  folder "rootfs/" as R
+}
+package "Narzędzia" {
+  component "arm-none-eabi-gcc 14.3\n(-O3, obraz XIP)" as GCC
+  component "arm-none-eabi-gcc -O2\n+ ld -r (relokowalny ELF)" as LDR
+  component "cpp + tools/dtc.py" as DTC
+  component "tools/modcheck.py" as MC
+}
+package "build/" {
+  artifact "kernel/crtos.bin\ncrtos.axf, crtos.map" as BIN
+  artifact "rtos/kernel/crtos.bin\n(crtos build --rtos)" as RBIN
+  artifact "sdcard/crtos/drivers/*.ko\nmodules.alias" as KOS
+  artifact "sdcard/crtos/sbin, bin, apps/*.app\n(+ *.debug.app)" as APP
+  artifact "sdcard/crtos/boot/board.dtb" as DTB
+  artifact "sdcard/crtos/etc/*" as ETC
+  artifact "sdk/ (crtos sdk)" as SDK
+}
+
+KR --> GCC
+KO --> GCC : profil os
+GCC --> BIN
+KR --> RBIN : profil rtos\n(CONFIG_OS=0)
+RA --> RBIN : crtos_rtos_app
+D --> LDR : moduły (-mlong-calls)
+S --> LDR : programy systemu
+X --> LDR : CRTOS_BUILD_APPS/\nTESTS/EXAMPLES
+LDR --> KOS
+LDR --> APP
+KOS ..> MC : symbole
+APP ..> MC : symbole
+BIN ..> MC : eksporty jądra (ksyms)
+T --> DTC
+DTC --> DTB
+R --> ETC : kopia
+S --> SDK : nagłówki, biblioteki
+@enduml
