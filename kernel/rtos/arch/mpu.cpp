@@ -3,9 +3,11 @@
  *
  * Region map (a higher number wins where regions overlap):
  *   0      4 GB background, no access (nothing outside the regions below is reachable)
- *   1..7   ITCM, DTCM, OCRAM, SDRAM, non-cacheable SDRAM, XIP flash, peripherals:
- *          privileged only - user code sees none of the kernel's memory - except the flash,
- *          which user code may read and execute: programs run in place from /flash0 there
+ *   1..7   the board's memories (platform_mpu_map: on the i.MX RT ITCM, DTCM, OCRAM, SDRAM,
+ *          non-cacheable SDRAM, XIP flash, peripherals; on the STM32 ITCM, DTCM, AXI SRAM,
+ *          PSRAM, non-cacheable PSRAM, XIP NOR flash, peripherals): privileged only - user code
+ *          sees none of the kernel's memory - except the flash, which user code may read and
+ *          execute: programs run in place from /flash0 there
  *   8      arena of the process owning the running thread (user RWX)
  *   9..11  shared memory windows of that process (user RW, XN), one of them maybe its fast
  *          code block in ITCM or OCRAM (user RX, app.cpp)
@@ -16,7 +18,7 @@
  * PRIVDEFENA is off, so a stray kernel pointer into unmapped space faults as well.
  */
 #include "../kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 extern "C" uint32_t _vStackBase[];
 
@@ -205,15 +207,20 @@ extern "C" void mpu_init(void)
     }
 
     region_set(0, 0x00000000u, 32, RASR_XN | RASR_AP(AP_NONE) | MT_STRONG);
-    region_set(1, 0x00000000u, 17, RASR_AP(AP_PRIV_RW) | MT_NORMAL_WB);               /* ITCM 128K */
-    region_set(2, 0x20000000u, 17, RASR_XN | RASR_AP(AP_PRIV_RW) | MT_NORMAL_WB);     /* DTCM 128K */
-    region_set(3, 0x20200000u, 18, RASR_AP(AP_PRIV_RW) | MT_NORMAL_WBWA);             /* OCRAM 256K */
-    region_set(4, 0x80000000u, 25, RASR_AP(AP_PRIV_RW) | MT_NORMAL_WBWA);             /* SDRAM 32M */
-    region_set(5, 0x81E00000u, 21, RASR_XN | RASR_AP(AP_PRIV_RW) | MT_NORMAL_NC);     /* NCACHE 2M */
-    /* XIP flash 64M: the kernel runs from it, programs from the file system /flash0 on it
-     * (their code in place; the kernel's image is readable but holds nothing secret) */
-    region_set(6, 0x60000000u, 26, RASR_AP(AP_RO) | MT_NORMAL_WB);
-    region_set(7, 0x40000000u, 22, RASR_XN | RASR_AP(AP_PRIV_RW) | MT_DEVICE);        /* peripherals 4M */
+    /* 1..7: the board's memories (platform_mpu_map; a later region wins where they overlap) */
+    int n = 1;
+    for (const struct mpu_map_entry *m = platform_mpu_map; m->log2size && n < MPU_REGION_ARENA; m++, n++) {
+        uint32_t attr;
+        switch (m->kind) {
+        case MPU_KIND_TCM_CODE:    attr = RASR_AP(AP_PRIV_RW) | MT_NORMAL_WB; break;
+        case MPU_KIND_TCM_DATA:    attr = RASR_XN | RASR_AP(AP_PRIV_RW) | MT_NORMAL_WB; break;
+        case MPU_KIND_RAM:         attr = RASR_AP(AP_PRIV_RW) | MT_NORMAL_WBWA; break;
+        case MPU_KIND_RAM_NOCACHE: attr = RASR_XN | RASR_AP(AP_PRIV_RW) | MT_NORMAL_NC; break;
+        case MPU_KIND_FLASH:       attr = RASR_AP(AP_RO) | MT_NORMAL_WB; break;
+        default:                   attr = RASR_XN | RASR_AP(AP_PRIV_RW) | MT_DEVICE; break;
+        }
+        region_set(n, m->base, m->log2size, attr);
+    }
     region_set(MPU_REGION_NULL, 0x00000000u, 8, RASR_XN | RASR_AP(AP_NONE) | MT_STRONG);
     region_set(MPU_REGION_MSP, (uint32_t)_vStackBase, CONFIG_STACK_GUARD_LOG2, RASR_XN | RASR_AP(AP_NONE) | MT_STRONG);
     task_stack_limit = 0;

@@ -80,7 +80,7 @@ Funkcje czekające zwracają 0 albo `-ETIMEDOUT` (i `-EINTR`, gdy zadanie jest k
 - **Sprzęt** obsługują sterowniki NXP SDK: GPIO, LPUART, zegary i pamięci podręczne są już w
   jądrze (`kernel/platform/evkbimxrt1050/drivers`), pozostałe (`fsl_lpi2c.c`, `fsl_lpspi.c`,
   `fsl_gpt.c`, ...) dołącza `SDK_DRIVERS` ze sterowników NXP SDK (`third_party/nxp-sdk`,
-  katalogi w `CRTOS_SDK_DRIVER_DIRS` w `cmake/crtos.cmake`).
+  katalogi w `CRTOS_SDK_DRIVER_DIRS` w `cmake/boards/evkbimxrt1050.cmake`).
 
 ## Czego nie ma i na co uważać
 

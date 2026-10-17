@@ -258,6 +258,55 @@ static const struct file_ops zero_ops = {
     nullptr, zero_read, sink_write, nullptr, nullptr, nullptr, tty_fstat, nullptr, nullptr, nullptr,
 };
 
+/* ---- /dev/kmsg: the kernel log (as kmon's dmesg shows it) for programs with CAP_DEV - deployd
+ * hands it out over the network ("crtos dmesg"), for a board without a debug probe ---------- */
+
+struct kmsg_snap {
+    uint32_t len, pos;
+    char data[CONFIG_LOG_BUF_SIZE];
+};
+
+/* each open reads the log as it is then */
+static int kmsg_open(struct file *f)
+{
+    if ((f->flags & VFS_O_ACCMODE) != VFS_O_RDONLY)
+        return -EACCES;
+    struct kmsg_snap *s = (struct kmsg_snap *)kmalloc(sizeof(*s), KM_LARGE);
+    if (!s)
+        return -ENOMEM;
+    s->len = (uint32_t)log_snapshot(s->data, sizeof(s->data));
+    s->pos = 0;
+    f->priv = s;
+    return 0;
+}
+
+static int kmsg_read(struct file *f, void *buf, size_t len)
+{
+    struct kmsg_snap *s = (struct kmsg_snap *)f->priv;
+    size_t n = s->len - s->pos < len ? s->len - s->pos : len;
+    memcpy(buf, s->data + s->pos, n);
+    s->pos += (uint32_t)n;
+    return (int)n;
+}
+
+static int kmsg_fstat(struct file *f, struct vfs_stat *st)
+{
+    memset(st, 0, sizeof(*st));
+    st->mode = VFS_S_IFCHR;
+    st->size = ((struct kmsg_snap *)f->priv)->len;
+    return 0;
+}
+
+static int kmsg_close(struct file *f)
+{
+    kfree(f->priv);
+    return 0;
+}
+
+static const struct file_ops kmsg_ops = {
+    kmsg_open, kmsg_read, nullptr, nullptr, nullptr, nullptr, kmsg_fstat, nullptr, kmsg_close, nullptr,
+};
+
 void tty_init(void)
 {
     mutex_init(&s_tty.rlock);
@@ -266,6 +315,7 @@ void tty_init(void)
     devfs_register("console", &tty_ops, &s_tty);
     devfs_register("null", &null_ops, nullptr);
     devfs_register("zero", &zero_ops, nullptr);
+    devfs_register("kmsg", &kmsg_ops, nullptr);
 }
 
 struct file *tty_open_console(void)

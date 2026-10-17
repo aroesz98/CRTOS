@@ -184,6 +184,56 @@ void gfx_win_move(struct gfx_win *w, int x, int y);
 void gfx_win_raise(struct gfx_win *w);
 void gfx_win_show(struct gfx_win *w, bool visible);
 
+/* ---- the 2D accelerator for the program's own pictures (gpu.c) ----
+ * A buffer in shared memory: the accelerator can read it (a picture drawn there - a 3D view,
+ * an emulator's screen - is copied or stretched into a window). The calls wait for the
+ * accelerator; -1 when there is none to ask (then the program draws itself). */
+struct gfx_buffer {
+    struct gfx_surface s;
+    int shm;
+};
+struct gfx_buffer *gfx_buffer_create(int width, int height, uint32_t format);   /* GPU2D_FMT_* */
+void gfx_buffer_free(struct gfx_buffer *b);
+#define GFX_GPU_SMOOTH 0x1u         /* stretch: filtered (else the nearest pixel) */
+#define GFX_GPU_BLEND  0x2u         /* blend with the source's alpha (ARGB8888 buffers) */
+/* src (sx, sy, sw, sh) stretched over dst (dx, dy, dw, dh) */
+int gfx_gpu_scale(struct gfx_win *dst, int dx, int dy, int dw, int dh, const struct gfx_buffer *src, int sx, int sy,
+                  int sw, int sh, unsigned flags);
+int gfx_gpu_copy(struct gfx_win *dst, int dx, int dy, const struct gfx_buffer *src, int sx, int sy, int w, int h,
+                 unsigned flags);
+int gfx_gpu_fill(struct gfx_win *dst, int x, int y, int w, int h, uint32_t argb);
+/* what the accelerator does itself: GPU2D_CAP_SCALE (else gfx_gpu_scale makes the kernel do it
+ * with the processor, the nearest pixel only - slow for a whole screen), GPU2D_CAP_PRIMS; 0
+ * without one */
+unsigned gfx_gpu_caps(void);
+
+/* 3D: textured triangles and quadrilaterals in perspective (crtos/gpu2d.h, struct gpu2d_prim),
+ * drawn in their order into a buffer - only with GPU2D_CAP_PRIMS (else -1). The texture arrays
+ * lie in shared memory, where the GPU reads them: @layers pictures of @width x @height, @stride
+ * bytes a line, one after another from @offset of shared memory @shm (a gfx_shmem's, a
+ * gfx_buffer's). A primitive names one by its index in @tex and its layer. (A process maps at
+ * most three shared memory objects at a time - its window's among them: keep the textures in
+ * one.) */
+struct gfx_shmem {
+    int shm;
+    void *p;
+    size_t size;
+};
+struct gfx_shmem *gfx_shmem_create(size_t size);
+void gfx_shmem_free(struct gfx_shmem *m);
+struct gfx_texarray {
+    int shm;
+    size_t offset;
+    int width, height, stride;
+    uint32_t format;                /* GPU2D_FMT_* */
+    int layers;
+};
+/* @count primitives over @dst, inside (cx, cy, cw, ch); waits for them. @flags:
+ * GPU2D_PRIMS_DISCARD - the primitives cover all of it (what was there is not read). @rows (or
+ * NULL): the first row each primitive reaches and the last + 1 - quicker for many of them */
+int gfx_gpu_prims(struct gfx_buffer *dst, int cx, int cy, int cw, int ch, unsigned flags, const struct gpu2d_prim *prims,
+                  const int16_t *rows, unsigned count, const struct gfx_texarray *tex, unsigned ntex);
+
 /* Next event (queued ones first): 0, or -1 on timeout/error */
 int gfx_next_event(struct gfx *g, struct gfx_event *ev, uint32_t timeout);
 /* Wait until the last damage of @w is on the screen (other events stay queued) */

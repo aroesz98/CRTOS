@@ -138,7 +138,7 @@ R – reakcja; ocena jak w rozdz. 4.
 | F-35 | U03 | wstrzyknięte wejście | fałszywe dotknięcia i klawisze | brak | N (ISS-07) |
 | F-36 | U04 | koniec `inputd` / zniknięcie urządzenia | brak wejścia | restart przez `init`, `-ENODEV` | O |
 | F-37 | U05 | fałszywy czas NTP | zły zegar | kontrola znacznika i adresu; brak uwierzytelnienia | C |
-| F-38 | U06 | przejęcie tokenu `deployd` | podmiana kodu systemu | token, porównanie w stałym czasie; brak szyfrowania | N (ISS-12) |
+| F-38 | U06 | przejęcie tokenu `deployd` | podmiana kodu systemu, dowolne polecenia powłoki (`EXEC`, F-94) | token, porównanie w stałym czasie; brak szyfrowania | N (ISS-12) |
 | F-39 | U07 | dostęp fizyczny do USB | powłoka z pełnymi uprawnieniami | brak logowania | N (ISS-16) |
 | F-40 | A01 | koniec `wm` | okna bez ramek | restart przez `init`, przejęcie okien | O |
 | F-41 | A02/A03 | błąd programu | koniec programu | K04 (izolacja) | O |
@@ -164,7 +164,7 @@ R – reakcja; ocena jak w rozdz. 4.
 | F-61 | U03 | program czyta schowek (tekst skopiowany w innym programie, np. hasło) | ujawnienie danych | schowek jak w innych systemach okien – dostępny dla programów graficznych; ograniczenie opisane (U03 sekcja 12) | C |
 | F-62 | U03, A01 | menedżer okien kończy się z włączonym przejmowaniem klawiszy (otwarte menu) | klawisze nie trafiają do programów | `gfxd` wyłącza przejmowanie przy końcu menedżera; puszczenie klawisza idzie do okna naciśnięcia (REQ-U03-09) | O |
 | F-63 | D06 | urządzenie USB z błędnym albo złośliwym deskryptorem raportu myszy | złe pola (ruch, przyciski) albo odczyt poza raportem | parser sprawdza długość każdego elementu i liczbę pól, pola najwyżej 32-bitowe, odczyt bitów tylko w granicach raportu, najwyżej 8 identyfikatorów; mysz bez kółka zostaje w protokole boot (REQ-D06-07) | O |
-| F-64 | U06, T01 | `deployd` z tokenem pozwala czytać całą kartę, `/flash0` i `/ram` (`crtos scp`) | ujawnienie plików użytkownika | token wymagany przed każdym poleceniem (REQ-U06-02), odczyt tylko w tych trzech drzewach bez `..` (REQ-U06-03); narzędzie deweloperskie (ISS-12) | C |
+| F-64 | U06, T01 | `deployd` z tokenem pozwala czytać całą kartę, `/flash0`, `/ram` i log jądra (`crtos scp`, `crtos dmesg`) | ujawnienie plików użytkownika | token wymagany przed każdym poleceniem (REQ-U06-02), odczyt tylko w tych trzech drzewach bez `..` i z `/dev/kmsg` (REQ-U06-03); `EXEC` tego ograniczenia nie ma (F-94); narzędzie deweloperskie (ISS-12) | C |
 | F-65 | A03 | historia poleceń (`$HOME/.sh_history`) zapisuje wpisane na terminalu tajemnice (np. token w poleceniu) | ujawnienie danych z karty | plik w `/sd/crtos`, `history -c` go czyści; system bez wielu użytkowników | C |
 | F-66 | L02, A01 | uszkodzony albo spreparowany plik ikony (`share/icons/*.pam`: zły nagłówek, obcięte piksele, ogromne wymiary) | `wm` czyta poza buforem albo zajmuje całą pamięć – bez paska zadań i ramek okien | `gfx_image_load` sprawdza nagłówek, 8 bitów, 1–4 kanały, najwyżej 1 M pikseli i pełną długość danych (REQ-L02-08); zły plik daje ikonę domyślną albo kafelek z literą (REQ-A01-07); `wm` restartowany przez `init` | O |
 | F-67 | U03 | zdarzenia `GFX_PTR_HOVER` trafiają do programów, które ich nie znają (traktują każde zdarzenie wskaźnika jak dotknięcie) | fałszywe dotknięcia przy samym ruchu myszy | tylko okna z `GFX_WIN_HOVER` dostają `HOVER`/`LEAVE` (REQ-U03-13); pozostałe widzą wskaźnik jak dotąd | O |
@@ -194,6 +194,7 @@ R – reakcja; ocena jak w rozdz. 4.
 | F-91 | T01 | kod z zewnątrz inny niż zamierzony: katalog `third_party` na starym commicie albo z ręczną zmianą, łatka nałożona częściowo | budowanie z innym kodem niż w repozytorium (np. bez zmiany CRTOS w lwIP) | `thirdparty.py --build` przy każdej konfiguracji porównuje commit i nałożoną łatkę z `sources.txt` i `patches/`, przełącza katalog albo kończy budowanie błędem; `git apply` nakłada łatkę w całości albo wcale; commit przypięty skrótem (git sprawdza obiekty) | C |
 | F-92 | T01 | repozytorium kodu z zewnątrz niedostępne (sieć, usunięty commit albo repozytorium) | pierwsze budowanie niemożliwe; istniejące checkouty działają dalej | błąd konfiguracji z nazwą katalogu; kopia źródeł: istniejący `third_party/` albo archiwum projektu | C |
 | F-93 | T02 | biblioteka `lib/xip` zbudowana inaczej niż przez newlib i GCC (nieaktualny przepis, inna wersja kompilatora, brak opcji wpływającej na kod) | program XIP z innym kodem biblioteki C/C++ niż sprawdzony | przepis generowany z budowania newlib i GCC (polecenia `make -n`, opcje bez pominięć wpływających na kod, np. `-Wabi=2`); źródła z commitów źródeł Arm 14.3.Rel1; linia `version` w przepisie – przy innym GCC programy XIP pominięte; porównanie z bibliotekami etapu A przy zmianie przepisu | C |
+| F-94 | U06, T01 | `deployd` z tokenem wykonuje dowolną linię poleceń powłoki (`EXEC`, `crtos sh`) | zmiana i usuwanie plików (także plików użytkownika poza `/sd/crtos`), kończenie procesów, dostęp do urządzeń | token wymagany przed każdym poleceniem (REQ-U06-02); powłoka z uprawnieniami najwyżej `deployd` (`spawn`, `kill`, `sys`, `dev`, bez `module`), bez wejścia, z limitem czasu (REQ-U06-08); narzędzie deweloperskie: w produkcie usunąć z `init.cfg` | N (ISS-12) |
 
 ## 6. Analiza awarii zależnych
 
@@ -234,7 +235,7 @@ komponentów; nie zostały poprawione w ramach tej dokumentacji, chyba że wpis 
 | ISS-09 | `shm_revoke` nie odmapowuje okien, w których obiekt jest już zmapowany | K11 | pamięć | N | odmapowanie we wszystkich procesach przy odwołaniu |
 | ISS-10 | Nikt nie restartuje `init`, jeśli się zakończy | U01, K08 | dostępność | Ś | jądro restartuje `init` albo `panic` (restart systemu) |
 | ISS-11 | `devmgr`: ładowanie modułów dla nowych urządzeń (hot plug) nie jest zaimplementowane | U02 | funkcja | N | implementacja przez `modules.alias` |
-| ISS-12 | `deployd`: token jawnym tekstem, szyfrowanie brak; kto ma token, podmienia sterowniki, programy i jądro | U06, T01 | bezpieczeństwo informacji | W | tylko w wersji deweloperskiej; w produkcie usunąć z `init.cfg`; uwierzytelnienie wzajemne i podpisy |
+| ISS-12 | `deployd`: token jawnym tekstem, szyfrowanie brak; kto ma token, podmienia sterowniki, programy i jądro, a przez `EXEC` wykonuje polecenia powłoki z uprawnieniami `spawn`, `kill`, `sys`, `dev` | U06, T01 | bezpieczeństwo informacji | W | tylko w wersji deweloperskiej; w produkcie usunąć z `init.cfg`; uwierzytelnienie wzajemne i podpisy |
 | ISS-13 | `CAP_SYS` miało pozwalać na wyższe priorytety, ale limit jest ten sam (19) | K09 | spójność | N | poprawić kod albo komentarz w `syscall.h` (razem z ISS-02) |
 | ISS-14 | Nagłówek `mpu.cpp` opisuje region 15 jako „zapasowy”, a jest strażnikiem stosu jądra | K03 | dokumentacja | N | poprawić komentarz |
 | ISS-15 | Brak podpisów i kontroli integralności modułów, programów i plików konfiguracji (poza CRC przy wgrywaniu) | K16, D07, U06 | bezpieczeństwo informacji | W | podpisy obrazów, zaufany start (HAB i.MX RT) |
@@ -265,3 +266,4 @@ komponentów; nie zostały poprawione w ramach tej dokumentacji, chyba że wpis 
 - Problemy bezpieczeństwa informacji (ISS-12, ISS-15, ISS-16, ISS-24) dotyczą narzędzi
   deweloperskich; w produkcie trzeba je wyłączyć albo zabezpieczyć (ISO/SAE 21434 –
   poza zakresem tego dokumentu).
+- Plan działań i luki procesowe: [05 Zgodność z ISO 26262](05-zgodnosc-iso26262.md).

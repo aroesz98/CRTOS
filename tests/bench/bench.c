@@ -5,7 +5,12 @@
  *
  *     bench [NAME...]          (default: all of them)
  *
- * NAMEs: syscall sysfull thread pipe port memcpy memset read spawn
+ * NAMEs: syscall sysfull thread pipe port memcpy memset memread read spawn gpu
+ *
+ * gpu: the 2D accelerator (/dev/gpu2d) as the graphics server uses it - a whole 800x480
+ * screen filled, copied from a window (RGB565 and XRGB8888, cached memory as clients have),
+ * an ARGB8888 window blended over it, and many small copies in one batch (the cost of an
+ * operation besides its pixels).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -16,6 +21,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <crtos.h>
+#include <crtos/gpu2d.h>
 
 #define SELF        "/sd/crtos/bin/bench.app"
 #define SPAWN_PROG  "/sd/crtos/bin/hello.app"
@@ -244,7 +250,7 @@ static void t_mem(bool copy)
         const char *what;
     } sizes[] = {
         { MEM_SMALL, "16 KB (in the data cache)" },
-        { MEM_BIG, "256 KB (SDRAM)" },
+        { MEM_BIG, "256 KB (in RAM)" },
     };
     for (unsigned s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
         uint32_t size = sizes[s].size, rounds = 0;
@@ -330,6 +336,39 @@ static void t_spawn(void)
         per_op_ms("spawn", dt, n, "hello.app: load, run, exit, wait");
 }
 
+/* reading alone: words summed, over the cache and over memory (SDRAM, PSRAM) */
+static void t_memread(void)
+{
+    uint32_t *a = malloc(MEM_BIG);
+    if (!a) {
+        failed("memread", "no memory");
+        return;
+    }
+    memset(a, 3, MEM_BIG);
+    static const struct {
+        uint32_t size;
+        const char *what;
+    } sizes[] = {
+        { MEM_SMALL, "16 KB (in the data cache)" },
+        { MEM_BIG, "256 KB (in RAM)" },
+    };
+    volatile uint32_t sink = 0;
+    for (unsigned s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+        uint32_t size = sizes[s].size, rounds = 0, sum = 0;
+        uint64_t t0 = now_us(), dt;
+        do {
+            for (int k = 0; k < 16; k++)
+                for (uint32_t i = 0; i < size / 4u; i += 4)
+                    sum += a[i] + a[i + 1] + a[i + 2] + a[i + 3];
+            rounds += 16;
+            dt = now_us() - t0;
+        } while (dt < 200000u);
+        sink += sum;
+        rate("memread", (uint64_t)size * rounds, dt, sizes[s].what);
+    }
+    free(a);
+}
+
 /* ---- main ------------------------------------------------------------------------------------------ */
 
 static void t_memcpy(void)
@@ -342,12 +381,110 @@ static void t_memset(void)
     t_mem(false);
 }
 
+/* ---- the 2D accelerator ------------------------------------------------------------------------- */
+
+#define GPU_W 800
+#define GPU_H 480
+#define GPU_RUNS 20
+
+static int s_gpu = -1;
+
+/* @ops run @runs times, one batch each: microseconds in all */
+static uint64_t gpu_run(const struct gpu2d_hop *ops, uint32_t n, int runs)
+{
+    struct gpu2d_hbatch b = { ops, n };
+    uint64_t t0 = now_us();
+    for (int i = 0; i < runs; i++)
+        if (ioctl(s_gpu, GPU2D_IOC_HBATCH, &b) < 0)
+            return 0;
+    return now_us() - t0;
+}
+
+static struct gpu2d_hop blit_op(int dst, int src, uint32_t fmt, uint32_t bpp, int dx, int dy, int w, int h, uint32_t flags)
+{
+    struct gpu2d_hop op;
+    memset(&op, 0, sizeof(op));
+    op.op = GPU2D_OP_BLIT;
+    op.blit.dst = (struct gpu2d_hsurface){ dst, 0, GPU_W, GPU_H, GPU_W * 2, GPU2D_FMT_RGB565 };
+    op.blit.src = (struct gpu2d_hsurface){ src, 0, GPU_W, GPU_H, GPU_W * bpp, fmt };
+    op.blit.dx = (int16_t)dx;
+    op.blit.dy = (int16_t)dy;
+    op.blit.src_rect = (struct gpu2d_rect){ (int16_t)dx, (int16_t)dy, (uint16_t)w, (uint16_t)h };
+    op.blit.flags = flags;
+    return op;
+}
+
+static void t_gpu(void)
+{
+    s_gpu = open("/dev/gpu2d", O_RDWR);
+    if (s_gpu < 0) {
+        failed("gpu", "no /dev/gpu2d");
+        return;
+    }
+    /* the screen as gfxd has it (non-cacheable), a window of each kind (cached) */
+    int dst = crtos_shm_create(GPU_W * GPU_H * 2, SHM_NOCACHE);
+    int w16 = crtos_shm_create(GPU_W * GPU_H * 2, 0);
+    int w32 = crtos_shm_create(GPU_W * GPU_H * 4, 0);
+    uint32_t *p32 = w32 >= 0 ? (uint32_t *)crtos_shm_map(w32) : NULL;
+    uint16_t *p16 = w16 >= 0 ? (uint16_t *)crtos_shm_map(w16) : NULL;
+    if (dst < 0 || !p16 || !p32) {
+        failed("gpu", "no memory for the surfaces");
+        if (p16)
+            crtos_shm_unmap(p16);
+        if (p32)
+            crtos_shm_unmap(p32);
+        if (w16 >= 0)
+            close(w16);
+        if (w32 >= 0)
+            close(w32);
+        if (dst >= 0)
+            close(dst);
+        close(s_gpu);
+        return;
+    }
+    for (int i = 0; i < GPU_W * GPU_H; i++) {
+        p16[i] = (uint16_t)(i * 7u);
+        p32[i] = 0x80000000u | (uint32_t)i * 2654435761u >> 8; /* half transparent */
+    }
+    struct gpu2d_hop op;
+    memset(&op, 0, sizeof(op));
+    op.op = GPU2D_OP_FILL;
+    op.fill.dst = (struct gpu2d_hsurface){ dst, 0, GPU_W, GPU_H, GPU_W * 2, GPU2D_FMT_RGB565 };
+    op.fill.rect = (struct gpu2d_rect){ 0, 0, GPU_W, GPU_H };
+    op.fill.argb = 0xFF336699u;
+    per_op_ms("gpufill", gpu_run(&op, 1, GPU_RUNS), GPU_RUNS, "fill 800x480 RGB565");
+
+    op = blit_op(dst, w16, GPU2D_FMT_RGB565, 2, 0, 0, GPU_W, GPU_H, 0);
+    per_op_ms("gpucopy", gpu_run(&op, 1, GPU_RUNS), GPU_RUNS, "copy 800x480 RGB565 window -> screen");
+    op = blit_op(dst, w32, GPU2D_FMT_XRGB8888, 4, 0, 0, GPU_W, GPU_H, 0);
+    per_op_ms("gpuconv", gpu_run(&op, 1, GPU_RUNS), GPU_RUNS, "copy 800x480 XRGB8888 window -> RGB565 screen");
+    op = blit_op(dst, w32, GPU2D_FMT_ARGB8888, 4, 0, 0, GPU_W, GPU_H, GPU2D_BLEND);
+    per_op_ms("gpublend", gpu_run(&op, 1, GPU_RUNS), GPU_RUNS, "blend 800x480 ARGB8888 window over the screen");
+
+    /* 64 small copies in one batch: the cost of an operation */
+    static struct gpu2d_hop ops[64];
+    for (int i = 0; i < 64; i++)
+        ops[i] = blit_op(dst, w16, GPU2D_FMT_RGB565, 2, (i % 16) * 48, (i / 16) * 48, 32, 32, 0);
+    uint64_t us = gpu_run(ops, 64, GPU_RUNS);
+    uint64_t ns10 = us * 10000u / (64u * GPU_RUNS);
+    printf("bench: %-8s %8lu.%lu ns   %s\n", "gpuop", (unsigned long)(ns10 / 10u), (unsigned long)(ns10 % 10u),
+           "per copy of 32x32, 64 in one batch");
+
+    crtos_shm_unmap(p16);
+    crtos_shm_unmap(p32);
+    close(w16);
+    close(w32);
+    close(dst);
+    close(s_gpu);
+}
+
 static const struct {
     const char *name;
     void (*fn)(void);
 } s_tests[] = {
     { "syscall", t_syscall }, { "sysfull", t_sysfull }, { "thread", t_thread }, { "pipe", t_pipe }, { "port", t_port },
     { "memcpy", t_memcpy },   { "memset", t_memset }, { "read", t_read }, { "spawn", t_spawn },
+    { "memread", t_memread }, { "gpu", t_gpu },
 };
 
 int main(int argc, char **argv)
@@ -369,7 +506,7 @@ int main(int argc, char **argv)
         }
     }
     if (!ran) {
-        printf("usage: bench [syscall|sysfull|thread|pipe|port|memcpy|memset|read|spawn ...]\n");
+        printf("usage: bench [syscall|sysfull|thread|pipe|port|memcpy|memset|memread|read|spawn|gpu ...]\n");
         return 2;
     }
     return 0;

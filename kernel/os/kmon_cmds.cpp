@@ -5,7 +5,7 @@
 #include "kernel.h"
 #include "boot/sdcard.h"
 #include "../lib/crc32.h"
-#include "fsl_common.h"
+#include "platform.h"
 #include <crtos/device.h>
 #include <crtos/module.h>
 #include <crtos/of.h>
@@ -664,7 +664,8 @@ void kcmd_sdstress(int argc, char **argv)
         if (gap_us >= 1000u)
             task_sleep_ms(gap_us / 1000u);
         else if (gap_us)
-            SDK_DelayAtLeastUs(gap_us, SystemCoreClock);
+            for (uint32_t c0 = cpu_cycles(), n = gap_us * (SystemCoreClock / 1000000u); cpu_cycles() - c0 < n;) {
+            }
         uint64_t t0 = time_us();
         int r = sdcard_read(lba, buf, blocks);
         uint32_t us = (uint32_t)(time_us() - t0);

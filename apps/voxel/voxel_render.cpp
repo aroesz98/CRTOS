@@ -10,10 +10,15 @@
  * with the colour spread out in one 32-bit word (0000 0GGG GGG0 0000 RRRR R000 00BB BBBB,
  * fields far enough apart to be multiplied by 0..32 at once).
  */
+#include <algorithm>
+#include <errno.h>
+#include <malloc.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "gfx.h"
 #include "voxel_render.h"
 
 extern "C" uint64_t crtos_time_us(void);
@@ -98,12 +103,23 @@ static inline uint16_t blend(uint32_t d, uint32_t s, uint32_t a)
     return pack(((spread(d) * (32u - a) + spread(s) * a) >> 5) & SPREAD);
 }
 
-bool render_init(Renderer *r, int w, int h)
+bool render_init(Renderer *r, int w, int h, uint16_t *color)
 {
-    uint16_t *c = (uint16_t *)realloc(r->color, sizeof(uint16_t) * (size_t)w * (size_t)h);
-    if (!c)
-        return false;
-    r->color = c;
+    if (color)
+    {
+        if (r->own_color)
+            free(r->color);
+        r->color = color;
+        r->own_color = false;
+    }
+    else
+    {
+        uint16_t *c = (uint16_t *)realloc(r->own_color ? r->color : nullptr, sizeof(uint16_t) * (size_t)w * (size_t)h);
+        if (!c)
+            return false;
+        r->color = c;
+        r->own_color = true;
+    }
     uint16_t *d = (uint16_t *)realloc(r->depth, sizeof(uint16_t) * (size_t)w * (size_t)h);
     if (!d)
         return false;
@@ -118,7 +134,8 @@ bool render_init(Renderer *r, int w, int h)
 
 void render_free(Renderer *r)
 {
-    free(r->color);
+    if (r->own_color)
+        free(r->color);
     free(r->depth);
     r->color = nullptr;
     r->depth = nullptr;
@@ -799,9 +816,9 @@ static int collect(const Meshes *m, int16_t *out)
 
 /* ---- the frame ---------------------------------------------------------------------------------- */
 
-void render_frame(Renderer *r, const World *w, const Meshes *m, const Camera *cam, const int *target)
+/* under water or in the air: the fog */
+static void atmosphere(Renderer *r, const World *w, const Camera *cam)
 {
-    setup(r, cam);
     r->underwater = world_get(w, (int)floorf(cam->x), (int)floorf(cam->y), (int)floorf(cam->z)) == B_WATER;
     if (r->underwater)
     {
@@ -815,6 +832,12 @@ void render_frame(Renderer *r, const World *w, const Meshes *m, const Camera *ca
         s_fog_start = FOG_START;
         s_fog_scale = 255.0f / (FOG_END - FOG_START);
     }
+}
+
+void render_frame(Renderer *r, const World *w, const Meshes *m, const Camera *cam, const int *target)
+{
+    setup(r, cam);
+    atmosphere(r, w, cam);
     s_tris = s_quads = s_rows = s_pixels = 0;
     uint64_t t0 = crtos_time_us();
     sky(r->underwater);
@@ -880,4 +903,679 @@ void render_ray(const Renderer *r, const Camera *cam, float px, float py, float 
     len = 1.0f / sqrtf(len);
     for (int i = 0; i < 3; i++)
         dir[i] *= len;
+}
+
+/* ---- the accelerator ---------------------------------------------------------------------------- */
+
+/*
+ * The same faces drawn by the accelerator (GPU2D_CAP_PRIMS, gfx_gpu_prims): each one a
+ * quadrilateral textured in perspective by the GPU itself (the matrix from pixel to texel comes
+ * from the face's plane), and over it its light and fog - a 2 x 2 texture stretched smoothly
+ * across the face, premultiplied: the fog's colour added, the face darkened. Cut-out faces
+ * (leaves, glass) take a texture lit as a whole instead (the light would darken what shows
+ * through their holes), water a see-through one and its light over it.
+ *
+ * There is no depth buffer: the faces go the farthest first, in an order that is exact for a
+ * world of blocks. A face is seen through the cell of air in front of it, and a ray of sight
+ * passes cells farther and farther along each axis; so the cells' distances in layers of y
+ * order everything, and in a layer the horizontal faces (which can only be seen from above or
+ * below the layer) come before the upright ones, ordered by their distance in x and z. That
+ * needs upright faces of one block each: the merged ones are drawn block by block (horizontal
+ * ones stay merged). Water drawn in the same order is blended right.
+ */
+
+#define G_FACES 12000                 /* drawn at most */
+#define G_PRIMS (2 * G_FACES + 64)
+#define G_LEVELS 8                    /* light levels of the lit cut-out textures */
+#define G_SKY_MAX 1024                /* rows of the sky texture */
+#define G_GUARD 1.0f                  /* points stay within a screen beyond each edge */
+
+enum { GT_BLOCK, GT_ALPHA, GT_LIGHT, GT_SKY, GT_MISC, GT_COUNT };
+enum { GM_OUTLINE, GM_SUN };
+enum { K_SOLID, K_CUTOUT, K_WATER, K_OCEAN };
+
+/* a face to draw: a copy of its quad (read in order from the sections; through a pointer in
+ * the faces' order it missed the data cache) */
+struct FaceRef
+{
+    Quad q;          /* (the ocean: q.x, q.z the square's corner / 8) */
+    uint8_t i, j;    /* the block of a merged upright face; 255: the whole face */
+    uint8_t kind;
+};
+
+static gfx_shmem *s_gmem;
+static gfx_texarray s_garr[GT_COUNT];
+static uint32_t *s_glight;           /* 2 x 2 ARGB8888 a face */
+static uint16_t *s_gsky;
+static gpu2d_prim *s_gp;
+static int16_t *s_grows;             /* the rows each primitive reaches (for the driver) */
+static int s_gn, s_gnlight;
+static FaceRef *s_gf;
+static uint32_t *s_gorder;           /* key << 14 | index of the face, the farthest first */
+
+static uint32_t argb_scale(uint32_t c, uint32_t k) /* k: 0..256 */
+{
+    uint32_t rb = ((c & 0xFF00FFu) * k >> 8) & 0xFF00FFu, g = ((c & 0x00FF00u) * k >> 8) & 0x00FF00u;
+    return (c & 0xFF000000u) | rb | g;
+}
+
+bool render_gpu_init(void)
+{
+    if (s_gmem)
+        return true;
+    if (!(gfx_gpu_caps() & GPU2D_CAP_PRIMS))
+        return false;
+    /* the textures in one piece of shared memory */
+    size_t at = 0;
+    size_t o_block = at;
+    at += (size_t)(T_COUNT + 1) * 512u;          /* RGB565 16 x 16, and the ocean */
+    size_t o_alpha = at;
+    at += (size_t)T_COUNT * G_LEVELS * 1024u;    /* ARGB8888 16 x 16 at each light level */
+    size_t o_light = at;
+    at += (size_t)G_FACES * 16u;                 /* ARGB8888 2 x 2 */
+    size_t o_sky = at;
+    at += G_SKY_MAX * 2u;                        /* RGB565 1 x rows */
+    size_t o_misc = at;
+    at += 2u * 1024u;                            /* ARGB8888 16 x 16 */
+    s_gmem = gfx_shmem_create(at);
+    s_gp = (gpu2d_prim *)memalign(32, sizeof(gpu2d_prim) * G_PRIMS); /* (a head in one cache line) */
+    s_grows = (int16_t *)malloc(sizeof(int16_t) * 2u * G_PRIMS);
+    s_gf = (FaceRef *)malloc(sizeof(FaceRef) * G_FACES);
+    s_gorder = (uint32_t *)malloc(sizeof(uint32_t) * G_FACES);
+    if (!s_gmem || !s_gp || !s_grows || !s_gf || !s_gorder)
+    {
+        gfx_shmem_free(s_gmem);
+        free(s_gp);
+        free(s_grows);
+        free(s_gf);
+        free(s_gorder);
+        s_gmem = nullptr;
+        return false;
+    }
+    uint8_t *base = (uint8_t *)s_gmem->p;
+    uint16_t *block = (uint16_t *)(base + o_block);
+    for (int t = 0; t < T_COUNT; t++)
+        memcpy(block + t * 256, g_tex565[t], 512);
+    memcpy(block + T_COUNT * 256, s_ocean, 512);
+    uint32_t *alpha = (uint32_t *)(base + o_alpha);
+    for (int t = 0; t < T_COUNT; t++)
+        for (int l = 0; l < G_LEVELS; l++)
+            for (int i = 0; i < 256; i++)
+            {
+                uint32_t c = g_tex[t][i];
+                uint32_t a = !(c >> 24) ? 0u : t == T_WATER ? WATER_ALPHA * 255u / 32u : 255u;
+                alpha[(t * G_LEVELS + l) * 256 + i] = argb_scale((c & 0xFFFFFFu) | a << 24, 256u * (uint32_t)(l + 1) / G_LEVELS);
+            }
+    s_glight = (uint32_t *)(base + o_light);
+    s_gsky = (uint16_t *)(base + o_sky);
+    uint32_t *misc = (uint32_t *)(base + o_misc);
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++)
+        {
+            misc[GM_OUTLINE * 256 + y * 16 + x] = 0xFF101010u;
+            bool core = x >= 3 && x <= 12 && y >= 3 && y <= 12;
+            misc[GM_SUN * 256 + y * 16 + x] = core ? 0xFFFFF8D8u : (14u * 255u / 32u) << 24 | 0xFFF4C8u;
+        }
+    int sh = s_gmem->shm;
+    s_garr[GT_BLOCK] = {sh, o_block, 16, 16, 32, GPU2D_FMT_RGB565, T_COUNT + 1};
+    s_garr[GT_ALPHA] = {sh, o_alpha, 16, 16, 64, GPU2D_FMT_ARGB8888, T_COUNT * G_LEVELS};
+    s_garr[GT_LIGHT] = {sh, o_light, 2, 2, 8, GPU2D_FMT_ARGB8888, G_FACES};
+    s_garr[GT_SKY] = {sh, o_sky, 1, G_SKY_MAX, 2, GPU2D_FMT_RGB565, 1};
+    s_garr[GT_MISC] = {sh, o_misc, 16, 16, 64, GPU2D_FMT_ARGB8888, 2};
+    return true;
+}
+
+/* a new primitive (null: no room) */
+static gpu2d_prim *gprim(int tex, int layer, int flags, int blend)
+{
+    if (s_gn >= G_PRIMS)
+        return nullptr;
+    gpu2d_prim *p = &s_gp[s_gn++];
+    p->flags = (uint8_t)flags;
+    p->blend = (uint8_t)blend;
+    p->tex = (uint8_t)tex;
+    p->reserved = 0;
+    p->layer = (uint16_t)layer;
+    p->reserved2 = 0;
+    return p;
+}
+
+/* rounded to the nearest (a call of the C library's lrintf took as long as the rest) */
+static inline int iround(float v)
+{
+    return (int)(v < 0 ? v - 0.5f : v + 0.5f);
+}
+
+static inline int16_t fx4(float v)
+{
+    return (int16_t)iround(v * 16.0f);
+}
+
+/* a rectangle of the screen (x0, y0)-(x1, y1) with texel (u0, v0) at its first corner and
+ * (du, dv) texels a pixel */
+static void grect(int tex, int layer, int blend, float x0, float y0, float x1, float y1, float u0, float v0, float du,
+                  float dv)
+{
+    gpu2d_prim *p = gprim(tex, layer, GPU2D_PRIM_QUAD, blend);
+    if (!p)
+        return;
+    s_grows[2 * (s_gn - 1)] = (int16_t)floorf(y0) - 1;
+    s_grows[2 * (s_gn - 1) + 1] = (int16_t)ceilf(y1) + 1;
+    const float xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
+    for (int k = 0; k < 4; k++)
+    {
+        p->x[k] = fx4(xs[k]);
+        p->y[k] = fx4(ys[k]);
+    }
+    const float m[9] = {du, 0, u0 - x0 * du, 0, dv, v0 - y0 * dv, 0, 0, 1};
+    memcpy(p->m, m, sizeof(m));
+}
+
+static void gsky(bool underwater)
+{
+    int h = s_h < G_SKY_MAX ? s_h : G_SKY_MAX;
+    static const float SUN[3] = {0.42f, 0.72f, -0.55f};
+    int horizon[3] = {192, 216, 242}, zenith[3] = {98, 150, 228};
+    for (int y = 0; y < h; y++)
+    {
+        if (underwater)
+        {
+            s_gsky[y] = rgb565(22, 52, 110);
+            continue;
+        }
+        float d = (s_cy - ((float)y + 0.5f)) / s_fy;
+        float e = (s_up.y * d + s_fwd.y) / sqrtf(1.0f + d * d);
+        float t = e <= 0 ? 0 : sqrtf(e);
+        t = t > 1 ? 1 : t;
+        s_gsky[y] = rgb565((uint32_t)(horizon[0] + (zenith[0] - horizon[0]) * t),
+                           (uint32_t)(horizon[1] + (zenith[1] - horizon[1]) * t),
+                           (uint32_t)(horizon[2] + (zenith[2] - horizon[2]) * t));
+    }
+    grect(GT_SKY, 0, GPU2D_PRIM_COPY, 0, 0, (float)s_w, (float)s_h, 0.5f, 0, 0, 1.0f);
+    if (underwater)
+        return;
+    float sx = SUN[0] * s_right.x + SUN[1] * s_right.y + SUN[2] * s_right.z;
+    float sy = SUN[0] * s_up.x + SUN[1] * s_up.y + SUN[2] * s_up.z;
+    float sz = SUN[0] * s_fwd.x + SUN[1] * s_fwd.y + SUN[2] * s_fwd.z;
+    if (sz < 0.2f)
+        return;
+    float px = s_cx + s_fx * sx / sz, py = s_cy - s_fy * sy / sz, r = s_fx * 0.06f + 2.0f, size = 2.0f * r + 5.0f;
+    if (px + size < 0 || px - size > (float)s_w || py + size < 0 || py - size > (float)s_h)
+        return;
+    grect(GT_MISC, GM_SUN, GPU2D_PRIM_ALPHA, px - size / 2, py - size / 2, px + size / 2, py + size / 2, 0, 0,
+          16.0f / size, 16.0f / size);
+}
+
+/* ---- the order ---- */
+
+static int s_gcount;
+
+/* the corners of face @f in camera space; *@tw, *@th: texels across */
+static void gcorners(const FaceRef &f, float c[4][3], float *tw, float *th)
+{
+    const Quad *q = &f.q;
+    if (f.kind == K_OCEAN)
+    {
+        static const int X[4] = {0, 8, 8, 0}, Z[4] = {0, 0, 8, 8};
+        int x0 = q->x * 8, z0 = q->z * 8; /* (+ OCEAN_RING) */
+        for (int k = 0; k < 4; k++)
+        {
+            const V3 &a = s_ax[x0 + X[k]], &b = s_ay[SEA_LEVEL], &cc = s_az[z0 + Z[k]];
+            c[k][0] = a.x + b.x + cc.x;
+            c[k][1] = a.y + b.y + cc.y - 0.125f * s_up.y;
+            c[k][2] = a.z + b.z + cc.z - 0.125f * s_fwd.y;
+        }
+        *tw = *th = 8 * 16.0f;
+        return;
+    }
+    const FaceDef *fd = &g_faces[q->face];
+    bool low = q->flags & Q_LOW;
+    int ox = q->x + fd->o[0], oy = q->y + fd->o[1], oz = q->z + fd->o[2];
+    int u0 = 0, v0 = 0, u1 = q->w, v1 = q->h;
+    if (f.i != 255)
+    {
+        u0 = f.i;
+        v0 = f.j;
+        u1 = u0 + 1;
+        v1 = v0 + 1;
+    }
+    for (int k = 0; k < 4; k++)
+    {
+        int du = CA[k] ? u1 : u0, dv = CB[k] ? v1 : v0;
+        int x = ox + du * fd->u[0] + dv * fd->v[0];
+        int y = oy + du * fd->u[1] + dv * fd->v[1];
+        int z = oz + du * fd->u[2] + dv * fd->v[2];
+        const V3 &a = s_ax[x + OCEAN_RING], &b = s_ay[y], &cc = s_az[z + OCEAN_RING];
+        c[k][0] = a.x + b.x + cc.x;
+        c[k][1] = a.y + b.y + cc.y;
+        c[k][2] = a.z + b.z + cc.z;
+        if (low)
+        {
+            c[k][1] -= 0.125f * s_up.y;
+            c[k][2] -= 0.125f * s_fwd.y;
+        }
+    }
+    *tw = 16.0f * (float)(u1 - u0);
+    *th = 16.0f * (float)(v1 - v0);
+}
+
+/* a face in view to the list, with its key */
+static void gadd(const FaceRef &f, int ex, int ey, int ez)
+{
+    if (s_gcount >= G_FACES)
+        return;
+    float c[4][3], tw, th;
+    gcorners(f, c, &tw, &th);
+    CV cv[4];
+    for (int k = 0; k < 4; k++)
+    {
+        cv[k].x = c[k][0];
+        cv[k].y = c[k][1];
+        cv[k].z = c[k][2];
+    }
+    if (outside(cv))
+        return;
+    uint32_t key;
+    const Quad *q = &f.q;
+    if (f.kind == K_OCEAN)
+    {
+        key = (uint32_t)abs(SEA_LEVEL - ey) << 10 | 1023u;
+    }
+    else
+    {
+        const FaceDef *fd = &g_faces[q->face];
+        int ay = q->y + fd->n[1];
+        if (f.i == 255)
+        {
+            key = (uint32_t)abs(ay - ey) << 10 | 1023u; /* horizontal: first in its layer */
+        }
+        else
+        {
+            int ax = q->x + f.i * fd->u[0] + f.j * fd->v[0] + fd->n[0];
+            int az = q->z + f.i * fd->u[2] + f.j * fd->v[2] + fd->n[2];
+            ay += f.i * fd->u[1] + f.j * fd->v[1];
+            int d = abs(ax - ex) + abs(az - ez);
+            key = (uint32_t)abs(ay - ey) << 10 | (uint32_t)(d > 1022 ? 1022 : d);
+        }
+    }
+    s_gorder[s_gcount] = key << 14 | (uint32_t)s_gcount; /* (G_FACES < 2^14, the key < 2^17) */
+    s_gf[s_gcount++] = f;
+}
+
+static void gadd_quad(const Quad *q, uint8_t kind, int ex, int ey, int ez)
+{
+    if (q->face == 2 || q->face == 3 || (q->w == 1 && q->h == 1))
+    {
+        gadd({*q, (uint8_t)(q->face == 2 || q->face == 3 ? 255 : 0), 0, kind}, ex, ey, ez);
+        return;
+    }
+    for (int j = 0; j < q->h; j++)
+        for (int i = 0; i < q->w; i++)
+            gadd({*q, (uint8_t)i, (uint8_t)j, kind}, ex, ey, ez);
+}
+
+/* the farthest first: by layer, then by the rest of the key - indices with their keys, which
+ * the data cache holds (moving the faces themselves missed it at every step) */
+static void gsort(void)
+{
+    std::sort(s_gorder, s_gorder + s_gcount, [](uint32_t a, uint32_t b) { return a > b; });
+}
+
+/* ---- a face ---- */
+
+/* the polygon of camera-space points @in (n) clipped by the plane a.p >= b (a 4th coordinate:
+ * the plane's value at the point is a[0] x + a[1] y + a[2] z) */
+static int gclip(const float (*in)[3], int n, float (*out)[3], float ax, float ay, float az, float b)
+{
+    int m = 0;
+    for (int i = 0; i < n; i++)
+    {
+        const float *p = in[i], *q = in[(i + 1) % n];
+        float dp = ax * p[0] + ay * p[1] + az * p[2] - b, dq = ax * q[0] + ay * q[1] + az * q[2] - b;
+        if (dp >= 0)
+        {
+            memcpy(out[m++], p, sizeof(float) * 3);
+        }
+        if ((dp >= 0) != (dq >= 0))
+        {
+            float t = dp / (dp - dq);
+            for (int a = 0; a < 3; a++)
+                out[m][a] = p[a] + (q[a] - p[a]) * t;
+            m++;
+        }
+    }
+    return m;
+}
+
+/* the matrix from pixel to texel of the plane through @o with @u, @v per texel (camera
+ * space): the inverse (adjugate) of pixel ~ K (o + s u + t v) */
+static void gmatrix(const float *o, const float *u, const float *v, float *m)
+{
+    /* K A, A = [u v o] by columns, K = [fx 0 cx; 0 -fy cy; 0 0 1] */
+    float a[3][3];
+    const float *col[3] = {u, v, o};
+    for (int c = 0; c < 3; c++)
+    {
+        a[0][c] = s_fx * col[c][0] + s_cx * col[c][2];
+        a[1][c] = -s_fy * col[c][1] + s_cy * col[c][2];
+        a[2][c] = col[c][2];
+    }
+    m[0] = a[1][1] * a[2][2] - a[1][2] * a[2][1];
+    m[1] = a[0][2] * a[2][1] - a[0][1] * a[2][2];
+    m[2] = a[0][1] * a[1][2] - a[0][2] * a[1][1];
+    m[3] = a[1][2] * a[2][0] - a[1][0] * a[2][2];
+    m[4] = a[0][0] * a[2][2] - a[0][2] * a[2][0];
+    m[5] = a[0][2] * a[1][0] - a[0][0] * a[1][2];
+    m[6] = a[1][0] * a[2][1] - a[1][1] * a[2][0];
+    m[7] = a[0][1] * a[2][0] - a[0][0] * a[2][1];
+    m[8] = a[0][0] * a[1][1] - a[0][1] * a[1][0];
+    float det = a[0][0] * m[0] + a[0][1] * m[3] + a[0][2] * m[6];
+    float k = det < 0 ? -1.0f : 1.0f; /* (the divisor positive in front) */
+    float big = 0;
+    for (int i = 0; i < 9; i++)
+        big = fmaxf(big, fabsf(m[i]));
+    k /= big > 0 ? big : 1.0f; /* (numbers of a size the GPU's floats like) */
+    for (int i = 0; i < 9; i++)
+        m[i] *= k;
+}
+
+static void gface(const FaceRef &f)
+{
+    float c[4][3];          /* the corners, camera space */
+    float tw, th;           /* texels across */
+    uint8_t light[4] = {250, 250, 250, 250};
+    int tex, layer, blend;
+    bool lit = true;        /* the light texture over it */
+    gcorners(f, c, &tw, &th);
+    const Quad *q = &f.q;
+    if (f.kind == K_OCEAN)
+    {
+        tex = GT_BLOCK;
+        layer = T_COUNT;
+        blend = GPU2D_PRIM_COPY;
+    }
+    else
+    {
+        memcpy(light, q->light, 4);
+        if (f.kind == K_SOLID)
+        {
+            tex = GT_BLOCK;
+            layer = q->tex;
+            blend = GPU2D_PRIM_COPY;
+        }
+        else
+        {
+            int l = f.kind == K_WATER ? 255 : (light[0] + light[1] + light[2] + light[3]) / 4;
+            tex = GT_ALPHA;
+            layer = q->tex * G_LEVELS + (l * G_LEVELS / 256 < G_LEVELS ? l * G_LEVELS / 256 : G_LEVELS - 1);
+            blend = GPU2D_PRIM_ALPHA;
+            lit = f.kind == K_WATER;
+        }
+    }
+    CV cv[4]; /* (for the fog) */
+    for (int k = 0; k < 4; k++)
+    {
+        cv[k].x = c[k][0];
+        cv[k].y = c[k][1];
+        cv[k].z = c[k][2];
+    }
+    s_quads++; /* (in view: gadd() saw to it) */
+    /* the texture's plane: texel (s, t) at o + s u + t v, a little inside the edges (the
+     * texture repeats: an edge pixel must not take the texel across) */
+    float e = TEX_EDGE;
+    float u[3], v[3], o[3];
+    for (int a = 0; a < 3; a++)
+    {
+        u[a] = (c[1][a] - c[0][a]) / (tw - 2 * e);
+        v[a] = (c[3][a] - c[0][a]) / (th - 2 * e);
+        o[a] = c[0][a] - e * (u[a] + v[a]);
+    }
+    float m[9];
+    gmatrix(o, u, v, m);
+    /* clipped at the near plane and the guard band (the points stay within 12.4 fixed point) */
+    float pa[10][3], pb[10][3];
+    memcpy(pa, c, sizeof(c));
+    int n = 4;
+    float gx = (1.0f + 2.0f * G_GUARD) * s_kx, gy = (1.0f + 2.0f * G_GUARD) * s_ky;
+    bool far_in = true;
+    for (int k = 0; k < 4; k++)
+        far_in = far_in && c[k][2] >= Z_NEAR && fabsf(c[k][0]) <= gx * c[k][2] && fabsf(c[k][1]) <= gy * c[k][2];
+    if (!far_in)
+    {
+        n = gclip(pa, n, pb, 0, 0, 1, Z_NEAR);
+        n = gclip(pb, n, pa, -1, 0, gx, 0);
+        n = gclip(pa, n, pb, 1, 0, gx, 0);
+        n = gclip(pb, n, pa, 0, -1, gy, 0);
+        n = gclip(pa, n, pb, 0, 1, gy, 0);
+        memcpy(pa, pb, sizeof(pa));
+        if (n < 3)
+            return;
+    }
+    int16_t sx[10], sy[10];
+    for (int k = 0; k < n; k++)
+    {
+        float iz = 1.0f / pa[k][2];
+        sx[k] = fx4(s_cx + s_fx * pa[k][0] * iz);
+        sy[k] = fx4(s_cy - s_fy * pa[k][1] * iz);
+    }
+    /* light and fog: premultiplied, the fog's colour added and the face darkened */
+    int lightl = -1;
+    if (lit)
+    {
+        float fg[4];
+        bool any = false;
+        for (int k = 0; k < 4; k++)
+        {
+            fg[k] = fog_of(&cv[k]);
+            any = any || fg[k] > 0 || light[k] < 250;
+        }
+        if (any && s_gnlight < G_FACES)
+        {
+            lightl = s_gnlight++;
+            uint32_t *t = s_glight + lightl * 4;
+            uint32_t fr = (s_fog >> 11) & 0x1Fu, fgc = (s_fog >> 21) & 0x3Fu, fb = s_fog & 0x1Fu; /* (spread) */
+            fr = fr << 3 | fr >> 2;
+            fgc = fgc << 2 | fgc >> 4;
+            fb = fb << 3 | fb >> 2;
+            static const int AT[4] = {0, 1, 3, 2};
+            for (int k = 0; k < 4; k++)
+            {
+                float f = fg[k] / 255.0f, l = (float)light[k] / 255.0f * (1.0f - f);
+                uint32_t a = (uint32_t)iround((1.0f - l) * 255.0f);
+                uint32_t r = (uint32_t)iround((float)fr * f), g = (uint32_t)iround((float)fgc * f),
+                         b = (uint32_t)iround((float)fb * f);
+                t[AT[k]] = a << 24 | r << 16 | g << 8 | b;
+            }
+        }
+    }
+    /* a fan of quadrilaterals (and a triangle) */
+    for (int k0 = 1; k0 + 1 < n; k0 += 2)
+    {
+        bool quad = k0 + 2 < n;
+        gpu2d_prim *p = gprim(tex, layer, (quad ? GPU2D_PRIM_QUAD : 0) | GPU2D_PRIM_REPEAT, blend);
+        if (!p)
+            return;
+        const int idx[4] = {0, k0, k0 + 1, quad ? k0 + 2 : 0};
+        int lo = sy[0], hi = sy[0];
+        for (int k = 0; k < 4; k++)
+        {
+            p->x[k] = sx[idx[k]];
+            p->y[k] = sy[idx[k]];
+            lo = sy[idx[k]] < lo ? sy[idx[k]] : lo;
+            hi = sy[idx[k]] > hi ? sy[idx[k]] : hi;
+        }
+        s_grows[2 * (s_gn - 1)] = (int16_t)((lo >> 4) - 1);
+        s_grows[2 * (s_gn - 1) + 1] = (int16_t)((hi >> 4) + 2);
+        memcpy(p->m, m, sizeof(m));
+        s_tris++;
+        if (lightl >= 0)
+        {
+            /* the light texture's texel centres at the corners: u' = (s - e) / (tw - 2 e) + 0.5 */
+            gpu2d_prim *l = gprim(GT_LIGHT, lightl, GPU2D_PRIM_AGAIN | GPU2D_PRIM_SMOOTH, GPU2D_PRIM_PREMUL);
+            if (!l)
+                return;
+            s_grows[2 * (s_gn - 1)] = s_grows[2 * (s_gn - 2)]; /* (the rows of the one before) */
+            s_grows[2 * (s_gn - 1) + 1] = s_grows[2 * (s_gn - 2) + 1];
+            l->again[0] = 1.0f / (tw - 2 * e);
+            l->again[1] = 0.5f - e * l->again[0];
+            l->again[2] = 1.0f / (th - 2 * e);
+            l->again[3] = 0.5f - e * l->again[2];
+            s_tris++;
+        }
+        if (!quad)
+            break;
+    }
+}
+
+/* ---- the outline of the aimed-at block ---- */
+
+static void gline(const float *a, const float *b)
+{
+    float pa[3] = {a[0], a[1], a[2]}, pb[3] = {b[0], b[1], b[2]};
+    if (pa[2] < Z_NEAR && pb[2] < Z_NEAR)
+        return;
+    if (pa[2] < Z_NEAR || pb[2] < Z_NEAR)
+    {
+        float *p = pa[2] < Z_NEAR ? pa : pb;
+        const float *q = pa[2] < Z_NEAR ? pb : pa;
+        float t = (Z_NEAR - p[2]) / (q[2] - p[2]);
+        for (int i = 0; i < 3; i++)
+            p[i] += (q[i] - p[i]) * t;
+    }
+    float xa = s_cx + s_fx * pa[0] / pa[2], ya = s_cy - s_fy * pa[1] / pa[2];
+    float xb = s_cx + s_fx * pb[0] / pb[2], yb = s_cy - s_fy * pb[1] / pb[2];
+    float dx = xb - xa, dy = yb - ya, len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.5f || fmaxf(fmaxf(fabsf(xa), fabsf(xb)), fmaxf(fabsf(ya), fabsf(yb))) > 2000.0f)
+        return;
+    float nx = -dy / len * 0.6f, ny = dx / len * 0.6f;
+    gpu2d_prim *p = gprim(GT_MISC, GM_OUTLINE, GPU2D_PRIM_QUAD, GPU2D_PRIM_COPY);
+    if (!p)
+        return;
+    s_grows[2 * (s_gn - 1)] = (int16_t)(fminf(ya, yb) - 2.0f);
+    s_grows[2 * (s_gn - 1) + 1] = (int16_t)(fmaxf(ya, yb) + 2.0f);
+    const float xs[4] = {xa + nx, xb + nx, xb - nx, xa - nx}, ys[4] = {ya + ny, yb + ny, yb - ny, ya - ny};
+    for (int k = 0; k < 4; k++)
+    {
+        p->x[k] = fx4(xs[k]);
+        p->y[k] = fx4(ys[k]);
+    }
+    const float m[9] = {0, 0, 8.0f, 0, 0, 8.0f, 0, 0, 1.0f};
+    memcpy(p->m, m, sizeof(m));
+}
+
+/* the edges of the block's faces that face the eye (there is no depth test for the others) */
+static void goutline(const int *t)
+{
+    const float e = 0.004f;
+    const float eye[3] = {s_ex, s_ey, s_ez};
+    float c[8][3];
+    for (int i = 0; i < 8; i++)
+        to_camera((float)t[0] + ((i & 1) ? 1.0f + e : -e), (float)t[1] + ((i & 2) ? 1.0f + e : -e),
+                  (float)t[2] + ((i & 4) ? 1.0f + e : -e), c[i]);
+    static const int E[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    for (int i = 0; i < 12; i++)
+    {
+        int a = E[i][0], b = E[i][1], along = (a ^ b) == 1 ? 0 : (a ^ b) == 2 ? 1 : 2;
+        bool seen = false;
+        for (int k = 0; k < 3; k++)
+        {
+            if (k == along)
+                continue;
+            int side = (a >> k) & 1;
+            seen = seen || (side ? eye[k] > (float)t[k] + 1.0f : eye[k] < (float)t[k]);
+        }
+        if (seen)
+            gline(c[a], c[b]);
+    }
+}
+
+/* ---- the frame ---- */
+
+static bool facing(const Quad *q)
+{
+    bool low = q->flags & Q_LOW;
+    switch (q->face)
+    {
+    case 0: return s_ex < (float)q->x;
+    case 1: return s_ex > (float)(q->x + 1);
+    case 2: return s_ey < (float)q->y;
+    case 3: return s_ey > (float)q->y + (low ? 0.875f : 1.0f);
+    case 4: return s_ez < (float)q->z;
+    default: return s_ez > (float)(q->z + 1);
+    }
+}
+
+bool render_frame_gpu(Renderer *r, gfx_buffer *view, const World *w, const Meshes *m, const Camera *cam,
+                      const int *target)
+{
+    if (!view || !render_gpu_init())
+        return false;
+    setup(r, cam);
+    atmosphere(r, w, cam);
+    s_tris = s_quads = s_rows = s_pixels = 0;
+    s_gn = 0;
+    s_gnlight = 0;
+    s_gcount = 0;
+    uint64_t t0 = crtos_time_us();
+    gsky(r->underwater);
+
+    static int16_t vis[SECTION_COUNT];
+    int nvis = collect(m, vis);
+    r->sections = nvis;
+    int ex = (int)floorf(s_ex), ey = (int)floorf(s_ey), ez = (int)floorf(s_ez);
+    for (int i = 0; i < nvis; i++)
+    {
+        int idx = vis[i];
+        const Section *s = &m->s[idx];
+        float x0 = (float)(idx % SECTIONS_X * SECTION), z0 = (float)((idx / SECTIONS_X) % SECTIONS_Z * SECTION);
+        float y0 = (float)(idx / (SECTIONS_X * SECTIONS_Z) * SECTION);
+        const bool away[6] = {s_ex >= x0 + 15.0f, s_ex <= x0 + 1.0f, s_ey >= y0 + 15.0f,
+                              s_ey <= y0 + 1.0f,  s_ez >= z0 + 15.0f, s_ez <= z0 + 1.0f};
+        for (int d = 0; d < 6; d++)
+        {
+            if (away[d])
+                continue;
+            const Quad *q = s->solid[d];
+            for (int k = s->nsolid[d]; k > 0; k--, q++)
+                if (facing(q))
+                    gadd_quad(q, (q->flags & Q_CUTOUT) ? K_CUTOUT : K_SOLID, ex, ey, ez);
+        }
+        for (int k = 0; k < s->nwater; k++)
+            if (facing(&s->water[k]))
+                gadd_quad(&s->water[k], K_WATER, ex, ey, ez);
+    }
+    if (s_ey > (float)SEA_LEVEL - 0.125f)
+        for (int cz = -OCEAN_RING; cz < WORLD_Z + OCEAN_RING; cz += 8)
+            for (int cx = -OCEAN_RING; cx < WORLD_X + OCEAN_RING; cx += 8)
+            {
+                if (cx >= 0 && cx < WORLD_X && cz >= 0 && cz < WORLD_Z)
+                    continue;
+                float dx = (float)cx + 4.0f - s_ex, dz = (float)cz + 4.0f - s_ez;
+                if (dx * dx + dz * dz > (VIEW_DIST + 6.0f) * (VIEW_DIST + 6.0f))
+                    continue;
+                Quad oq;
+                memset(&oq, 0, sizeof(oq));
+                oq.x = (uint8_t)((cx + OCEAN_RING) / 8);
+                oq.z = (uint8_t)((cz + OCEAN_RING) / 8);
+                gadd({oq, 255, 0, K_OCEAN}, ex, ey, ez);
+            }
+    gsort();
+    uint64_t t1 = crtos_time_us();
+    for (int i = 0; i < s_gcount; i++)
+        gface(s_gf[s_gorder[i] & 0x3FFFu]);
+    if (target)
+        goutline(target);
+    uint64_t t2 = crtos_time_us();
+    int rc = gfx_gpu_prims(view, 0, 0, s_w, s_h, GPU2D_PRIMS_DISCARD, s_gp, s_grows, (unsigned)s_gn, s_garr, GT_COUNT);
+    static int s_failed;
+    if (rc && s_failed++ < 3)
+        printf("voxel: the GPU did not draw (%s)\n", strerror(errno));
+    r->us_sky = (uint32_t)(t1 - t0);
+    r->us_solid = (uint32_t)(t2 - t1);
+    r->us_water = (uint32_t)(crtos_time_us() - t2);
+    r->quads = s_quads;
+    r->triangles = s_gn;
+    r->rows = 0;
+    r->pixels = 0;
+    return rc == 0;
 }

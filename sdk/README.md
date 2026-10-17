@@ -3,7 +3,8 @@
 Zestaw do pisania programów dla CRTOS **poza** drzewem źródeł systemu: we własnym katalogu,
 we własnym repozytorium. Nie potrzebujesz źródeł jądra ani sterowników.
 
-SDK tworzy polecenie `crtos sdk` w drzewie źródeł CRTOS (wynik trafia do `build/sdk`).
+SDK tworzy polecenie `crtos sdk` w drzewie źródeł CRTOS (wynik trafia do `build/sdk`, a dla
+płytki innej niż domyślna do `build-<płytka>/sdk`, np. `build-stm32h7s78dk/sdk`).
 Skopiuj ten katalog, gdzie chcesz.
 
 ## Co jest w środku
@@ -35,6 +36,11 @@ crtos setup
 `crtos doctor` pokazuje, co jest zainstalowane i czy płytka odpowiada.
 
 Na płytce musi działać CRTOS, najlepiej zbudowany z tych samych źródeł co SDK.
+
+Płytkę, z którą pracuje `crtos` (sonda, port szeregowy), wybiera w SDK zmienna środowiska
+`CRTOS_BOARD`: `evkbimxrt1050` (NXP MIMXRT1050-EVKB, domyślnie) albo `stm32h7s78dk` (ST
+STM32H7S78-DK). Plik `.crtos-board`, który zapisuje `crtos board`, działa tylko w drzewie
+źródeł CRTOS.
 
 ## Pierwszy program
 

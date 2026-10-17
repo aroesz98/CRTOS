@@ -1,6 +1,7 @@
 # CRTOS
 
-System operacyjny dla płytki **NXP MIMXRT1050-EVKB** (i.MX RT1052, Cortex-M7 600 MHz).
+System operacyjny dla płytek **NXP MIMXRT1050-EVKB** (i.MX RT1052, Cortex-M7 600 MHz)
+i **ST STM32H7S78-DK** (STM32H7S7, Cortex-M7 600 MHz, akcelerator 2D NeoChrom).
 Ma wielozadaniowe jądro z ochroną pamięci (MPU), sterowniki ładowane z karty SD, okna na
 ekranie dotykowym z klawiaturą ekranową i wyglądem ustawianym jak w Windows (skala
 interfejsu, czcionka, kolory, przezroczystość, zaokrąglenia, tapeta), powłokę przez port
@@ -67,6 +68,27 @@ Po kilku sekundach na ekranie pojawi się pulpit. Programy otwierasz przyciskiem
 Masz czytnik kart? Zamiast `crtos deploy` włóż kartę do komputera i wpisz
 `.\crtos sdcard E:` (gdzie `E:` to litera karty), a potem przełóż kartę do płytki.
 
+### Płytka STM32H7S78-DK
+
+Polecenia są te same, tylko najpierw wybierz płytkę:
+
+```
+.\crtos board stm32h7s78dk
+.\crtos build
+.\crtos flash
+.\crtos deploy
+.\crtos reboot
+```
+
+- `board` zapamiętuje wybór (plik `.crtos-board`); `.\crtos board evkbimxrt1050` wraca do
+  EVKB. Wyniki tej płytki trafiają do `build-stm32h7s78dk/`, a EVKB zostaje w `build/`.
+- Płytkę podłącz kablem USB-C do gniazda **CN1** (ST-LINK: sonda i port szeregowy konsoli).
+- `flash` potrzebuje [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
+  od ST (gdy `crtos` go nie znajdzie, wskaż go zmienną `CRTOS_STM32PROG`). Jądro trafia do
+  pamięci NOR, a za pierwszym razem także program startowy do flasha wewnętrznego układu.
+- Ile pamięci ITCM ma jądro i programy, ustawiają option bytes układu
+  ([Architektura](docs/architektura.md#stm32h7s78-dk)).
+
 ### 4. Twój pierwszy program
 
 ```
@@ -96,6 +118,7 @@ Instalacja obu: [docs/instalacja.md](docs/instalacja.md#toolchain-crtos-opcjonal
 | Polecenie | Co robi |
 |---|---|
 | `crtos doctor` | sprawdza narzędzia, sondę i płytkę |
+| `crtos board [NAZWA]` | pokazuje albo wybiera płytkę (`evkbimxrt1050`, `stm32h7s78dk`) |
 | `crtos build` | buduje cały system (albo `crtos build hello`, tylko jeden program; `--base`: bez dodatków; `--rtos`: sam RTOS z aplikacją) |
 | `crtos flash` | zapisuje jądro w pamięci flash płytki |
 | `crtos deploy` | wysyła na kartę SD płytki zmienione pliki (przez sieć albo kabel USB) |
@@ -103,6 +126,8 @@ Instalacja obu: [docs/instalacja.md](docs/instalacja.md#toolchain-crtos-opcjonal
 | `crtos new NAZWA` | nowy program z szablonu (`--console`: konsolowy, `--service`: usługa) |
 | `crtos serial` | terminal na płytce (powłoka `sh`) |
 | `crtos kmon` | monitor jądra: procesy, pamięć, sterowniki, logi |
+| `crtos sh "POLECENIE"` | polecenie powłoki płytki przez sieć, z wyjściem tutaj (bez sondy i kabla konsoli) |
+| `crtos dmesg` | log jądra przez sieć |
 | `crtos shot` | zrzut ekranu płytki do pliku PNG |
 | `crtos crash` | pokazuje ostatnią awarię programu z numerem linii w kodzie |
 | `crtos desktop` | ekran płytki w oknie komputera (zdalny pulpit: mysz, klawiatura, schowek) |
@@ -139,18 +164,19 @@ Pełna lista: `crtos --help` i [docs/polecenie-crtos.md](docs/polecenie-crtos.md
 
 | Katalog | Zawartość |
 |---|---|
-| `kernel/` | jądro: `rtos/` (rdzeń RTOS), `os/` (procesy, pliki, moduły, start z karty), `subsys/` (frameworki sterowników), obsługa płytki (`platform/evkbimxrt1050`) |
-| `drivers/` | sterowniki jako moduły jądra (`.ko`) |
+| `kernel/` | jądro: `rtos/` (rdzeń RTOS), `os/` (procesy, pliki, moduły, start z karty), `subsys/` (frameworki sterowników), obsługa płytek (`platform/evkbimxrt1050`, `platform/stm32h7s78dk` – z programem startowym w `boot/`) |
+| `drivers/` | sterowniki jako moduły jądra (`.ko`); moduły każdej płytki w `<płytka>.cmake` |
 | `system/` | system bazowy, budowany zawsze: biblioteki programów (`lib/`: `libcrtos`, `libgfx`, TFTLIB), usługi (`services/`), polecenia (`commands/`: `sh`, `edit`, `make`, `ping`, ...), programy z oknem (`apps/`: `wm`, `term`, `files`, `settings`, `sysmon`) |
 | `apps/` | programy dodatkowe: `paint`, dema, NetSurf, gry; nowe programy z `crtos new` |
 | `tests/` | testy i pomiary na płytce (`apptest`, `heaptest`, `bench`, ...) |
 | `examples/` | przykłady: programy, moduł sterownika, aplikacja RTOS (`rtos/blinky`) |
 | `rootfs/` | pliki kopiowane na kartę bez zmian (`etc/*.cfg`, certyfikaty, czcionki) |
-| `dts/` | drzewo urządzeń płytki |
+| `dts/` | drzewa urządzeń płytek |
+| `cmake/` | funkcje CMake (`crtos_module`, `crtos_app`, ...) i pliki płytek (`boards/`) |
 | `sdk/` | szablony programów i pliki SDK |
 | `toolchain/` | reguły programu CRTOS dla GCC (`crtos.specs`, `crtos-xip.ld`), `arm-crtos-gcc`, `crtos-app`; `xiplibs/`: przepis bibliotek C i C++ programów XIP; `native/`: budowa GCC na płytkę |
 | `tools/` | polecenie `crtos` i skrypty budowania |
-| `third_party/` | kod z zewnątrz, pobierany przy budowaniu: `sources.txt` wymienia repozytoria i commity (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK, newlib, biblioteki GCC; NetSurf po `crtos setup --netsurf`) |
+| `third_party/` | kod z zewnątrz, pobierany przy budowaniu: `sources.txt` wymienia repozytoria i commity (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK, newlib, biblioteki GCC; STM32CubeH7RS dla STM32H7S78-DK; NetSurf po `crtos setup --netsurf`) |
 | `patches/` | zmiany CRTOS w kodzie z zewnątrz i w GCC na płytkę ([opis](patches/README.md)) |
 | `docs/` | dokumentacja użytkownika; `docs/specyfikacja/` – dokumentacja projektowa |
 

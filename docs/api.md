@@ -492,6 +492,46 @@ Ikony programów tworzy budowanie: `crtos_app(... ICON icon.png)` zamienia kwadr
 `.app`). Menedżer okien pokazuje ją w menu programów, na pasku zadań i w pasku tytułu
 okien programu; program bez ikony dostaje `application`.
 
+**Akcelerator dla własnych obrazów.** Program, który rysuje obraz w swoim buforze (widok
+3D, ekran emulatora), może go kopiować i skalować do okna akceleratorem 2D zamiast
+procesorem. Bufor musi leżeć w pamięci współdzielonej, bo akcelerator czyta powierzchnie
+tylko przez uchwyt programu:
+
+```c
+struct gfx_buffer *b = gfx_buffer_create(256, 240, GPU2D_FMT_RGB565); /* b->s: powierzchnia */
+/* ... rysowanie w b->s ... */
+if (gfx_gpu_scale(w, x, y, 462, 434, b, 0, 0, 256, 240, GFX_GPU_SMOOTH) < 0)
+    narysuj_sam();                    /* brak /dev/gpu2d */
+```
+
+| Funkcja | Działanie |
+|---|---|
+| `gfx_buffer_create(w, h, format)`, `gfx_buffer_free(b)` | bufor w pamięci współdzielonej (szerokość do 4096, wysokość do 65535) |
+| `gfx_gpu_copy(okno, dx, dy, b, sx, sy, w, h, flagi)` | kopia prostokąta bufora do okna (`GFX_GPU_BLEND`: z przezroczystością ARGB8888) |
+| `gfx_gpu_scale(okno, dx, dy, dw, dh, b, sx, sy, sw, sh, flagi)` | prostokąt bufora rozciągnięty na prostokąt okna (`GFX_GPU_SMOOTH`: wygładzony) |
+| `gfx_gpu_fill(okno, x, y, w, h, argb)` | wypełnienie |
+| `gfx_gpu_caps()` | co akcelerator robi sam: `GPU2D_CAP_SCALE` (skalowanie; bez tego robi je jądro procesorem, tylko najbliższym pikselem i wolno), `GPU2D_CAP_PRIMS` (prymitywy 3D); 0 bez akceleratora |
+
+Każde wywołanie czeka na akcelerator. Proces mapuje najwyżej trzy obiekty pamięci
+współdzielonej naraz, w tym piksele swojego okna, więc program z oknem ma miejsce na dwa
+bufory.
+
+**Prymitywy 3D** (tylko z `GPU2D_CAP_PRIMS`, np. NeoChrom na STM32H7S78-DK):
+`gfx_gpu_prims(bufor, cx, cy, cw, ch, flagi, prymitywy, wiersze, ile, tekstury, ile_tekstur)`
+rysuje w buforze trójkąty i czworokąty (`struct gpu2d_prim` z `crtos/gpu2d.h`) po kolei,
+każdy z teksturą nałożoną w perspektywie przez macierz 3×3 z piksela na teksel. Nie ma
+bufora głębokości: ściany trzeba rysować od najdalszej. Tekstury to tablice obrazów
+(`struct gfx_texarray`: obiekt pamięci współdzielonej, przesunięcie, wymiary, krok, format,
+liczba obrazów leżących po kolei), np. w jednym obiekcie `gfx_shmem_create(rozmiar)`.
+Prymitywy leżą w zwykłej pamięci programu (tablica wyrównana do 32 bajtów). Flaga
+`GPU2D_PRIMS_DISCARD` mówi, że prymitywy pokryją cały prostokąt, więc stara zawartość nie
+jest wczytywana. Tablica `wiersze` (pierwszy i ostatni + 1 wiersz każdego prymitywu, albo
+`NULL`) przyspiesza wiele małych prymitywów. Prymityw `GPU2D_PRIM_AGAIN` nakłada drugą
+teksturę (np. światło 2×2 z filtrem) na punkty poprzedniego. Tryby mieszania:
+`GPU2D_PRIM_COPY`, `_ALPHA`, `_PREMUL`. Przykład użycia: renderer `apps/voxel`
+(`voxel_render.cpp`), test `tests/gpuprims`. NeoChrom potrzebuje ok. 2 µs na prymityw,
+niezależnie od wielkości.
+
 **Klawisze.** Klawisze przychodzą do okna, które ma fokus: z klawiatury albo z systemowej
 klawiatury ekranowej (usługa `osk`, przycisk na pasku zadań). Dla programu wyglądają tak
 samo: zwykłe zdarzenia `GFX_EV_KEY`, a Shift i Ctrl są osobnymi klawiszami. Na tekst

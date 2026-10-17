@@ -6,7 +6,7 @@
 |---|---|
 | Identyfikator | U06 |
 | Warstwa | L2 (usługi) |
-| Pliki | `system/services/httpd/httpd.c` (bez uprawnień), `system/services/deployd/deployd.c` (uprawnienia `sys`, `dev`) |
+| Pliki | `system/services/httpd/httpd.c` (bez uprawnień), `system/services/deployd/deployd.c` (uprawnienia `spawn`, `kill`, `sys`, `dev`) |
 | Porty sieciowe | `httpd`: TCP 80; `deployd`: TCP 5555 i UDP 5555 (wykrywanie) |
 
 ## 2. Odpowiedzialność
@@ -18,7 +18,9 @@
 - **deployd** (narzędzie deweloperskie): wgrywanie plików z komputera przez sieć (`crtos
   deploy`, `crtos scp`), pobieranie plików i list katalogów na komputer (`crtos scp
   board:...`), sumy CRC plików na płytce, zapis jądra do flash (`crtos flash --net`), restart;
-  wykrywanie płytek w sieci (UDP `CRTOS?`). Chroniony tokenem.
+  log jądra (`/dev/kmsg`, `crtos dmesg`) i wykonanie linii poleceń powłoki z wyjściem na
+  komputerze (`EXEC`, `crtos sh`) – dla płytki bez kabla konsoli i sondy; wykrywanie płytek
+  w sieci (UDP `CRTOS?`). Chroniony tokenem.
 
 ## 3. Wymagania
 
@@ -26,11 +28,12 @@
 |---|---|---|
 | REQ-U06-01 | `httpd` udostępnia tylko pliki pod katalogiem głównym (domyślnie `/sd/crtos/www`): ścieżki bez `/` na początku, z `/..`, `\` albo `%00` są odrzucane (400). | przegląd kodu |
 | REQ-U06-02 | `deployd` nie wykonuje żadnego polecenia przed poprawnym `AUTH` (token z `/sd/crtos/etc/deploy.token`, min. 16 znaków, porównanie w czasie niezależnym od miejsca różnicy, 1 s kary i rozłączenie za zły token); inne polecenie przed `AUTH` kończy sesję. | przegląd kodu |
-| REQ-U06-03 | `deployd` zapisuje (`PUT`, `MKDIR`, `FLASH`, `CRC`) tylko ścieżki zaczynające się od `/sd/crtos/`, `/flash0/` (system plików flash, D10) albo `/ram/`, a czyta (`GET`, `STAT`, `LIST`) tylko `/sd`, `/flash0` i `/ram` z podkatalogami; zawsze bez `/..`, `//`, `\`, krótsze niż 200 znaków (zapis: nie kończące się `/`). Ścieżka przychodzi zakodowana `%XX` (spacje), a błędny kod albo bajt 0 odrzuca ją w całości. | przegląd kodu, `crtos deploy` pliku z `build/flash0`, `crtos scp` do `/sd/snes` i `/sd/crtos/../x` (odmowa), z `/dev/console` (odmowa) |
+| REQ-U06-03 | `deployd` zapisuje (`PUT`, `MKDIR`, `FLASH`, `CRC`) tylko ścieżki zaczynające się od `/sd/crtos/`, `/flash0/` (system plików flash, D10) albo `/ram/`, a czyta (`GET`, `STAT`, `LIST`) tylko `/sd`, `/flash0` i `/ram` z podkatalogami oraz `/dev/kmsg` (log jądra, K15; innych urządzeń nie); zawsze bez `/..`, `//`, `\`, krótsze niż 200 znaków (zapis: nie kończące się `/`). Ścieżka przychodzi zakodowana `%XX` (spacje), a błędny kod albo bajt 0 odrzuca ją w całości. Tych ograniczeń nie ma `EXEC` (REQ-U06-08): powłoka dostaje uprawnienia `deployd`. | przegląd kodu, `crtos deploy` pliku z `build/flash0`, `crtos scp` do `/sd/snes` i `/sd/crtos/../x` (odmowa), z `/dev/console` (odmowa) |
 | REQ-U06-04 | Plik trafia na miejsce dopiero po odebraniu całości do `<ścieżka>.part` i zgodności CRC-32; przy błędzie plik docelowy się nie zmienia. Wyjątek: na `/flash0` stara wersja jest usuwana przed zapisem (REQ-U06-06), więc błąd zostawia brak pliku. | `crtos deploy` (każdy plik) |
 | REQ-U06-06 | Na `/flash0` `PUT` najpierw usuwa starą wersję pliku (działający z niej program zachowuje kod do końca, D10), a nowy plik zgłasza systemowi plików swój rozmiar (`FLASHFS_IOC_RESERVE`) przed danymi; brak mieszczącego ciągu bloków kończy się `ERR No space left on device` (dane odebrane i odrzucone). | `crtos toolchain install` (`cc1` i `cc1plus` po 15–16 MB, ponowne wysłanie `cc1` na miejsce starego) |
 | REQ-U06-05 | `FLASH` przekazuje obraz do `MTD_IOC_KERNEL_UPDATE` (D07), który sam go sprawdza; odmowa wraca jako `ERR`. | `crtos flash --net` (27.09.2026, także zły obraz) |
 | REQ-U06-07 | `GET` wysyła najpierw rozmiar, potem dokładnie tyle bajtów (błąd odczytu dopełnia zerami, żeby strumień poleceń się nie rozjechał) i na końcu CRC-32 danych albo `ERR`; klient odrzuca plik o innym CRC. | `crtos scp -r` katalogu z plikiem 300 KB i nazwami ze spacjami tam i z powrotem (30.09.2026): pliki identyczne |
+| REQ-U06-08 | `EXEC <linia> [sekundy]` (po `AUTH`) uruchamia `/sd/crtos/bin/sh.app -c <linia>` z uprawnieniami najwyżej takimi jak `deployd` (`spawn`, `kill`, `sys`, `dev`, bez `module`), wejściem z `/dev/null`, wyjściem i błędami w jednym potoku. Po `sekundy` (0 albo brak: 30) proces jest kończony z kodem `-ETIMEDOUT`. Odpowiedź to `OK <n>`, dokładnie n bajtów wyjścia (najwyżej pierwsze 64 KB, resztę `deployd` czyta i odrzuca) i `OK <kod wyjścia>`; błąd potoku albo uruchomienia to samo `ERR <powód>`. | przegląd kodu (17.10.2026) |
 
 ## 4. Interfejs udostępniany
 
@@ -45,16 +48,20 @@
 | `PUT <ścieżka> <rozmiar> <crc32>` + dane | zapis przez `.part`, kontrola CRC, zamiana (na `/flash0`: stara wersja usuwana najpierw, rezerwacja miejsca na podany rozmiar) |
 | `CRC <ścieżka>` | `OK <rozmiar> <crc32>` |
 | `GET <ścieżka>` | `OK <rozmiar>`, dane, `OK <crc32>` (albo `ERR ...` po danych) |
+| `GET /dev/kmsg` | log jądra, jak `dmesg` monitora: kopia z chwili otwarcia (`crtos dmesg`) |
 | `STAT <ścieżka>` | `OK <d\|f> <rozmiar> <czas>` |
 | `LIST <katalog>` | `OK <n>`, potem n linii `<d\|f> <rozmiar> <czas> <nazwa>` (nazwa zakodowana `%XX`) |
 | `MKDIR <ścieżka>` | katalog (z katalogami po drodze) |
 | `FLASH <ścieżka>` | obraz jądra z karty do `/dev/mtd0`, restart (`OK writing ...`) |
+| `EXEC <linia> [sekundy]` | `sh -c <linia>` (linia zakodowana `%XX`) najwyżej przez `sekundy` (domyślnie 30): `OK <n>`, n bajtów wyjścia (najwyżej 64 KB), `OK <kod wyjścia>` (`crtos sh`) |
 | `REBOOT`, `QUIT` | restart, koniec sesji |
 | UDP `CRTOS?` | odpowiedź `CRTOS <mac>` (nadawca poznaje adres) |
 
 ## 5. Interfejsy wymagane
 
 S05 (gniazda TCP/UDP), K13 (pliki na karcie), D07 (`/dev/mtd0`), K09 (`reboot`), L01;
+K15 (`/dev/kmsg`); `EXEC`: K08 (`crtos_spawn`, `crtos_kill`, `crtos_wait`), K12 (potok,
+`poll`), A03 (`sh`);
 `httpd`: `crtos_sys_info`, `crtos_proc_info`, `NET_IOC_IFINFO`.
 
 ## 6. Struktura statyczna
@@ -91,6 +98,13 @@ Pobieranie pliku i katalogu przez `crtos scp board:...`:
   (`rewinddir`) i wysyła je z `stat` każdego.
 - `FLASH`: obraz (do 2 MB) z karty do pamięci, `MTD_IOC_KERNEL_UPDATE` z CRC-32; wywołanie
   wraca tylko przy odmowie (inaczej płytka startuje z nowym jądrem).
+- `EXEC`: potok (`crtos_pipe`), `crtos_spawn` powłoki (wejście `/dev/null`, wyjście i błędy
+  do końca zapisu potoku); `deployd` zamyka swój koniec zapisu i czyta wyjście
+  (`poll` z terminem) do bufora 64 KB (`CHUNK`), aż powłoka się skończy (koniec potoku) albo
+  minie czas. Po czasie `crtos_kill(pid, -ETIMEDOUT)`, potem `crtos_wait` najwyżej 2 s.
+  Uprawnienia: `CAP_ALL` ograniczone przez jądro do uprawnień `deployd` (`init.cfg`).
+- `GET /dev/kmsg`: urządzenie jądra (K15) przy otwarciu kopiuje cały bufor logu, więc `GET`
+  wysyła stały rozmiar i CRC jak dla pliku.
 
 ## 9. Obsługa błędów i mechanizmy bezpieczeństwa
 
@@ -103,11 +117,16 @@ Pobieranie pliku i katalogu przez `crtos scp board:...`:
 | niezgodne CRC / błąd zapisu | `.part` usunięty, stary plik bez zmian |
 | zerwanie połączenia w trakcie | `.part` usunięty |
 | zły obraz jądra | `ERR Invalid argument` (D07) |
+| `EXEC`: brak potoku, powłoki albo uprawnienia `spawn` | `ERR <powód>` |
+| `EXEC`: polecenie trwa dłużej niż limit | proces zakończony, wyjście do tej chwili, kod `-ETIMEDOUT` |
+| `EXEC`: wyjście ponad 64 KB | odczytane do końca, wysłane pierwsze 64 KB |
 
 ## 10. Konfiguracja
 
 `httpd [-p port] [-r root] [-t wątki]`; `deployd`: `PORT` (5555), `TOKEN_FILE`, `PREFIX`
-(`/sd/crtos/`), `CHUNK` (64 KB), `MAX_KERNEL` (2 MB); wpisy w `init.cfg`.
+(`/sd/crtos/`), `CHUNK` (64 KB, także limit wyjścia `EXEC`), `MAX_KERNEL` (2 MB),
+`EXEC_SECONDS` (30); wpisy w `init.cfg` (`deployd`: `caps=spawn,kill,sys,dev` – `spawn` jest
+potrzebne dla `EXEC`, a powłoka dziedziczy te uprawnienia).
 
 ## 11. Weryfikacja
 
@@ -117,6 +136,8 @@ Pobieranie pliku i katalogu przez `crtos scp board:...`:
   katalogiem i plikiem 300 KB, pobranie go z powrotem (`diff -r`: identyczne), pobranie
   `init.cfg` (jak w `rootfs`), odmowy dla `/sd/snes/...`, `/sd/crtos/../x.txt` i
   `/dev/console`; ok. 2 MB/s w obie strony.
+- `EXEC` i `GET /dev/kmsg`: przegląd kodu (17.10.2026); używane przez `crtos sh` i
+  `crtos dmesg`.
 - `curl http://<płytka>/api/status` (ręcznie).
 
 ## 12. Ograniczenia i znane problemy
@@ -130,7 +151,15 @@ Pobieranie pliku i katalogu przez `crtos scp board:...`:
   `<ścieżka>.part`.
 - Jedna sesja `deployd` naraz: wolny klient blokuje innych do 30 s.
 - Kto zna token, może też czytać całą kartę (także pliki użytkownika poza `/sd/crtos`),
-  `/flash0` i `/ram`; dane idą bez szyfrowania.
+  `/flash0`, `/ram` i log jądra; dane idą bez szyfrowania.
+- Kto zna token, wykonuje przez `EXEC` dowolne polecenia powłoki z uprawnieniami `spawn`,
+  `kill`, `sys`, `dev`: uruchamia i kończy procesy, otwiera urządzenia, zmienia i usuwa pliki
+  (także poza `/sd/crtos`, np. pliki użytkownika na karcie). Ograniczenia ścieżek REQ-U06-03
+  tego nie obejmują.
+- `EXEC`: linia poleceń po zakodowaniu `%XX` (spacja to 3 znaki) mieści się w 255 znakach,
+  dłuższa jest ucinana; polecenie nie ma wejścia (`/dev/null`), więc programy interaktywne
+  od razu dostają koniec pliku; w czasie `EXEC` sesja jest zajęta (jedna naraz), więc inne
+  narzędzia czekają do jego końca albo limitu.
 - Na `/flash0` nieudany `PUT` (błąd CRC, zerwane połączenie, brak miejsca) zostawia brak
   pliku: stara wersja jest usuwana przed zapisem, żeby duży plik zmieścił się na jej miejscu
   (flashfs nie przesuwa plików). Ponowne `crtos deploy` wysyła go jeszcze raz.

@@ -6,7 +6,7 @@
 #include <crtos/module.h>
 #include <crtos/syscall.h>
 #include <string.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 #define SPAWN_STR_MAX   4096u
 #define SPAWN_ARGS_MAX  64u
@@ -335,7 +335,7 @@ int64_t sys_sys_info(struct crtos_sysinfo *usi)
         struct mm_pool_info pi;
         if (mm_pool_info(i, &pi))
             continue;
-        if (!strcmp(pi.name, "sdram")) {
+        if (!strcmp(pi.name, PLATFORM_POOL_EXT)) {     /* the big external RAM: programs */
             si.mem_total += pi.size;
             si.mem_free += pi.free;
         } else if (!strcmp(pi.name, "ncache")) {

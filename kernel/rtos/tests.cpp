@@ -12,7 +12,7 @@
 #include <crtos/irq.h>
 #include <crtos/queue.h>
 #include <crtos/timer.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <string.h>
 
 int ktest_failures;
@@ -219,7 +219,7 @@ static void test_sem(void)
 
 /* ---- interrupt latency ------------------------------------------------------------------ */
 
-#define TEST_IRQ Reserved68_IRQn
+#define TEST_IRQ PLATFORM_TEST_IRQ
 static volatile uint32_t s_irq_stamp;
 static volatile bool s_irq_hit;
 

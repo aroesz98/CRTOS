@@ -21,7 +21,7 @@
  */
 #define CRTOS_KERNEL 1
 #include "kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <string.h>
 
 #define FR_SP_OFFSET_BASIC 8u   /* words in a frame without FP state */

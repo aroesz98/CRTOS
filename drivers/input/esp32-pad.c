@@ -11,7 +11,8 @@
  * unchanged state every 200 ms (so a silent line means the bridge is gone), and an "all
  * released" frame when the pad disconnects.
  *
- * This driver reads the serial port (a file of lpuart-imxrt, /dev/ttyS3) from a kernel thread
+ * This driver reads the serial port (a file of lpuart-imxrt, /dev/ttyS3; on the STM32H7S78-DK
+ * one of uart-stm32, /dev/ttyS7: ESP32 GPIO17 -> D0 of the Arduino connector) from a kernel thread
  * and reports the buttons as an input device, /dev/eventN, with the Linux gamepad codes:
  *
  *     cross BTN_SOUTH, circle BTN_EAST, triangle BTN_NORTH, square BTN_WEST,

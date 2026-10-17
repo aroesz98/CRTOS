@@ -13,7 +13,9 @@ crtos/
 │                             CRTOS_PROFILE=rtos: samo jądro RTOS z jedną aplikacją
 ├── crtos, crtos.cmd          polecenie "crtos" (Linux/macOS, Windows) -> tools/crtos.py
 ├── cmake/                    funkcje CMake: crtos_module, crtos_app, crtos_dtb, crtos_rtos_app, toolchain
-├── kernel/                   L0: jądro (firmware w HyperFlash)
+│   └── boards/               plik każdej płytki (CRTOS_BOARD): BSP, drzewo urządzeń, grupa third_party,
+│                             definicje i nagłówki jądra i modułów
+├── kernel/                   L0: jądro (firmware we flashu płytki: HyperFlash EVKB, NOR XSPI2 STM32H7S78-DK)
 │   ├── main.cpp              start płytki (MPU, piny konsoli, zegary), potem kernel_main()
 │   ├── rtos/                 rdzeń – kompletny RTOS: scheduler, synchronizacja, kolejki
 │   │   │                     komunikatów, timery, konsola LPUART1 i printk, kmon (polecenia
@@ -27,9 +29,15 @@ crtos/
 │   ├── subsys/               frameworki podsystemów: clk, pinctrl, gpio, i2c, spi, fb, gpu2d, input, net
 │   ├── lib/                  crc32, formatowanie printk, memcpy/memset (memops.c)
 │   ├── include/crtos/        nagłówki interfejsów jądra (dla modułów, aplikacji RTOS i częściowo programów)
-│   └── platform/evkbimxrt1050/  pakiet wsparcia płytki z NXP SDK: CMSIS, rejestry, startup,
-│                             zegary, piny, nagłówek XIP i DCD, FatFs, skrypty linkera
-├── drivers/                  L1: sterowniki jako moduły jądra (.ko)
+│   └── platform/             pakiety wsparcia płytek (BSP), jeden na CRTOS_BOARD
+│       ├── evkbimxrt1050/    NXP MIMXRT1050-EVKB z NXP SDK: CMSIS, rejestry, startup, zegary, piny,
+│       │                     nagłówek XIP i DCD, FatFs, skrypty linkera (CMSIS i FatFs używa też STM32)
+│       └── stm32h7s78dk/     ST STM32H7S78-DK: startup, nagłówek obrazu jądra, mapa pamięci i MPU,
+│                             PSRAM, podział ITCM, konsola UART4, karta SD (SDMMC1), skrypty linkera;
+│                             boot/: program startowy we flashu wewnętrznym (zegary, XSPI, start jądra)
+├── drivers/                  L1: sterowniki jako moduły jądra (.ko); lista modułów płytki: <płytka>.cmake
+│   └── stm32/                platforma STM32H7RS: piny, zegary, GPIO, I2C, UART (pozostałe w katalogach
+│                             rodzajów: display/, net/, usb/, mtd/, sound/, rtc/, misc/)
 ├── system/                   system bazowy (przestrzeń użytkownika), budowany zawsze
 │   ├── lib/                  biblioteki programów: libcrtos/, libgfx/, tftlib/
 │   ├── services/             L2: usługi (init, devmgr, gfxd, inputd, osk, netmgr, httpd, deployd, vncd, getty)
@@ -39,13 +47,15 @@ crtos/
 ├── tests/                    testy i pomiary na płytce (apptest, heaptest, xiptest, bench, gfxtap, nettest,
 │                             moduł touchpaint)
 ├── examples/                 przykłady: hello, hello_world, moduły drivers/hello, aplikacja RTOS rtos/blinky
-├── dts/                      drzewo urządzeń: imxrt1052.dtsi (układ), evkbimxrt1050.dts (płytka)
+├── dts/                      drzewo urządzeń: imxrt1052.dtsi (układ), evkbimxrt1050.dts (płytka);
+│                             stm32h7s7.dtsi, stm32h7s78dk.dts; include/: stałe pinów i zegarów
 ├── rootfs/                   pliki kopiowane na kartę bez zmian (etc/*.cfg, certyfikaty, czcionki)
 ├── sdk/                      szablony programów ("crtos new") i pliki SDK
 ├── toolchain/                reguły programu CRTOS dla GCC (crtos.specs), arm-crtos-gcc, crtos-app
 ├── tools/                    polecenie crtos i narzędzia budowania/diagnostyki (Python)
 ├── third_party/              kod z zewnątrz, pobierany przy budowaniu: w gicie tylko sources.txt (repozytoria
-│                             i commity: lwIP, TinyUSB, pdpmake, sterowniki NXP SDK; NetSurf po "crtos setup --netsurf")
+│                             i commity: lwIP, TinyUSB, pdpmake, sterowniki NXP SDK; STM32CubeH7RS dla
+│                             STM32H7S78-DK; NetSurf po "crtos setup --netsurf")
 ├── patches/                  zmiany CRTOS w kodzie z zewnątrz (<katalog>.patch) i w GCC na płytkę (arm-gnu-toolchain/)
 └── docs/                     dokumentacja użytkownika; docs/specyfikacja: ta dokumentacja
 ```
@@ -93,8 +103,9 @@ kmon i autotesty części OS (dołączane tablicami z `os/kmon_os.cpp` i `os/tes
 | `kernel/subsys/fb.cpp`, `gpu2d.cpp` | [S03 Ekran i akcelerator 2D](komponenty/S03-fb-gpu2d.md) |
 | `kernel/subsys/input.cpp` | [S04 Urządzenia wejścia](komponenty/S04-wejscie.md) |
 | `kernel/subsys/net.cpp` | [S05 Sieć i gniazda](komponenty/S05-siec.md) |
-| `drivers/imxrt/pinctrl-imxrt.c`, `clk-imxrt.c`, `gpio-imxrt.c` | [D01 Sterowniki platformy](komponenty/D01-platforma.md) |
-| `drivers/imxrt/lpi2c-imxrt.c`, `drivers/spi/`, `drivers/tty/` | [D02 Sterowniki magistral i portów szeregowych](komponenty/D02-magistrale.md) |
+| `kernel/platform/evkbimxrt1050/`, `kernel/platform/stm32h7s78dk/` | pakiety wsparcia płytek (bez osobnego komponentu): start (K18), konsola i karta SD STM32H7S78-DK (K15, K14), mapa pamięci (K07, K03) |
+| `drivers/imxrt/pinctrl-imxrt.c`, `clk-imxrt.c`, `gpio-imxrt.c`; `drivers/stm32/pinctrl-stm32.c`, `clk-stm32.c`, `gpio-stm32.c` | [D01 Sterowniki platformy](komponenty/D01-platforma.md) |
+| `drivers/imxrt/lpi2c-imxrt.c`, `drivers/spi/`, `drivers/tty/`; `drivers/stm32/i2c-stm32.c`, `uart-stm32.c` | [D02 Sterowniki magistral i portów szeregowych](komponenty/D02-magistrale.md) |
 | `drivers/display/` | [D03 Sterowniki ekranu i PXP](komponenty/D03-ekran.md) |
 | `drivers/input/` | [D04 Sterowniki dotyku, przycisków i pada](komponenty/D04-wejscie.md) |
 | `drivers/net/` | [D05 Ethernet i stos TCP/IP](komponenty/D05-siec.md) |
@@ -128,27 +139,37 @@ wyłącza) dodają `apps/`, `tests/` i `examples/`; system bazowy (`kernel/`, `d
 `system/`, `rootfs/`) buduje się zawsze. Profil `rtos` (`crtos build --rtos`) konfiguruje osobny
 katalog `build/rtos` i buduje tylko jądro z aplikacją.
 
+Płytkę wybiera zmienna CMake `CRTOS_BOARD` (`evkbimxrt1050` – domyślna, `stm32h7s78dk`);
+`crtos` podaje ją z `crtos board` (plik `.crtos-board`) albo ze zmiennej środowiska
+`CRTOS_BOARD`. `cmake/boards/<płytka>.cmake` ustawia BSP (`CRTOS_PLATFORM`), drzewo urządzeń
+(`CRTOS_BOARD_DTS`), grupę kodu z zewnątrz (`CRTOS_BOARD_GROUP`, STM32: `stm32`), definicje
+i katalogi nagłówków jądra i modułów oraz pliki jądra zastępowane przez BSP
+(`CRTOS_KERNEL_EXCLUDE`); `drivers/<płytka>.cmake` wymienia moduły płytki. Każda płytka ma
+własny katalog budowania: `build/` dla EVKB, `build-<płytka>/` dla pozostałych (niżej
+`build/` oznacza katalog wybranej płytki).
+
 ![Struktura projektu: budowanie (diagram komponentów)](diagramy/struktura/budowanie.svg)
 
 *Źródło: [struktura/budowanie.puml](diagramy/struktura/budowanie.puml)*
 
 | Cel | Funkcja CMake | Kompilacja | Wynik |
 |---|---|---|---|
-| jądro | `add_executable(kernel)` w `kernel/CMakeLists.txt` (źródła wg `CRTOS_PROFILE`) | `-O3 -funroll-loops -fno-builtin -fstack-usage`, sekcje funkcji, `--gc-sections` | `build/kernel/crtos.axf`, `crtos.bin` (obraz dla 0x60000000), `crtos.map` |
+| jądro | `add_executable(kernel)` w `kernel/CMakeLists.txt` (źródła wg `CRTOS_PROFILE`) | `-O3 -funroll-loops -fno-builtin -fstack-usage`, sekcje funkcji, `--gc-sections` | `build/kernel/crtos.axf`, `crtos.bin` (EVKB: obraz dla 0x60000000; STM32H7S78-DK: dla 0x70000000, z rozmiarem i CRC-32 w nagłówku od `tools/imagehdr.py`), `crtos.map` |
+| program startowy (STM32H7S78-DK) | `add_executable(crtos_boot)` w `kernel/platform/stm32h7s78dk/boot/CMakeLists.txt` | `-Os`, HAL STM32CubeH7RS, własny skrypt linkera | `build/kernel/crtos-boot.axf`, `crtos-boot.bin` (flash wewnętrzny 0x08000000) |
 | aplikacja RTOS | `crtos_rtos_app(SOURCES ... [SDK_DRIVERS ...])` w `cmake/crtos.cmake` | jak jądro (`CONFIG_OS=0`), źródła dołączone do celu `kernel` | `build/rtos/kernel/crtos.axf`, `crtos.bin` |
 | moduł jądra | `crtos_module(NAZWA SOURCES ... [SDK_DRIVERS ...] [ALIASES ...])` w `cmake/crtos.cmake` | `-O2 -mlong-calls`, bez wyjątków i RTTI, `ld -r` | `build/sdcard/crtos/drivers/NAZWA.ko`, wpisy w `modules.alias` |
 | program | `crtos_app(NAZWA SOURCES ... [STACK n] [HEAP n] [LIBS ...] [DEST ...] [ICON icon.png])` w `cmake/crtos-app.cmake` | `-O2`, `-specs=toolchain/crtos.specs` (T02): `ld -r` z obiektami startowymi, `libcrtos`, newlib-nano, `libm`, `libgcc`; ikona: `tools/icon.py` (PNG → PAM) | `build/sdcard/crtos/{sbin,bin,apps}/NAZWA.app` (+ `NAZWA.debug.app` z symbolami), `build/sdcard/crtos/share/icons/NAZWA.pam` |
 | katalog toolchainu | `crtos_toolchain()` w `cmake/crtos.cmake`, `crtos toolchain` | kopiowanie; biblioteki programów budowane wprost do `lib/`; launchery kompilatorem C komputera | `build/toolchain/arm-crtos/{bin,lib,include}` |
-| drzewo urządzeń | `crtos_dtb(board dts/evkbimxrt1050.dts)` | preprocesor C + `tools/dtc.py` | `build/sdcard/crtos/boot/board.dtb` |
+| drzewo urządzeń | `crtos_dtb(board ${CRTOS_BOARD_DTS})` (`dts/evkbimxrt1050.dts` albo `dts/stm32h7s78dk.dts`) | preprocesor C + `tools/dtc.py` | `build/sdcard/crtos/boot/board.dtb` |
 | pliki stałe | `crtos_rootfs(rootfs)` | kopiowanie | `build/sdcard/crtos/etc/...` |
 | SDK | `add_subdirectory(sdk)`, `crtos sdk` | katalog toolchainu + CMake, szablony, narzędzia | `build/sdk/` |
 
-Wspólne flagi procesora: `-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard`. Po
+Wspólne flagi procesora (obie płytki): `-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard`. Po
 zbudowaniu modułów `tools/modcheck.py` sprawdza, że każdy nierozwiązany symbol modułu jest
 eksportowany przez jądro (`KSYM` w `kernel/os/ksyms.cpp`) albo inny moduł
 (`EXPORT_SYMBOL`), a program nie ma żadnego nierozwiązanego symbolu.
 
-Jądro można też zbudować projektem MCUXpresso IDE (`crtos kbuild`, konfiguracja Release):
+Jądro EVKB można też zbudować projektem MCUXpresso IDE (`crtos kbuild`, konfiguracja Release):
 te same źródła i flagi.
 
 ## 4. Rozmieszczenie na płytce
@@ -171,7 +192,8 @@ użytkownika).
 | SDRAM bez cache | 0x81E00000 | 2 MB | bufory ekranu, deskryptory i bufory DMA (sterta `ncache`) |
 | HyperFlash | 0x60000000 | 64 MB | obraz jądra (XIP) i partycja danych |
 
-Szczegóły: [K07 Pamięć jądra](komponenty/K07-pamiec-jadra.md) i
+Tabela dotyczy EVKB; pamięć STM32H7S78-DK (NOR XSPI2, ITCM 64 albo 128 KB, AXI SRAM, PSRAM):
+[Architektura](../architektura.md#stm32h7s78-dk). Szczegóły: [K07 Pamięć jądra](komponenty/K07-pamiec-jadra.md) i
 [K03 Ochrona pamięci](komponenty/K03-mpu.md).
 
 ## 6. Elementy konfiguracji
@@ -180,7 +202,9 @@ Szczegóły: [K07 Pamięć jądra](komponenty/K07-pamiec-jadra.md) i
 |---|---|---|
 | konfiguracja jądra (czas kompilacji) | `kernel/include/crtos/config.h` | zegar, liczba priorytetów, kwant czasu, priorytety przerwań, rozmiary stosów, strażników, logu, uchwytów; `CONFIG_OS`, zadanie aplikacji i wątek timerów RTOS |
 | profil i części drzewa | `CRTOS_PROFILE`, `CRTOS_RTOS_APP`, `CRTOS_BUILD_APPS/TESTS/EXAMPLES` (CMake) | obraz OS albo RTOS, dodatki, testy, przykłady |
-| sprzęt | `dts/evkbimxrt1050.dts`, `dts/imxrt1052.dtsi` | urządzenia, piny, zegary, przerwania, partycje flash |
+| płytka | `CRTOS_BOARD` (CMake), `.crtos-board` (`crtos board`), `cmake/boards/<płytka>.cmake`, `drivers/<płytka>.cmake` | BSP, drzewo urządzeń, moduły, kod z zewnątrz, katalog budowania |
+| sprzęt | `dts/evkbimxrt1050.dts`, `dts/imxrt1052.dtsi`; `dts/stm32h7s78dk.dts`, `dts/stm32h7s7.dtsi` | urządzenia, piny, zegary, przerwania, partycje flash |
+| option bytes STM32H7S7 | `ITCM_AXI_SHARE` (STM32CubeProgrammer, poza repozytorium) | podział ITCM / AXI SRAM1: 64 albo 128 KB ITCM ([Architektura](../architektura.md#stm32h7s78-dk)) |
 | usługi startowe | `rootfs/etc/init.cfg` | kolejność i uprawnienia usług |
 | menu programów | `rootfs/etc/launcher.cfg` | programy w menu **Apps** |
 | sieć | `rootfs/etc/network.cfg` | DHCP albo stały adres, DNS, NTP |
@@ -188,10 +212,14 @@ Szczegóły: [K07 Pamięć jądra](komponenty/K07-pamiec-jadra.md) i
 
 ## 7. Komponenty zewnętrzne
 
+ISO 26262-8, rozdz. 12, wymaga kwalifikacji komponentów, których nie rozwijano w projekcie.
+Żaden z poniższych nie jest kwalifikowany (zobacz [05 Zgodność](05-zgodnosc-iso26262.md)).
+
 | Komponent | Wersja | Licencja | Katalog | Używa go |
 |---|---|---|---|---|
-| NXP MCUXpresso SDK (CMSIS, `fsl_*` sterowniki, startup, XIP) | 25.6.0 | BSD-3-Clause | `kernel/platform/evkbimxrt1050` (BSP z MCUXpresso IDE, w repozytorium), `third_party/nxp-sdk` (`core`, `devices-rt`, `components`: pobierane) | jądro, sterowniki `.ko` |
-| FatFs | R0.15 | licencja FatFs (BSD-podobna) | `kernel/platform/evkbimxrt1050/fatfs` | K14 |
+| NXP MCUXpresso SDK (CMSIS, `fsl_*` sterowniki, startup, XIP) | 25.6.0 | BSD-3-Clause | `kernel/platform/evkbimxrt1050` (BSP z MCUXpresso IDE, w repozytorium), `third_party/nxp-sdk` (`core`, `devices-rt`, `components`: pobierane) | jądro, sterowniki `.ko` (nagłówki CMSIS rdzenia Cortex-M7 także na STM32H7S78-DK) |
+| STM32CubeH7RS: nagłówki CMSIS układu (`cmsis-device-h7rs`) i sterowniki HAL/LL (`stm32h7rsxx-hal-driver`) | commity 7e6e213 i 471265b (`third_party/sources.txt`, grupa `stm32`) | Apache-2.0 (CMSIS), BSD-3-Clause (HAL) | `third_party/stm32/cmsis-device-h7rs`, `third_party/stm32/hal-h7rs` (pobierane tylko dla `CRTOS_BOARD=stm32h7s78dk`) | jądro STM32H7S78-DK (rejestry), program startowy, sterowniki `.ko` STM32 (`SDK_DRIVERS`) |
+| FatFs | R0.15 | licencja FatFs (BSD-podobna) | `kernel/platform/evkbimxrt1050/fatfs` (także dla STM32H7S78-DK) | K14 |
 | lwIP | 2.2.1 (fork NXP) | BSD-3-Clause | `third_party/lwip` (pobierane, `patches/lwip.patch`) | D05 (`net-lwip.ko`) |
 | TinyUSB | 0.21.0 | MIT | `third_party/tinyusb` (pobierane) | D06 (`usb-imxrt.ko`) |
 | pdpmake | commit 02f03e2 (28.08.2026) | public domain | `third_party/pdpmake` (pobierane, `patches/pdpmake.patch`) | A03 (`make`) |

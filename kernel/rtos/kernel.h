@@ -34,6 +34,34 @@ struct crtos_pollfd;
 /* Limit of the running task's active stack (used by PendSV before saving context) */
 extern volatile uint32_t task_stack_limit;
 
+/* ---- the board (kernel/platform/<board>/board/platform.cpp; constants: platform.h) ---- */
+/* MPU regions 1..7: the board's memories, privileged access only except the flash, which
+ * programs may read and execute (arch/mpu.cpp) */
+enum mpu_kind : uint8_t {
+    MPU_KIND_TCM_CODE = 1,      /* tightly coupled memory with kernel code: write-back */
+    MPU_KIND_TCM_DATA,          /* tightly coupled data memory: write-back, never executed */
+    MPU_KIND_RAM,               /* RAM: write-back, read/write-allocate, executable (modules) */
+    MPU_KIND_RAM_NOCACHE,       /* RAM for devices: not cached, never executed */
+    MPU_KIND_FLASH,             /* the flash the kernel runs from: read-only, also for programs */
+    MPU_KIND_DEVICE,            /* peripheral registers */
+};
+struct mpu_map_entry {
+    uint32_t base;
+    uint8_t log2size;           /* 0 ends the table */
+    uint8_t kind;               /* MPU_KIND_* */
+};
+extern const struct mpu_map_entry platform_mpu_map[];
+extern const char platform_cpu_name[];              /* "i.MX RT1052" */
+extern const char platform_sd_compatible[];         /* the built-in SD card controller's... */
+extern const uintptr_t platform_sd_base;            /* ... "compatible" and registers */
+extern const char platform_console_compatible[];    /* the console UART (earlycon) */
+extern const char platform_safe_mode_button[];      /* "SW8" */
+void platform_early_init(void);                     /* main(), after the MPU: pins, clocks */
+void platform_init(void);                           /* kernel_main(), first */
+void platform_reset_cause(char *buf, size_t size);  /* why the board started; clears the flags */
+bool platform_safe_mode(void);                      /* the safe mode button is held (boot) */
+uintptr_t platform_itcm_top(void);                  /* the end of the ITCM the chip has */
+
 enum task_state : uint8_t {
     TASK_READY = 0,     /* in a ready queue (includes the running task) */
     TASK_BLOCKED,       /* on a wait queue and/or the sleep queue */

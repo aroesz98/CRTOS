@@ -13,9 +13,11 @@
  *   timers      crtos/timer.h   one-shot and periodic software timers
  *   interrupts  crtos/irq.h     irq_request, irq_enable/irq_disable; irq_lock (crtos/arch.h)
  *   memory      crtos/mm.h      kmalloc, kzalloc, kfree
- *   output      crtos/printk.h  printk: the console (LPUART1) and kmon "dmesg"
+ *   output      crtos/printk.h  printk: the console UART and kmon "dmesg"
  *
- * The hardware: the NXP SDK drivers of the board (fsl_gpio.h, fsl_lpi2c.h, fsl_lpspi.h, ...).
+ * The hardware: the board's vendor drivers (crtos_rtos_app SDK_DRIVERS: the NXP SDK's
+ * fsl_gpio.h, fsl_lpi2c.h, ... on the i.MX RT board, the STM32Cube HAL/LL on the STM32 one)
+ * or its registers through the CMSIS device header.
  * The kernel monitor stays on the console and the debug probe ("crtos kmon": ps, mem, irq,
  * dmesg, test).
  */

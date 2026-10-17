@@ -7,7 +7,7 @@
  * size, the oldest text is overwritten (and counted as lost).
  */
 #include "kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include "../lib/kformat.h"
 #include <string.h>
 

@@ -8,10 +8,11 @@
  * yet. Clients learn with GFX_EV_FRAME that their damage is on the screen and may draw the
  * next frame.
  *
- * Composition starts shortly before the next frame start (the margin follows the measured
- * composition time), not at the first damage: clients that answer GFX_EV_FRAME a moment
- * later still get into the same frame, so an animation keeps the full frame rate while
- * others draw too.
+ * Composition starts shortly before the next frame start, not at the first damage: clients
+ * that answer GFX_EV_FRAME a moment later still get into the same frame, so an animation keeps
+ * the full frame rate while others draw too. How long before follows from what is to be done:
+ * the area to compose times the measured cost of a pixel (the memory, not the accelerator,
+ * sets it) - a window opening or moving starts at once, a small animation late.
  *
  * Input from inputd goes to the window under the finger (which comes to the top and gets
  * the focus); a press keeps its window until the finger lifts. Each finger of a multi-touch
@@ -114,7 +115,7 @@ static struct region s_damage, s_prev;
 
 static uint64_t s_vsync_us;                 /* last frame start seen */
 static uint32_t s_period_us;                /* display refresh period */
-static uint32_t s_recent_us;                /* composition time, moving average */
+static uint32_t s_ps_per_px = 25000;        /* composition cost of a pixel (ps), measured */
 static struct window *s_grab[GFX_FINGERS], *s_focus;   /* each finger's window */
 static struct window *s_hover;              /* the GFX_WIN_HOVER window under the mouse cursor */
 static int16_t s_stick[GFX_STICKS][2];     /* the gamepad's sticks as inputd last sent them */
@@ -443,6 +444,23 @@ static void copy_to_watcher(const struct gpu2d_hsurface *src)
     }
 }
 
+static uint32_t region_area(const struct region *g)
+{
+    uint32_t a = 0;
+    for (int i = 0; i < g->n; i++)
+        a += (uint32_t)area(&g->r[i]);
+    return a;
+}
+
+/* what the next composition covers: this frame's damage and the last one's */
+static struct region pending_region(void)
+{
+    struct region region = s_damage;
+    for (int i = 0; i < s_prev.n; i++)
+        region_add(&region, &s_prev.r[i]);
+    return region;
+}
+
 /* Show what changed: compose it into the hidden buffer and flip. That buffer still lacks
  * what the previous frame changed, so that area is redrawn as well - in the same frame, never
  * as a flip of its own (which would halve the frame rate of an animation). */
@@ -450,9 +468,7 @@ static void compose(void)
 {
     if (!s_damage.n)
         return;
-    struct region region = s_damage;
-    for (int i = 0; i < s_prev.n; i++)
-        region_add(&region, &s_prev.r[i]);
+    struct region region = pending_region();
     uint64_t t0 = crtos_time_us();
     if (s_vsync_us && t0 - s_vsync_us < s_period_us) {
         uint32_t lag = (uint32_t)(t0 - s_vsync_us);
@@ -481,7 +497,11 @@ static void compose(void)
         s_st.max_us = us;
     s_sum_us += us;
     s_st.avg_us = (uint32_t)(s_sum_us / s_st.composed);
-    s_recent_us = s_recent_us ? s_recent_us - s_recent_us / 8u + us / 8u : us;
+    uint32_t px = region_area(&region);
+    if (px >= 20000u) { /* (small ones: mostly the fixed cost) */
+        uint32_t ps = (uint32_t)((uint64_t)us * 1000000u / px);
+        s_ps_per_px = s_ps_per_px - s_ps_per_px / 4u + ps / 4u;
+    }
 }
 
 /* When to compose so that the flip catches the coming frame start */
@@ -490,12 +510,15 @@ static uint64_t compose_time(uint64_t now)
     /* nothing shown lately: no animation to wait for, and the phase may have drifted */
     if (!s_vsync_us || !s_period_us || now - s_vsync_us > 2u * s_period_us)
         return now;
-    /* room for a composition and some slack; at least 3 ms, at most 2/3 of a frame */
-    uint32_t margin = s_recent_us * 2u + 1500u;
+    /* room for this composition and some slack, at least 3 ms; one that does not fit before
+     * the coming frame start starts at once (and is shown a frame later) */
+    struct region region = pending_region();
+    uint32_t need = (uint32_t)((uint64_t)region_area(&region) * s_ps_per_px / 1000000u) + 300u;
+    uint32_t margin = need + need / 4u + 1500u;
     if (margin < 3000u)
         margin = 3000u;
-    if (margin > s_period_us * 2u / 3u)
-        margin = s_period_us * 2u / 3u;
+    if (margin >= s_period_us)
+        return now;
     uint64_t next = s_vsync_us + ((now - s_vsync_us) / s_period_us + 1u) * s_period_us;
     uint64_t at = next - margin;
     return at > now ? at : now;

@@ -19,7 +19,8 @@ list(TRANSFORM NES_CORE PREPEND ${NES_SRC}/)
 
 # Both the core and libgfx have a "gfx.h": libgfx's comes first for this program's files, the
 # core's files find their own next to them.
-crtos_app(nes
+# On /flash0, run in place: its code is read from the flash and leaves the RAM to the data.
+crtos_app(nes XIP DEST flash0:apps
   SOURCES nes_main.c nes_fast.c nes_font.c nes_draw.c nes_browser.c port/nes_port.c ${NES_CORE}
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/port ${CRTOS_TOP}/system/lib/libgfx/include ${NES_SRC} ${NES_SRC}/mappers
   STACK 65536 HEAP 4194304 LIBS gfx ICON icon.png)

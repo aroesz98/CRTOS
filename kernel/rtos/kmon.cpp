@@ -10,7 +10,7 @@
 #include "kernel.h"
 #include "kmon.h"
 #include <crtos/irq.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <stdlib.h>
 #include <string.h>
 

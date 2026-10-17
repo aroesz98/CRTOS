@@ -6,7 +6,7 @@
 |---|---|
 | Identyfikator | L02 |
 | Warstwa | L2/L3 (biblioteki statyczne programów: `crtos_app(... LIBS gfx)`, `LIBS tftlib`) |
-| Pliki | `system/lib/libgfx/src/{gfx,draw,image,fonts,ui,keys,settings,wallpaper}.c`, `gfx_internal.h`, nagłówki `system/lib/libgfx/include/{gfx,gfx_ui,gfx_proto,osk_proto}.h`; `system/lib/tftlib/` (TFTLIB_8BIT, Print, WString, czcionki GFXFF, `tftlib_glue.c`) |
+| Pliki | `system/lib/libgfx/src/{gfx,draw,image,fonts,ui,keys,settings,wallpaper,gpu}.c`, `gfx_internal.h`, nagłówki `system/lib/libgfx/include/{gfx,gfx_ui,gfx_proto,osk_proto}.h`; `system/lib/tftlib/` (TFTLIB_8BIT, Print, WString, czcionki GFXFF, `tftlib_glue.c`) |
 
 ## 2. Odpowiedzialność
 
@@ -39,6 +39,12 @@
   zaznacza wiersz pod kursorem), klawiatura ekranowa.
 - **Klawisze** (`keys.c`): zdarzenia klawiszy → znaki (układ US, Shift, Caps Lock, Ctrl)
   i odwrotnie (dla klawiatur ekranowych).
+- **Akcelerator dla własnych obrazów programu** (`gpu.c`, S03): bufory w pamięci
+  współdzielonej (`gfx_buffer`, akcelerator czyta powierzchnie tylko przez uchwyt), kopie
+  i skalowanie z nich do okna (z wygładzaniem), wypełnienia, zdolności akceleratora
+  (`gfx_gpu_caps`); prymitywy 3D (`gfx_gpu_prims`: czworokąty i trójkąty z teksturą
+  w perspektywie, tekstury jako tablice obrazów w pamięci współdzielonej `gfx_shmem`).
+  Każde wywołanie czeka na akcelerator, więc program może od razu dalej rysować.
 - **TFTLIB**: biblioteka rysowania starego firmware (C++, styl Adafruit/TFT_eSPI:
   wygładzane okręgi i łuki, gradienty, czcionki FreeFont) na powierzchni XRGB8888 okna
   (`GFX_WIN_XRGB`); `tftlib_glue.c` daje jej opóźnienia i zegar CRTOS.
@@ -60,6 +66,7 @@
 | REQ-L02-11 | `gfx_font_load` przyjmuje tylko plik `CRF1` o zgodnej liczbie glifów, z bitmapami do 64 KB i każdym glifem w ich granicach; inaczej `NULL` (`EINVAL`) bez przydzielonej pamięci. Motyw bierze czcionkę rodziny w rozmiarze skali, a gdy jej brak – DejaVu w tym rozmiarze, potem wbudowaną DejaVu 11 px; wczytana czcionka zostaje do końca programu (okno narysowane nią przed zmianą nie traci jej). | przegląd kodu; cztery rodziny × pięć skal na płytce (zrzuty, 03.10.2026) |
 | REQ-L02-12 | `gfx_wallpaper_draw` rysuje każdą wbudowaną tapetę w dowolnym rozmiarze, kolor (`color:RRGGBB`) i plik PPM/PAM w trybach fill, fit, stretch, center i tile; plik jest czytany wiersz po wierszu (pamięć: wiersz źródła, najwyżej 4096 pikseli, i sumy wiersza wyniku), kafelki najwyżej 65 536 pikseli; plik, którego nie da się odczytać, daje pierwszą wbudowaną tapetę i `-1` (`errno`). | ten sam kod na komputerze (MinGW): 6 tapet RGB565 bez pasm, obraz 1024×640 w trybach fill/fit/center (proporcje zachowane); na płytce tapeta 800×500 z pliku w 101 ms (03.10.2026) |
 | REQ-L02-13 | `gfx_round_rect_aa` wygładza rogi (pokrycie piksela z odległości od łuku) i zaokrągla tylko wybrane rogi; na ARGB8888 miesza także alfa, więc rogi na przezroczystym tle są miękkie. `ui_px` zaokrągla do najbliższej liczby, a dodatniej nie zmniejsza do 0. | zrzuty ekranu: przyciski, menu, paski tytułu, przełączniki (03.10.2026); przegląd kodu |
+| REQ-L02-14 | Funkcje akceleratora zwracają `-1`, gdy nie ma `/dev/gpu2d` (program rysuje wtedy sam); `gfx_gpu_caps` daje 0 bez akceleratora. `gfx_buffer_create` przyjmuje szerokość 1..4096 i wysokość 1..65535 (tablice tekstur), inaczej `NULL` (`EINVAL`). | przegląd kodu; voxel, NES, SNES na STM32H7S78-DK (04.10.2026) |
 
 ## 4. Interfejs udostępniany
 
@@ -80,6 +87,7 @@ i [TFTLIB](../../api.md#tftlib).
 | obrazy i ikony | `struct gfx_image` (w × h pikseli 0xAARRGGBB), `gfx_image_load`, `gfx_image_scale`, `gfx_image_draw`, `gfx_icon_load` (`GFX_ICON_DIR`, `GFX_ICON_DEFAULT`) |
 | widżety | `ui_button`, `ui_choice`, `ui_panel`, `ui_switch` (`ui_switch_width`), `ui_slider` (`ui_slider_value`), `ui_text_center`, `ui_text_fit`, `ui_list_*` (także `ui_list_wheel`, `no_bg`; `ui_list_pointer` z `GFX_PTR_HOVER` zaznacza wiersz), `ui_keyboard_*`, `ui_inside`, motyw `ui_theme` (`heading`, `scale`, `radius`, `alpha`) |
 | klawisze | `ui_key_char`, `ui_char_key` |
+| akcelerator | `struct gfx_buffer`, `gfx_buffer_create/free`, `gfx_gpu_copy`, `gfx_gpu_scale` (`GFX_GPU_SMOOTH`, `GFX_GPU_BLEND`), `gfx_gpu_fill`, `gfx_gpu_caps` (`GPU2D_CAP_*`); 3D: `struct gfx_shmem`, `gfx_shmem_create/free`, `struct gfx_texarray`, `gfx_gpu_prims` (`struct gpu2d_prim`, `GPU2D_PRIMS_DISCARD`) |
 | TFTLIB | klasa `TFTLIB_8BIT` (rysowanie, tekst, `Print`), `WString` |
 
 Protokół z serwerem: `gfx_proto.h` (U03), klawiatura ekranowa: `osk_proto.h` (U04).
@@ -87,7 +95,8 @@ Protokół z serwerem: `gfx_proto.h` (U03), klawiatura ekranowa: `osk_proto.h` (
 ## 5. Interfejsy wymagane
 
 L01 (`crtos_port_*`, `crtos_msg_*`, `crtos_shm_*`, `poll`, `malloc`), U03 (port `gfx`),
-S03 (formaty `GPU2D_FMT_*` z `crtos/gpu2d.h`), `crtos/keys.h` (kody klawiszy Linuksa).
+S03 (formaty `GPU2D_FMT_*` i `/dev/gpu2d` z `crtos/gpu2d.h`), `crtos/keys.h` (kody klawiszy
+Linuksa).
 
 ## 6. Struktura statyczna
 
@@ -217,3 +226,8 @@ akcent 3478DC, przezroczystość włączona (80%), zaokrąglenia włączone, tap
   w obie strony liczy średnią obszaru, więc powiększanie daje piksele w blokach (bez
   wygładzania).
 - Po restarcie `gfxd` programy z oknami kończą się (brak odtwarzania okien).
+- Proces mapuje najwyżej trzy obiekty pamięci współdzielonej naraz (okna MPU, K11), w tym
+  piksele swojego okna: program z oknem ma miejsce na dwa bufory `gfx_buffer`/`gfx_shmem`
+  (voxel: obraz widoku i jeden obiekt na wszystkie tekstury).
+- Funkcje akceleratora są synchroniczne; program, który chce liczyć w czasie skalowania
+  (SNES), robi je w osobnym wątku.

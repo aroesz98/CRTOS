@@ -26,14 +26,15 @@ list(TRANSFORM SNES_CORE PREPEND ${SNES_SRC}/)
 # blocks, so nothing of libstdc++ is linked and every file compiles with little memory.
 
 # heap: the ROM (up to 6 MB), save RAM, tile caches and screens (about 10 MB)
+# On /flash0 (loaded from there: not in place, which cannot have FAST code in ITCM).
 # (the core and libgfx both have a gfx.h: libgfx's comes first for this program's C files, the
 # core's files find their own next to them, snes_core.cpp names it core/gfx.h)
-crtos_app(snes
+crtos_app(snes DEST flash0:apps
   SOURCES snes_main.c snes_browser.c snes_draw.c snes_font.c snes_core.cpp snes_idle.cpp snes_fxjit.cpp snes_input.cpp snes_stubs.cpp
           ${SNES_CORE}
   INCLUDES ${CRTOS_TOP}/system/lib/libgfx/include ${SNES_SRC} ${SNES_SRC}/apu ${SNES_SRC}/apu/bapu ${CMAKE_CURRENT_SOURCE_DIR}
   STACK 65536 HEAP 11534336 LIBS gfx crtos ICON icon.png
-  FAST snes_fast.txt FAST_KB 62) # the hottest code in ITCM (snes_fast.txt)
+  FAST snes_fast.txt FAST_KB 64) # the hottest code in ITCM (snes_fast.txt, about 60 KB)
 # the emulation is all CPU time: the fastest code the compiler makes
 target_compile_options(app_snes_objs PRIVATE -O3 "$<$<COMPILE_LANGUAGE:CXX>:-std=gnu++17>")
 # third-party code: its own style of warnings

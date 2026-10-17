@@ -14,12 +14,18 @@
  *                                  takes the shortest free run that holds it
  *   CRC <path>                     -> OK <size> <crc32>
  *   GET <path>                     -> OK <size>, then <size> bytes, then "OK <crc32>" (or
- *                                     "ERR ..." when the file could not be read to its end)
+ *                                     "ERR ..." when the file could not be read to its end);
+ *                                     GET /dev/kmsg gives the kernel log ("crtos dmesg")
  *   STAT <path>                    -> OK <d|f> <size> <mtime>
  *   LIST <dir>                     -> OK <n>, then n lines "<d|f> <size> <mtime> <name>"
  *   MKDIR <path>                   the directory (and the ones on the way to it)
  *   FLASH <path>                   the kernel image at <path> into the boot flash (/dev/mtd0,
  *                                  "OK writing ...", then the board restarts)
+ *   EXEC <command line> [seconds]  runs it with sh -c (output and errors into one pipe), at
+ *                                  most <seconds> (default 30, then it is stopped):
+ *                                  -> OK <n>, then n bytes of its output (the first 64 KB),
+ *                                  then "OK <exit code>" ("crtos sh", for a board without
+ *                                  a console cable)
  *   REBOOT
  *   QUIT
  * Paths (and the names LIST gives) are encoded as in URLs: %XX for a space, '%' and anything
@@ -167,6 +173,8 @@ static bool path_ok(const char *p)
 /* May be read: one of the roots or below it, without ".." */
 static bool read_ok(const char *p)
 {
+    if (!strcmp(p, "/dev/kmsg"))
+        return true;
     if (strstr(p, "/..") || strstr(p, "//") || strchr(p, '\\') || strlen(p) >= 200)
         return false;
     for (size_t i = 0; i < sizeof(s_read_roots) / sizeof(s_read_roots[0]); i++) {
@@ -504,6 +512,67 @@ static void cmd_flash(struct conn *c, const char *path)
     free(img);
 }
 
+#define EXEC_SECONDS 30
+
+static void cmd_exec(struct conn *c, const char *line, unsigned long seconds)
+{
+    int fds[2];
+    if (crtos_pipe(fds, 0)) {
+        reply(c, "ERR pipe: %s", strerror(errno));
+        return;
+    }
+    int nul = open("/dev/null", O_RDONLY);
+    const char *argv[] = { "sh", "-c", line, NULL };
+    struct crtos_spawn sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.path = "/sd/crtos/bin/sh.app";
+    sp.argv = argv;
+    sp.stdio[0] = nul;
+    sp.stdio[1] = fds[1];
+    sp.stdio[2] = fds[1];
+    sp.caps = CAP_ALL; /* (at most ours) */
+    int pid = crtos_spawn(&sp);
+    close(fds[1]);
+    if (nul >= 0)
+        close(nul);
+    if (pid < 0) {
+        reply(c, "ERR %s", strerror(errno));
+        close(fds[0]);
+        return;
+    }
+    /* its output until it ends (the pipe's end) or the time is up */
+    uint64_t end = crtos_time_us() + (uint64_t)(seconds ? seconds : EXEC_SECONDS) * 1000000u;
+    size_t have = 0;
+    bool late = false;
+    for (;;) {
+        uint64_t now = crtos_time_us();
+        if (now >= end) {
+            late = true;
+            break;
+        }
+        struct pollfd p = { fds[0], POLLIN, 0 };
+        if (poll(&p, 1, (int)((end - now) / 1000u) + 1) <= 0)
+            continue;
+        char tmp[512];
+        int n = (int)read(fds[0], tmp, sizeof(tmp));
+        if (n <= 0)
+            break;
+        size_t keep = CHUNK - have < (size_t)n ? CHUNK - have : (size_t)n;
+        memcpy(s_buf + have, tmp, keep);
+        have += keep;
+    }
+    close(fds[0]);
+    if (late)
+        crtos_kill(pid, -ETIMEDOUT);
+    int code = 0;
+    if (crtos_wait(pid, &code, 2000) < 0)
+        code = -ETIMEDOUT;
+    reply(c, "OK %lu", (unsigned long)have);
+    if (send_all(c->fd, s_buf, have))
+        return;
+    reply(c, "OK %d", code);
+}
+
 static void session(int fd, const struct sockaddr_in *peer)
 {
     struct conn *c = (struct conn *)calloc(1, sizeof(*c));
@@ -566,6 +635,8 @@ static void session(int fd, const struct sockaddr_in *peer)
             cmd_mkdir(c, path);
         } else if (!strcmp(cmd, "FLASH") && n == 2) {
             cmd_flash(c, path);
+        } else if (!strcmp(cmd, "EXEC") && n >= 2) {
+            cmd_exec(c, path, size);
         } else if (!strcmp(cmd, "REBOOT")) {
             reply(c, "OK rebooting");
             printf("deployd: reboot asked by %s\n", pa);

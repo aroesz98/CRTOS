@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check that every undefined symbol of the built modules (.ko) is exported by the kernel
-(KSYM entries in kernel/os/ksyms.cpp) or by another module (EXPORT_SYMBOL), and that
-every relocation type is one the kernel loader supports.
+(KSYM entries in kernel/os/ksyms.cpp and in the board's platform_ksyms.h) or by another module
+(EXPORT_SYMBOL), and that every relocation type is one the kernel loader supports.
 
-    python tools/modcheck.py [build/sdcard/crtos/drivers]
+    python tools/modcheck.py [--platform kernel/platform/<board>] [build/sdcard/crtos/drivers]
     python tools/modcheck.py --apps [--quiet] <program.app...>   (programs: nothing may be undefined)
 
 The binutils are those of CRTOS_GCC_BIN (the build sets it) or the ones on the PATH.
@@ -31,8 +31,12 @@ SUPPORTED = {'R_ARM_NONE', 'R_ARM_ABS32', 'R_ARM_REL32', 'R_ARM_THM_CALL', 'R_AR
              'R_ARM_THM_JUMP11'}
 
 
-def kernel_exports():
+def kernel_exports(platform):
     text = open(os.path.join(ROOT, 'kernel', 'os', 'ksyms.cpp'), encoding='utf-8').read()
+    try:
+        text += open(os.path.join(platform, 'board', 'platform_ksyms.h'), encoding='utf-8').read()
+    except OSError:
+        pass
     return set(re.findall(r'KSYM\((\w+)\)', text))
 
 
@@ -98,9 +102,14 @@ def main():
         args = sys.argv[2:]
         quiet = '--quiet' in args
         return check_apps([a for a in args if a != '--quiet'], quiet)
-    moddir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'build', 'sdcard', 'crtos', 'drivers')
+    args = sys.argv[1:]
+    platform = os.path.join(ROOT, 'kernel', 'platform', 'evkbimxrt1050')
+    if len(args) > 1 and args[0] == '--platform':
+        platform = args[1]
+        args = args[2:]
+    moddir = args[0] if args else os.path.join(ROOT, 'build', 'sdcard', 'crtos', 'drivers')
     kos = sorted(f for f in os.listdir(moddir) if f.endswith('.ko'))
-    exports = kernel_exports()
+    exports = kernel_exports(platform)
     undef, defined_exports = {}, set()
     for ko in kos:
         path = os.path.join(moddir, ko)

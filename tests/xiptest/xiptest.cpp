@@ -82,7 +82,7 @@ int main(int argc, char **argv)
     }
     uintptr_t code = (uintptr_t)&main;
     printf("xiptest: code at %08lx (%s), data at %08lx\n", (unsigned long)code,
-           code >= 0x60000000u && code < 0x64000000u ? "in place, flash" : "in memory",
+           code >= 0x60000000u && code < 0x80000000u ? "in place, flash" : "in memory", /* (FlexSPI, XSPI2) */
            (unsigned long)(uintptr_t)&g_counter);
 
     CHECK(s_norder == 3 && s_order[0] == 1 && s_order[1] == 2 && s_order[2] == 3, "constructor order %d %d %d (%d)",

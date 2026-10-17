@@ -27,6 +27,12 @@ nxp-sdk/core                 https://github.com/nxp-mcuxpresso/mcuxsdk-core     
 nxp-sdk/devices-rt           https://github.com/nxp-mcuxpresso/mcux-devices-rt       57a58f6951e2d44f2e7a7f665d9de1a86d40c640 only=RT1050/MIMXRT1052/drivers
 nxp-sdk/components           https://github.com/nxp-mcuxpresso/mcux-component        2a884681d3fd3c8d13ea54204208b31513a36c03 only=phy
 
+# STM32CubeH7RS (BSD-3-Clause / Apache-2.0): the CMSIS device headers of the STM32H7S7 and the
+# HAL/LL drivers - the board STM32H7S78-DK (CRTOS_BOARD=stm32h7s78dk) only: its boot loader and
+# driver modules (cmake/boards/stm32h7s78dk.cmake fetches the group)
+stm32/cmsis-device-h7rs      https://github.com/STMicroelectronics/cmsis-device-h7rs 7e6e213ddc397c76622a0aca2f623ccc3b34c010 only=Include,LICENSE.md group=stm32
+stm32/hal-h7rs               https://github.com/STMicroelectronics/stm32h7rsxx-hal-driver 471265b7f1313e9cb48f42c77b9873bdf007f967 only=Inc,Src,LICENSE.md group=stm32
+
 # newlib and GCC's runtime libraries (the commits of the Arm GNU Toolchain 14.3.Rel1 sources, newlib
 # 4.5.0 and GCC 14.3.1): the build compiles lib/xip/libc.a, libm.a, libgcc.a, libstdc++.a and
 # libsupc++.a from them - position independent, for programs that run in place

@@ -12,7 +12,7 @@
 #include <crtos/module.h>
 #include <crtos/vfs.h>
 #include <string.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 #define MAX_DEPS 16
 

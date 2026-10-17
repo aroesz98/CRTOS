@@ -6,7 +6,7 @@
 |---|---|
 | Identyfikator | K15 |
 | Warstwa | L0 (sterownik konsoli wbudowany w jądro) |
-| Pliki | `kernel/rtos/console_lpuart.cpp` (LPUART1), `kernel/rtos/printk.cpp` (log, `panic`), `kernel/os/tty.cpp` (`/dev/console`, `/dev/null`, `/dev/zero`), `kernel/lib/kformat.cpp` (formatowanie) |
+| Pliki | `kernel/rtos/console_lpuart.cpp` (LPUART1), `kernel/rtos/printk.cpp` (log, `panic`), `kernel/os/tty.cpp` (`/dev/console`, `/dev/null`, `/dev/zero`, `/dev/kmsg`), `kernel/lib/kformat.cpp` (formatowanie); STM32H7S78-DK: `kernel/platform/stm32h7s78dk/console_uart.cpp` (UART4, zamiast `console_lpuart.cpp`; te same funkcje `console_*`) |
 | Interfejs | `kernel/include/crtos/printk.h`, `kernel/include/crtos/tty.h`; wewnętrznie `console_*`, `log_*` w `kernel.h` |
 
 ## 2. Odpowiedzialność
@@ -15,7 +15,9 @@
   i działa w przerwaniach.
 - **Konsola** (LPUART1, 1 Mb/s, 8N1, gniazdo J28 przez DAPLink): nadawanie logu z przerwania
   pustej kolejki FIFO, odbiór do pierścienia 4 KB, podział wejścia między monitor jądra
-  (kmon) i terminal programów (fokus, Ctrl-]).
+  (kmon) i terminal programów (fokus, Ctrl-]). Na STM32H7S78-DK konsolą jest UART4 (PD0/PD1,
+  wirtualny port COM ST-LINK, 1 Mb/s, 8N1) w `console_uart.cpp`: to samo zachowanie, nadawanie
+  z przerwania „FIFO nadajnika niepełne”. `printk.cpp` i `tty.cpp` są wspólne.
 - **Terminal `/dev/console`**: tryb kanoniczny (edycja linii, echo, Ctrl-C, Ctrl-D) albo
   surowy; proces pierwszoplanowy kończony klawiszem Ctrl-C.
 - **`panic`**: synchroniczny raport na konsolę, zapis rekordu w pamięci, której start nie
@@ -31,6 +33,11 @@
 | REQ-K15-04 | Ctrl-C w trybie kanonicznym kończy proces pierwszoplanowy (`TTY_IOC_SET_FG`) z kodem `-EINTR`, także gdy proces nie czyta z terminala. | test ręczny (`crtos serial`, `ping`, Ctrl-C) |
 | REQ-K15-05 | Raport `panic` jest wysyłany synchronicznie (przerwania wyłączone) i zachowany z sumą kontrolną w DTCM `.noinit`; następny start wypisuje go, jeśli suma się zgadza. | `kmon panic` (test ręczny), `crtos crash` |
 | REQ-K15-06 | Po `panic` system restartuje się po 10 s (klawisz `r` od razu, `h` zatrzymuje). | `kmon panic` |
+| REQ-K15-07 | Na STM32H7S78-DK rekord `panic` (DTCM `.noinit`) leży poniżej pamięci programu startowego w DTCM (od 0x2000C000), więc program startowy przy restarcie go nie nadpisuje; budowanie jądra to sprawdza (`ASSERT` w `crtos.ld`). | przegląd kodu |
+
+REQ-K15-01–06 dotyczą obu płytek (wspólne `printk.cpp` i `tty.cpp`, konsola STM32 z tymi
+samymi funkcjami `console_*` i tą samą obsługą Ctrl-] w przerwaniu); weryfikacja w tabeli
+jest z EVKB.
 
 ## 4. Interfejs udostępniany
 
@@ -48,12 +55,15 @@
 | `log_panic_previous()` | start | raport poprzedniego `panic` |
 | `/dev/console` (`file_ops`) | program | `read` (linia w trybie kanonicznym), `write`, `poll`, `ioctl` (`TTY_IOC_GET/SET_MODE`, `SET/GET_FG`, `FOCUS` – `CAP_SYS`, `GET_SIZE`) |
 | `/dev/null`, `/dev/zero` | program | jak w Uniksie |
+| `/dev/kmsg` | program z `CAP_DEV` | tylko odczyt (inny tryb: `-EACCES`): `open` kopiuje log (`log_snapshot`, `KM_LARGE`), `read` i `fstat` (rozmiar) dotyczą tej kopii; `deployd` wysyła go przez sieć (`crtos dmesg`, U06) |
 
 ## 5. Interfejsy wymagane
 
 K02 (`irq_request` LPUART1, priorytet 8), K05 (`kworker_queue`, `sched_block`), K06, K08
 (`proc_kill` dla Ctrl-C), K13 (`devfs_register`), NXP SDK `fsl_lpuart`, piny i zegar UART
-z kodu startowego płytki.
+z kodu startowego płytki. STM32: K02 (`irq_request` UART4, priorytet 8), te same K05, K06,
+K08, K13; rejestry USART wprost (CMSIS), piny PD0/PD1 i zegar UART4 ustawia sama konsola
+(`con_hw_init`), zegar jądra UART to PCLK1 (150 MHz) z programu startowego.
 
 ## 6. Struktura statyczna
 
@@ -95,6 +105,15 @@ z kodu startowego płytki.
   SWD (K19) pisze do własnego pierścienia zamiast UART.
 - `panic` odmierza czas licznikiem cykli (przerwania są wyłączone), a konsolę obsługuje
   odpytywaniem (`console_panic_write/getc`).
+- **STM32H7S78-DK** (`console_uart.cpp`):
+  - log w AXI SRAM (ta sama sekcja `.bss.$SRAM_OC`), rekord `panic` w DTCM `.noinit` poniżej
+    16 KB RAM programu startowego (REQ-K15-07);
+  - UART4 z FIFO: przerwanie „TX FIFO niepełne” dopełnia FIFO z logu przez 16-bajtową
+    kolejkę (LF → CR LF) i wyłącza się, gdy logu nie ma; odbiór opróżnia FIFO odbiornika do
+    pierścienia 4 KB; błędy przepełnienia, ramki, szumu i parzystości są kasowane, przepełnienia
+    liczone;
+  - `BRR` = PCLK1 / 1 000 000; `console_panic_write/getc` odpytują, a `console_panic_write`
+    czeka na koniec nadawania (`TC`).
 
 ## 9. Obsługa błędów i mechanizmy bezpieczeństwa
 
@@ -110,7 +129,9 @@ z kodu startowego płytki.
 
 `CONFIG_LOG_BUF_SIZE` (16384), `CONFIG_CONSOLE_RX_BUF` (4096), prędkość `CON_BAUD`
 (1 000 000), priorytet przerwania 8, `LINE_MAX` terminala (256), klawisz kmon
-`TTY_KEY_KMON` (0x1D, Ctrl-]).
+`TTY_KEY_KMON` (0x1D, Ctrl-]). STM32: `CON_BAUD` (1 000 000) i `CON_PRIO` (8)
+w `console_uart.cpp`; `/chosen/stdout-path = "serial4:1000000n8"` i `&uart4`
+w `dts/stm32h7s78dk.dts` (tego portu nie przejmuje `uart-stm32`, REQ-D02-05).
 
 ## 11. Weryfikacja
 
@@ -118,9 +139,13 @@ z kodu startowego płytki.
 - `crtos kmon dmesg`, `uptime` (statystyka konsoli).
 - `crtos kmon panic`: pełna ścieżka `panic` z restartem i raportem przy następnym starcie
   (ręcznie).
+- STM32H7S78-DK: te same polecenia przez wirtualny port COM ST-LINK (CN1); start z konsolą
+  na UART4 (D02, 04.10.2026).
 
 ## 12. Ograniczenia i znane problemy
 
 - Konsola jest wspólna dla logu jądra i programów: przy dużym ruchu log może zostać
   częściowo utracony (licznik).
 - Jedna konsola sprzętowa; porty `/dev/ttyS*` obsługuje osobny sterownik (D02).
+- STM32: DTCM `.noinit` musi kończyć się przed 0x2000C000 (RAM programu startowego); sekcja,
+  która by tam sięgała, zatrzymuje budowanie jądra (REQ-K15-07).

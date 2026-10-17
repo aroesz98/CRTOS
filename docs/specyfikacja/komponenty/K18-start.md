@@ -78,9 +78,10 @@ K14 (`sdcard_init`, `fat_mount`), K16 (`module_load`, `app_spawn`).
 ## 8. Implementacja
 
 - **Sterowniki wbudowane** rejestrowane przed modułami: `builtin-bus` (dla `simple-bus`
-  i kontrolera NVIC), `builtin-usdhc` (dołącza się tylko do USDHC1, z którego jądro
-  wystartowało, gdy karta działa), `earlycon` (dołącza się do UART wskazanego w
-  `/chosen/stdout-path`). Dzięki temu moduły nie przejmują urządzeń, których używa jądro.
+  i kontrolera NVIC), `builtin-sdcard` (dołącza się tylko do kontrolera karty SD, z którego
+  jądro wystartowało – USDHC1 na i.MX RT, SDMMC1 na STM32 – gdy karta działa), `earlycon`
+  (dołącza się do UART wskazanego w `/chosen/stdout-path`). Dzięki temu moduły nie
+  przejmują urządzeń, których używa jądro.
 - **Automatyczne ładowanie**: `collect` zbiera nazwy modułów dla urządzeń niepodłączonych
   (pierwsze pasujące `compatible` z listy urządzenia), każdy moduł najwyżej raz
   (`tried`); pętla kończy się, gdy nie ma nowych kandydatów.

@@ -10,7 +10,7 @@ participant "K16 loader" as L
     B -> S : sdcard_init, fat_mount("/sd")
     B -> B : SW8 (GPIO5_IO00) wciśnięty? -> tryb awaryjny
     B -> O : vfs_load_file(board.dtb), of_init
-    B -> O : driver_register: builtin-bus, builtin-usdhc, earlycon
+    B -> O : driver_register: builtin-bus, builtin-sdcard, earlycon
     B -> O : device_populate
     opt nie tryb awaryjny
         B -> B : modules.alias -> pary (compatible, moduł)

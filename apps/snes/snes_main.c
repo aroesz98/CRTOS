@@ -40,6 +40,7 @@
 #include "snes_font.h"
 
 #define FRAME_ROOM 46             /* the task bar and the window's title */
+#define BAR_COVER 24              /* the window's bottom under the task bar */
 #define REPEAT_DELAY_US 380000u   /* held direction in the menus: first repeat */
 #define REPEAT_US 70000u          /* then */
 #define STALE_US 100000u          /* a picture the display did not take by then is dropped */
@@ -62,8 +63,29 @@ static struct snes_rom_info s_info;
 static char s_save[400];          /* battery RAM file ("" if the game has none) */
 static uint32_t s_save_sum;
 
-/* the picture on the window: s_lines lines at (s_gx, s_gy) */
-static int s_gx, s_gy, s_lines;
+/* the picture on the window: s_lines lines, at (s_gx, s_gy) s_gw x s_gh */
+static int s_gx, s_gy, s_gw, s_gh, s_lines;
+
+/* The picture: the core's lines go into a buffer that the accelerator stretches over the
+ * window's height, filtered or sharp; or into the window as they are (1:1, the default without
+ * an accelerator that stretches). The choice is kept in PICTURE_CFG.
+ *
+ * Stretched, the accelerator takes a few milliseconds a picture, which the core would miss for
+ * a frame at 60 Hz: so s_pic holds two pictures, one under the other, and a thread of its own
+ * waits for the accelerator stretching one (s_job) while the core draws the next into the
+ * other (s_half). The window is damaged once the thread is done; the processor draws into the
+ * window only while the thread is idle (the accelerator's driver cleans and invalidates the
+ * window's cached rows). */
+enum picture { PIC_SMOOTH, PIC_SHARP, PIC_1X, PICTURES };
+static const char *const PICTURE_NAME[PICTURES] = {"SMOOTH", "SHARP", "1:1"};
+#define PICTURE_CFG SNES_VAR_DIR "/picture"
+static enum picture s_picture = PIC_1X;
+static struct gfx_buffer *s_pic;  /* the pictures for the accelerator (SNES_W x 2 SNES_H) */
+static volatile uint32_t s_job;   /* 0: the thread is idle; 1 + half: it stretches that half */
+static volatile bool s_job_failed;
+static int s_half;                /* the half the core draws into */
+static bool s_scaling;            /* a picture went to the thread: the window damaged after it */
+static bool s_scaling_all;        /* ... the whole window (the panels were drawn too) */
 static uint16_t *s_menu_pic;      /* the picture under the pause menu */
 
 /* pacing */
@@ -278,9 +300,12 @@ static bool inside(const struct rect *r, int x, int y)
 static void layout(void)
 {
     s_lines = H >= SNES_H ? SNES_H : H;
-    s_gx = (W - SNES_W) / 2;
-    s_gy = (H - s_lines) / 2;
-    int pw = s_gx, rx = s_gx + SNES_W;
+    /* stretched: as high as the window but its bottom, which the task bar covers */
+    s_gh = s_picture == PIC_1X ? s_lines : H - BAR_COVER;
+    s_gw = s_picture == PIC_1X ? SNES_W : (SNES_W * s_gh / s_lines) & ~1;
+    s_gx = (W - s_gw) / 2;
+    s_gy = s_picture == PIC_1X ? (H - s_gh) / 2 : 0;
+    int pw = s_gx, rx = s_gx + s_gw;
     r_menu = (struct rect){8, 8, pw - 16, 20};
     r_l = (struct rect){8, 34, pw - 16, 20};
     r_select = (struct rect){8, H - 28, pw - 16, 20};
@@ -335,7 +360,7 @@ static uint16_t touch_at(int x, int y, bool *menu)
             b |= dy > 0 ? SNES_DOWN : SNES_UP;
         return b;
     }
-    if (x >= s_gx + SNES_W)
+    if (x >= s_gx + s_gw)
     {
         /* the nearest face button, if the finger is near enough */
         int best = -1, best_d = (FACE_R + 9) * (FACE_R + 9);
@@ -381,9 +406,9 @@ static void draw_panels(void)
     const struct gfx_surface *s = &w->s;
     uint16_t panel = RGB565(44, 42, 52), on = s_touch;
     draw_fill(s, 0, 0, s_gx, H, panel);
-    draw_fill(s, s_gx + SNES_W, 0, W - s_gx - SNES_W, H, panel);
-    draw_fill(s, s_gx, 0, SNES_W, s_gy, C_BLACK);
-    draw_fill(s, s_gx, s_gy + s_lines, SNES_W, H - s_gy - s_lines, C_BLACK);
+    draw_fill(s, s_gx + s_gw, 0, W - s_gx - s_gw, H, panel);
+    draw_fill(s, s_gx, 0, s_gw, s_gy, C_BLACK);
+    draw_fill(s, s_gx, s_gy + s_gh, s_gw, H - s_gy - s_gh, C_BLACK);
     draw_button(s, &r_menu, "MENU", s_mode == MODE_MENU);
     draw_button(s, &r_l, "L", on & SNES_L);
     draw_button(s, &r_r, "R", on & SNES_R);
@@ -435,7 +460,7 @@ static void draw_panels(void)
     /* frames per second on the screen */
     char fps[16];
     snprintf(fps, sizeof(fps), "%u FPS", s_fps);
-    int rx = s_gx + SNES_W;
+    int rx = s_gx + s_gw;
     unsigned full = s_info.pal ? 50u : 60u;
     draw_text(s, rx + ((W - rx) - text_width(fps, 1)) / 2, 14, fps,
               s_fps * 100u >= full * 92u ? C_GREEN : s_fps * 100u >= full * 66u ? C_GOLD : C_RED, 1);
@@ -443,11 +468,11 @@ static void draw_panels(void)
 }
 
 /*
- * The core's last picture onto the window: 256 x 224 as it is; 512 wide (hi-res) with the
- * two pixels of each pair averaged; interlaced (twice the lines) every second line; the
- * middle 224 lines of a picture with overscan (239).
+ * The core's last picture to @dst (lines @stride bytes apart): 256 x 224 as it is; 512 wide
+ * (hi-res) with the two pixels of each pair averaged; interlaced (twice the lines) every second
+ * line; the middle 224 lines of a picture with overscan (239).
  */
-static void blit_picture(void)
+static void blit_picture_to(uint8_t *dst, uint32_t stride)
 {
     int width, height, pitch;
     const uint16_t *src = snes_screen(&width, &height, &pitch);
@@ -456,7 +481,7 @@ static void blit_picture(void)
     int first = lines > s_lines ? (lines - s_lines) / 2 : 0;
     for (int y = 0; y < s_lines; y++)
     {
-        uint16_t *d = (uint16_t *)((uint8_t *)w->s.pix + (s_gy + y) * w->s.stride) + s_gx;
+        uint16_t *d = (uint16_t *)(dst + y * stride);
         if (y >= lines)
         {
             memset(d, 0, SNES_W * 2);
@@ -476,9 +501,64 @@ static void blit_picture(void)
     }
 }
 
-/* the picture under the pause menu, kept and put back */
+static void set_picture(enum picture p);
+
+static uint8_t *half_rows(int half)
+{
+    return (uint8_t *)s_pic->s.pix + (size_t)half * SNES_H * s_pic->s.stride;
+}
+
+/* the thread: a half of s_pic stretched into the window, again and again */
+static void *presenter(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        uint32_t job = s_job;
+        if (!job)
+        {
+            crtos_futex_wait(&s_job, 0, 1000);
+            continue;
+        }
+        if (gfx_gpu_scale(w, s_gx, s_gy, s_gw, s_gh, s_pic, 0, (int)(job - 1u) * SNES_H, SNES_W, s_lines,
+                          s_picture == PIC_SMOOTH ? GFX_GPU_SMOOTH : 0))
+            s_job_failed = true;
+        __sync_synchronize(); /* (the window's pixels before the word that says so) */
+        s_job = 0;
+        crtos_futex_wake(&s_job, 1);
+    }
+    return NULL;
+}
+
+/* the thread done with its picture (before the processor draws into the window) */
+static void presenter_wait(void)
+{
+    for (uint32_t job; (job = s_job) != 0;)
+        crtos_futex_wait(&s_job, job, 100);
+    __sync_synchronize();
+}
+
+/* the last picture to the window as it is now: stretched (the last half shown) at once, or (1:1)
+ * the core's own */
+static void blit_picture(void)
+{
+    if (s_picture != PIC_1X)
+    {
+        presenter_wait();
+        if (gfx_gpu_scale(w, s_gx, s_gy, s_gw, s_gh, s_pic, 0, (s_half ^ 1) * SNES_H, SNES_W, s_lines,
+                          s_picture == PIC_SMOOTH ? GFX_GPU_SMOOTH : 0) == 0)
+            return;
+        printf("snes: the accelerator does not stretch the picture: 1:1\n");
+        set_picture(PIC_1X);
+    }
+    blit_picture_to((uint8_t *)w->s.pix + s_gy * w->s.stride + s_gx * 2, w->s.stride);
+}
+
+/* the picture under the pause menu, kept and put back (stretched, s_pic keeps it) */
 static void save_picture(void)
 {
+    if (s_picture != PIC_1X)
+        return;
     if (!s_menu_pic)
         s_menu_pic = malloc(SNES_W * SNES_H * 2);
     if (!s_menu_pic)
@@ -489,6 +569,11 @@ static void save_picture(void)
 
 static void restore_picture(void)
 {
+    if (s_picture != PIC_1X)
+    {
+        blit_picture(); /* (s_pic has it) */
+        return;
+    }
     if (!s_menu_pic)
         return;
     for (int y = 0; y < s_lines; y++)
@@ -501,9 +586,50 @@ static uint32_t average(uint32_t avg, uint64_t us)
     return avg ? (uint32_t)((avg * 7u + us) / 8u) : (uint32_t)us;
 }
 
+/* the thread's picture is in the window: to the display (run_game, while scaling) */
+static void scaled(void)
+{
+    s_scaling = false;
+    if (s_job_failed)
+    {
+        s_job_failed = false;
+        printf("snes: the accelerator does not stretch the picture: 1:1\n");
+        set_picture(PIC_1X);
+        return;
+    }
+    if (s_scaling_all)
+        gfx_present(w);
+    else
+        gfx_damage(w, s_gx, s_gy, s_gw, s_gh);
+    s_shown++;
+}
+
 static void show(void)
 {
     uint64_t t0 = crtos_time_us();
+    if (s_picture != PIC_1X)
+    {
+        /* stretched: the panels first (the thread idle), then the picture to the thread */
+        if (s_scaling)
+            return; /* (the last one is not on the window yet) */
+        if (!s_direct)
+            blit_picture_to(half_rows(s_half), s_pic->s.stride);
+        s_direct = false;
+        s_scaling_all = s_panels_dirty || s_fps != s_fps_shown;
+        if (s_scaling_all)
+        {
+            draw_panels();
+            s_panels_dirty = false;
+        }
+        s_scaling = true;
+        __sync_synchronize(); /* (the panels' pixels and the picture before the job) */
+        s_job = 1u + (uint32_t)s_half;
+        crtos_futex_wake(&s_job, 1);
+        s_half ^= 1; /* (the core's next picture into the other half) */
+        s_have_frame = false;
+        s_show_us = average(s_show_us, crtos_time_us() - t0);
+        return;
+    }
     if (!s_direct)
         blit_picture();
     s_direct = false;
@@ -515,7 +641,7 @@ static void show(void)
     }
     else
     {
-        gfx_damage(w, s_gx, s_gy, SNES_W, s_lines);
+        gfx_damage(w, s_gx, s_gy, s_gw, s_gh);
     }
     s_have_frame = false;
     s_shown++;
@@ -611,10 +737,69 @@ static void sound_volume(int volume)
 
 /* ---- the pause menu -------------------------------------------------------------------------- */
 
-enum { ITEM_CONTINUE, ITEM_RESET, ITEM_VOLUME, ITEM_QUIT, MENU_ITEMS };
-static const char *const MENU[MENU_ITEMS] = {"CONTINUE", "RESET", "VOLUME", "QUIT GAME"};
+enum { ITEM_CONTINUE, ITEM_RESET, ITEM_VOLUME, ITEM_PICTURE, ITEM_QUIT, MENU_ITEMS };
+static const char *const MENU[MENU_ITEMS] = {"CONTINUE", "RESET", "VOLUME", "PICTURE", "QUIT GAME"};
 static int s_menu_sel;
 static struct rect s_menu_rect[MENU_ITEMS];
+
+/* Another picture (in the menu: the paused picture moves along, the window is drawn anew) */
+static void set_picture(enum picture p)
+{
+    if (p != PIC_1X && !s_pic)
+        p = PIC_1X;
+    if (p == s_picture)
+        return;
+    presenter_wait();
+    if (s_scaling && s_picture != PIC_1X)
+        scaled();
+    if (s_picture == PIC_1X || p == PIC_1X)
+    {
+        if (!s_menu_pic)
+            s_menu_pic = malloc(SNES_W * SNES_H * 2);
+        for (int y = 0; y < s_lines && s_menu_pic; y++)
+        {
+            uint16_t *pic = (uint16_t *)(half_rows(s_half ^ 1) + y * s_pic->s.stride);
+            if (s_picture == PIC_1X)
+                memcpy(pic, s_menu_pic + y * SNES_W, SNES_W * 2);
+            else
+                memcpy(s_menu_pic + y * SNES_W, pic, SNES_W * 2);
+        }
+    }
+    s_picture = p;
+    layout();
+    s_panels_dirty = true;
+    s_dirty = true;
+    mkdir("/sd/crtos/var", 0755);
+    mkdir(SNES_VAR_DIR, 0755);
+    FILE *f = fopen(PICTURE_CFG, "w");
+    if (f)
+    {
+        fprintf(f, "%s\n", PICTURE_NAME[p]);
+        fclose(f);
+    }
+}
+
+static void picture_init(void)
+{
+    s_pic = gfx_buffer_create(SNES_W, 2 * SNES_H, GPU2D_FMT_RGB565);
+    if (s_pic && !crtos_thread_start(presenter, NULL, 4096, 0))
+    {
+        gfx_buffer_free(s_pic);
+        s_pic = NULL;
+    }
+    enum picture p = s_pic && (gfx_gpu_caps() & GPU2D_CAP_SCALE) ? PIC_SMOOTH : PIC_1X;
+    FILE *f = fopen(PICTURE_CFG, "r");
+    char line[16] = "";
+    if (f)
+    {
+        if (fgets(line, sizeof(line), f))
+            for (int i = 0; i < PICTURES; i++)
+                if (!strncmp(line, PICTURE_NAME[i], strlen(PICTURE_NAME[i])))
+                    p = (enum picture)i;
+        fclose(f);
+    }
+    s_picture = p != PIC_1X && !s_pic ? PIC_1X : p;
+}
 
 static void resume(void)
 {
@@ -651,6 +836,9 @@ static void menu_choose(void)
         sound_volume(s_volume >= 100 ? 0 : (int)s_volume + 10);
         s_dirty = true;
         break;
+    case ITEM_PICTURE:
+        set_picture((enum picture)((s_picture + 1) % PICTURES));
+        break;
     default:
         stop_game();
         break;
@@ -669,9 +857,12 @@ static void menu_nav(enum nav nav)
         break;
     case NAV_LEFT:
     case NAV_RIGHT:
-        if (s_menu_sel != ITEM_VOLUME)
+        if (s_menu_sel == ITEM_PICTURE)
+            set_picture((enum picture)((s_picture + (nav == NAV_LEFT ? PICTURES - 1 : 1)) % PICTURES));
+        else if (s_menu_sel == ITEM_VOLUME)
+            sound_volume((int)s_volume + (nav == NAV_LEFT ? -10 : 10));
+        else
             return;
-        sound_volume((int)s_volume + (nav == NAV_LEFT ? -10 : 10));
         break;
     case NAV_OK:
         menu_choose();
@@ -691,9 +882,9 @@ static void draw_menu(uint64_t now)
     const struct gfx_surface *s = &w->s;
     restore_picture();
     draw_panels();
-    draw_dim(s, s_gx, s_gy, SNES_W, s_lines);
-    int bw = 160, bh = 30 + MENU_ITEMS * 16 + 6;
-    int bx = s_gx + (SNES_W - bw) / 2, by = s_gy + (s_lines - bh) / 2;
+    draw_dim(s, s_gx, s_gy, s_gw, s_gh);
+    int bw = 200, bh = 30 + MENU_ITEMS * 16 + 6;
+    int bx = s_gx + (s_gw - bw) / 2, by = s_gy + (s_gh - bh) / 2;
     draw_frame(s, bx, by, bw, bh, C_WHITE, C_NAVY);
     draw_text_shadow(s, bx + (bw - text_width("PAUSE", 1)) / 2, by + 9, "PAUSE", C_SKY, 1);
     bool blink = (now / 400000u) & 1u;
@@ -708,6 +899,8 @@ static void draw_menu(uint64_t now)
             snprintf(text, sizeof(text), "NO SOUND");
         else if (i == ITEM_VOLUME)
             snprintf(text, sizeof(text), "VOLUME < %lu >", (unsigned long)s_volume);
+        else if (i == ITEM_PICTURE)
+            snprintf(text, sizeof(text), "PICTURE < %s >", PICTURE_NAME[s_picture]);
         else
             snprintf(text, sizeof(text), "%s", MENU[i]);
         draw_text(s, bx + 30, y, text, i == s_menu_sel ? C_WHITE : C_GREY, 1);
@@ -718,6 +911,9 @@ static void draw_menu(uint64_t now)
 
 static void draw_ui(uint64_t now)
 {
+    presenter_wait();
+    if (s_scaling)
+        scaled();
     gfx_wait_frame(w, 50); /* gfxd is done with the pixels */
     if (s_mode == MODE_MENU)
         draw_menu(now);
@@ -806,8 +1002,12 @@ static void start_game(const char *path)
     s_fps_at = crtos_time_us() + 1000000u;
     s_autosave_at = crtos_time_us() + AUTOSAVE_US;
     gfx_wait_frame(w, 50);
+    presenter_wait();
+    s_scaling = false;
     draw_panels();
-    draw_fill(&w->s, s_gx, s_gy, SNES_W, s_lines, C_BLACK);
+    draw_fill(&w->s, s_gx, s_gy, s_gw, s_gh, C_BLACK);
+    if (s_pic)
+        memset(s_pic->s.pix, 0, (size_t)s_pic->s.stride * (size_t)s_pic->s.h);
     gfx_present(w);
 }
 
@@ -1030,6 +1230,8 @@ static void pump(uint32_t timeout)
 static void run_game(void)
 {
     uint64_t now = crtos_time_us();
+    if (s_scaling && !s_job)
+        scaled();
     if (s_have_frame && !w->frame_pending)
         show();
     if (s_have_frame && now - s_have_since > STALE_US)
@@ -1075,17 +1277,21 @@ static void run_game(void)
                             (now * 1000u - s_next_ns > s_period_ns && s_skipped < MAX_SKIP));
     s_frame_no++;
     /* a frame to draw while the window's last picture is on the screen already: its lines go
-     * straight into the window, strip by strip (no copy of the whole picture afterwards) */
+     * straight into the window, strip by strip (no copy of the whole picture afterwards);
+     * stretched, into s_pic at any time */
     bool direct = false;
-    if (!skip && !w->frame_pending && !w->resize_pending)
+    if (!skip && (s_picture != PIC_1X || (!w->frame_pending && !w->resize_pending)))
     {
         int width, height, pitch;
         snes_screen(&width, &height, &pitch);
         int first = height > s_lines ? (height - s_lines) / 2 : 0;
         if (width == SNES_W && height - first >= s_lines)
         {
-            snes_output((uint16_t *)((uint8_t *)w->s.pix + s_gy * w->s.stride) + s_gx, w->s.stride / 2, first,
-                        s_lines, height);
+            if (s_picture != PIC_1X)
+                snes_output((uint16_t *)half_rows(s_half), (int)(s_pic->s.stride / 2u), first, s_lines, height);
+            else
+                snes_output((uint16_t *)((uint8_t *)w->s.pix + s_gy * w->s.stride) + s_gx, w->s.stride / 2, first,
+                            s_lines, height);
             direct = true;
         }
     }
@@ -1388,6 +1594,7 @@ int main(int argc, char **argv)
         printf("snes: no window\n");
         return 1;
     }
+    picture_init();
     layout();
 
     /* a folder to browse, or a game to start */

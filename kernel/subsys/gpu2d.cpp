@@ -125,6 +125,32 @@ static int soft_blit(const struct gpu2d_surface *d, int16_t dx, int16_t dy, cons
     return 0;
 }
 
+/* @sr of @s stretched over @dr of @d, the nearest pixel (GPU2D_FILTER is a hint the CPU skips) */
+static int soft_scale(const struct gpu2d_surface *d, const struct gpu2d_rect *dr, const struct gpu2d_surface *s,
+                      const struct gpu2d_rect *sr, uint32_t flags)
+{
+    int sx = sr->x < 0 ? 0 : sr->x, sy = sr->y < 0 ? 0 : sr->y;
+    int sw = sr->x + sr->w > s->width ? s->width - sx : sr->x + sr->w - sx;
+    int sh = sr->y + sr->h > s->height ? s->height - sy : sr->y + sr->h - sy;
+    if (sw <= 0 || sh <= 0 || !dr->w || !dr->h)
+        return 0;
+    int x0 = dr->x < 0 ? 0 : dr->x, y0 = dr->y < 0 ? 0 : dr->y;
+    int x1 = dr->x + dr->w > d->width ? d->width : dr->x + dr->w;
+    int y1 = dr->y + dr->h > d->height ? d->height : dr->y + dr->h;
+    bool alpha = (flags & GPU2D_BLEND) && s->format == GPU2D_FMT_ARGB8888;
+    for (int y = y0; y < y1; y++) {
+        int v = sy + (int)((uint32_t)(y - dr->y) * (uint32_t)sh / dr->h);
+        for (int x = x0; x < x1; x++) {
+            int u = sx + (int)((uint32_t)(x - dr->x) * (uint32_t)sw / dr->w);
+            uint32_t c = get_px(s, u, v);
+            if (alpha)
+                c = blend(c, get_px(d, x, y));
+            put_px(d, x, y, c);
+        }
+    }
+    return 0;
+}
+
 /* ---- kernel API --------------------------------------------------------------------------------- */
 
 int gpu2d_fill(const struct gpu2d_surface *dst, const struct gpu2d_rect *r, uint32_t argb)
@@ -148,28 +174,40 @@ int gpu2d_blit(const struct gpu2d_surface *dst, int16_t dx, int16_t dy, const st
 
 /* ---- /dev/gpu2d ----------------------------------------------------------------------------------- */
 
+/* @size bytes at @offset of the calling process's shared memory @handle (a reference held) */
+static int shm_range(int32_t handle, uint64_t offset, uint64_t size, uint8_t **p, struct shm **ref)
+{
+    uint8_t *base;
+    uint32_t total;
+    struct shm *sh = shm_lookup(handle, &base, &total, nullptr);
+    if (!sh)
+        return -EBADF;
+    if (offset + size > total) {
+        shm_put(sh);
+        return -EINVAL;
+    }
+    *p = base + offset;
+    *ref = sh;
+    return 0;
+}
+
 /* Surface @hs of the calling process as an address, checked against its shared memory */
 static int resolve(const struct gpu2d_hsurface *hs, struct gpu2d_surface *s, struct shm **ref)
 {
     if (hs->format < GPU2D_FMT_RGB565 || hs->format > GPU2D_FMT_ARGB8888 || !hs->width || !hs->height)
         return -EINVAL;
-    uint8_t *base;
-    uint32_t size;
-    struct shm *sh = shm_lookup(hs->handle, &base, &size, nullptr);
-    if (!sh)
-        return -EBADF;
     uint64_t row = (uint64_t)hs->width * bpp(hs->format);
-    uint64_t need = (uint64_t)hs->offset + (uint64_t)hs->stride * (hs->height - 1u) + row;
-    if (hs->stride < row || need > size || ((hs->offset | hs->stride) & 1u)) {
-        shm_put(sh);
+    if (hs->stride < row || ((hs->offset | hs->stride) & 1u))
         return -EINVAL;
-    }
-    s->addr = (uintptr_t)base + hs->offset;
+    uint8_t *p;
+    int r = shm_range(hs->handle, hs->offset, (uint64_t)hs->stride * (hs->height - 1u) + row, &p, ref);
+    if (r)
+        return r;
+    s->addr = (uintptr_t)p;
     s->width = hs->width;
     s->height = hs->height;
     s->stride = hs->stride;
     s->format = hs->format;
-    *ref = sh;
     return 0;
 }
 
@@ -203,15 +241,148 @@ static int hblit(const struct gpu2d_hblit_req *q)
     return r;
 }
 
+static int hscale(const struct gpu2d_hscale_req *q)
+{
+    struct gpu2d_surface d, s;
+    struct shm *dref, *sref;
+    int r = resolve(&q->dst, &d, &dref);
+    if (r)
+        return r;
+    r = resolve(&q->src, &s, &sref);
+    if (r) {
+        shm_put(dref);
+        return r;
+    }
+    gpu_init_once();
+    mutex_lock(&s_lock, WAIT_FOREVER);
+    r = soft_scale(&d, &q->dst_rect, &s, &q->src_rect, q->flags);
+    mutex_unlock(&s_lock);
+    shm_put(sref);
+    shm_put(dref);
+    return r;
+}
+
+/* A batch for a driver that takes it whole: every surface checked first, then one call */
+static struct gpu2d_op s_bops[GPU2D_BATCH_MAX];     /* (under s_lock) */
+static struct shm *s_brefs[2 * GPU2D_BATCH_MAX];
+
+static int hbatch_whole(const struct gpu2d_hbatch *b)
+{
+    mutex_lock(&s_lock, WAIT_FOREVER);
+    uint32_t nrefs = 0;
+    int r = 0;
+    for (uint32_t i = 0; i < b->count && !r; i++) {
+        const struct gpu2d_hop *h = &b->ops[i];
+        struct gpu2d_op *o = &s_bops[i];
+        o->op = h->op;
+        if (h->op == GPU2D_OP_FILL) {
+            r = resolve(&h->fill.dst, &o->dst, &s_brefs[nrefs]);
+            if (!r)
+                nrefs++;
+            o->rect = h->fill.rect;
+            o->argb = h->fill.argb;
+        } else if (h->op == GPU2D_OP_SCALE) {
+            r = resolve(&h->scale.dst, &o->dst, &s_brefs[nrefs]);
+            if (!r) {
+                nrefs++;
+                r = resolve(&h->scale.src, &o->src, &s_brefs[nrefs]);
+                if (!r)
+                    nrefs++;
+            }
+            o->rect = h->scale.src_rect;
+            o->drect = h->scale.dst_rect;
+            o->flags = h->scale.flags;
+        } else if (h->op == GPU2D_OP_BLIT) {
+            r = resolve(&h->blit.dst, &o->dst, &s_brefs[nrefs]);
+            if (!r) {
+                nrefs++;
+                r = resolve(&h->blit.src, &o->src, &s_brefs[nrefs]);
+                if (!r)
+                    nrefs++;
+            }
+            o->rect = h->blit.src_rect;
+            o->dx = h->blit.dx;
+            o->dy = h->blit.dy;
+            o->flags = h->blit.flags;
+        } else {
+            r = -EINVAL;
+        }
+    }
+    if (!r)
+        r = s_ops && s_ops->batch ? s_ops->batch(s_ctx, s_bops, b->count) : -ENODEV;
+    while (nrefs)
+        shm_put(s_brefs[--nrefs]);
+    mutex_unlock(&s_lock);
+    return r;
+}
+
+/* Primitives: the request copied (the caller may change it meanwhile), the destination and
+ * each texture array with all its layers checked against the caller's shared memory, the
+ * primitives against its memory; the driver checks each primitive as it reads it */
+static int hprims(const struct gpu2d_prims_req *uq)
+{
+    static struct gpu2d_prims_req q;    /* (under s_lock) */
+    static struct gpu2d_texarray tex[GPU2D_PRIM_TEXARRAYS];
+    static struct shm *refs[GPU2D_PRIM_TEXARRAYS + 2];
+    gpu_init_once();
+    mutex_lock(&s_lock, WAIT_FOREVER);
+    if (!s_ops || !s_ops->prims) {
+        mutex_unlock(&s_lock);
+        return -ENOSYS;
+    }
+    memcpy(&q, uq, sizeof(q));
+    unsigned nrefs = 0;
+    int r = q.count > GPU2D_PRIMS_MAX || q.ntex > GPU2D_PRIM_TEXARRAYS || ((uintptr_t)q.prims & 3u) ? -EINVAL : 0;
+    if (!r && (!uaccess_ok(q.prims, q.count * sizeof(struct gpu2d_prim), 0) ||
+               (q.rows && !uaccess_ok(q.rows, q.count * 4u, 0))))
+        r = -EFAULT;
+    struct gpu2d_surface dst;
+    if (!r && !(r = resolve(&q.dst, &dst, &refs[nrefs])))
+        nrefs++;
+    for (unsigned i = 0; i < q.ntex && !r; i++) {
+        const struct gpu2d_htexarray *h = &q.tex[i];
+        if (!h->layers || h->layers > 65536u || !h->s.height || h->s.format < GPU2D_FMT_RGB565 ||
+            h->s.format > GPU2D_FMT_ARGB8888) {
+            r = -EINVAL;
+            break;
+        }
+        /* all the layers: one surface as tall as all of them */
+        uint64_t row = (uint64_t)h->s.width * bpp(h->s.format);
+        uint64_t size = (uint64_t)h->s.stride * ((uint64_t)h->s.height * h->layers - 1u) + row;
+        uint8_t *p;
+        if (!h->s.width || h->s.stride < row || ((h->s.offset | h->s.stride) & 1u)) {
+            r = -EINVAL;
+            break;
+        }
+        if (!(r = shm_range(h->s.handle, h->s.offset, size, &p, &refs[nrefs]))) {
+            nrefs++;
+            tex[i].s = (struct gpu2d_surface){ (uintptr_t)p, h->s.width, h->s.height, h->s.stride, h->s.format };
+            tex[i].layers = h->layers;
+        }
+    }
+    if (!r)
+        r = s_ops->prims(s_ctx, &dst, &q.clip, q.flags, q.prims, q.rows, q.count, tex, q.ntex);
+    while (nrefs)
+        shm_put(refs[--nrefs]);
+    mutex_unlock(&s_lock);
+    return r;
+}
+
 static int hbatch(const struct gpu2d_hbatch *b)
 {
     if (b->count > GPU2D_BATCH_MAX)
         return -EINVAL;
     if (!uaccess_ok(b->ops, b->count * sizeof(struct gpu2d_hop), 0))
         return -EFAULT;
+    gpu_init_once();
+    if (s_ops && s_ops->batch)
+        return hbatch_whole(b);
     for (uint32_t i = 0; i < b->count; i++) {
         const struct gpu2d_hop *op = &b->ops[i];
-        int r = op->op == GPU2D_OP_FILL ? hfill(&op->fill) : op->op == GPU2D_OP_BLIT ? hblit(&op->blit) : -EINVAL;
+        int r = op->op == GPU2D_OP_FILL    ? hfill(&op->fill)
+                : op->op == GPU2D_OP_BLIT  ? hblit(&op->blit)
+                : op->op == GPU2D_OP_SCALE ? hscale(&op->scale)
+                                           : -EINVAL;
         if (r)
             return r;
     }
@@ -240,6 +411,20 @@ static int gpu_ioctl(struct file *, unsigned cmd, void *arg)
         return hblit((const struct gpu2d_hblit_req *)arg);
     case GPU2D_IOC_HBATCH:
         return hbatch((const struct gpu2d_hbatch *)arg);
+    case GPU2D_IOC_PRIMS:
+        return hprims((const struct gpu2d_prims_req *)arg);
+    case GPU2D_IOC_STATS: {
+        struct gpu2d_stats *st = (struct gpu2d_stats *)arg;
+        memset(st, 0, sizeof(*st));
+        gpu_init_once();
+        mutex_lock(&s_lock, WAIT_FOREVER);
+        if (s_ops && s_ops->stats)
+            s_ops->stats(s_ctx, st);
+        else
+            strcpy(st->name, s_ops ? "accelerator" : "CPU");
+        mutex_unlock(&s_lock);
+        return 0;
+    }
     default:
         return -ENOTTY;
     }

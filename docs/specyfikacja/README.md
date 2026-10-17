@@ -17,12 +17,14 @@ Układ i zawartość dokumentów odpowiadają produktom pracy normy **ISO 26262-
 | [Komponenty](komponenty/README.md) | specyfikacja projektu jednostek oprogramowania (ISO 26262-6, 8.5.1) |
 | [03 Analiza bezpieczeństwa](03-analiza-bezpieczenstwa.md) | analiza bezpieczeństwa i analiza awarii zależnych (ISO 26262-6, 7.5.2 i 7.5.3; ISO 26262-9) |
 | [04 Weryfikacja](04-weryfikacja.md) | specyfikacja i raport weryfikacji (ISO 26262-6, 9.5 i 10.5), pewność narzędzi (ISO 26262-8, 11) |
+| [05 Zgodność z ISO 26262](05-zgodnosc-iso26262.md) | ocena luk: co norma wymaga, co jest, czego brakuje |
 
 **CRTOS nie był rozwijany w procesie zgodnym z ISO 26262.** Nie ma celów bezpieczeństwa,
 przydzielonego poziomu ASIL, wymagań bezpieczeństwa z poziomu systemu, kwalifikacji
 narzędzi ani niezależnej oceny. Dokumenty opisują system tak, jak go zbudowano (wymagania
 w dokumentach komponentów są odtworzone z kodu). Oprogramowanie należy więc traktować jako
-**QM** (bez wymagań bezpieczeństwa funkcjonalnego).
+**QM** (bez wymagań bezpieczeństwa funkcjonalnego). Co trzeba by uzupełnić, żeby podnieść
+je do poziomu ASIL, opisuje [05 Zgodność z ISO 26262](05-zgodnosc-iso26262.md).
 
 Wersja opisywanego oprogramowania: CRTOS 0.8 (`project(crtos VERSION 0.8)` w
 `CMakeLists.txt`), stan źródeł z 27.09.2026.

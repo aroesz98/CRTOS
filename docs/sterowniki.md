@@ -95,8 +95,10 @@ crtos_module(mojczujnik SOURCES misc/mojczujnik.c ALIASES moja,czujnik)
 
    Jeśli sterownik używa sterownika z NXP SDK, dodaj np. `SDK_DRIVERS fsl_lpspi.c`.
    Pliki są w repozytoriach MCUXpresso SDK pobranych do `third_party/nxp-sdk` (`core/drivers/<blok>/`
-   i `devices-rt/RT1050/MIMXRT1052/drivers/`), a `CRTOS_SDK_DRIVER_DIRS` w `cmake/crtos.cmake`
-   wymienia katalogi wersji bloków tego układu (wszystkie są na ścieżce nagłówków modułów).
+   i `devices-rt/RT1050/MIMXRT1052/drivers/`), a `CRTOS_SDK_DRIVER_DIRS` w
+   `cmake/boards/evkbimxrt1050.cmake` wymienia katalogi wersji bloków tego układu (wszystkie są
+   na ścieżce nagłówków modułów). Na STM32H7S78-DK `SDK_DRIVERS` to pliki HAL/LL STM32CubeH7RS
+   (`stm32h7rsxx_hal_x.c`, `third_party/stm32/hal-h7rs/Src`, `cmake/boards/stm32h7s78dk.cmake`).
 
 3. Dodaj węzeł do `dts/evkbimxrt1050.dts`:
 
@@ -172,6 +174,7 @@ Dobre przykłady:
 | `lpi2c-imxrt` | `fsl,imxrt1050-lpi2c` | magistrala I2C |
 | `lpspi-imxrt` | `fsl,imxrt1050-lpspi` | magistrala SPI (`/dev/spidev3.0`); zobacz niżej |
 | `lpuart-imxrt` | `fsl,imxrt1050-lpuart` | porty szeregowe poza konsolą (`/dev/ttyS3`); zobacz niżej |
+| `uart-stm32` | `st,stm32-uart` | STM32H7S78-DK: porty szeregowe poza konsolą (UART7 na złączu Arduino, `/dev/ttyS7`); zobacz niżej |
 | `flexspi-mtd` | `fsl,imxrt1050-flexspi` | pamięć flash płytki (`/dev/mtd0`, `/dev/mtd1`) i aktualizacja jądra; zobacz niżej |
 | `flashfs` | `crtos,flashfs` | system plików `/flash0` na partycji flash (`/dev/flashfs0`); zobacz niżej |
 | `lcdif-imxrt` | `fsl,imxrt1050-lcdif` | kontroler ekranu (`/dev/fb0`), tryby paneli 480×272 i 800×480; zobacz niżej |
@@ -188,8 +191,9 @@ Dobre przykłady:
 | `hello`, `hello_dep` | `crtos,hello` | przykład |
 | `touchpaint` | `crtos,touchpaint` | test ekranu i dotyku bez serwera grafiki |
 
-Wbudowane w jądro (bez modułów): konsola startowa (LPUART1), kontroler kart SD (USDHC)
-i system plików FAT.
+Wbudowane w jądro (bez modułów): konsola startowa (LPUART1 na EVKB, UART4 na
+STM32H7S78-DK), kontroler kart SD (sterownik `builtin-sdcard`: USDHC i.MX RT albo SDMMC
+STM32) i system plików FAT.
 
 ## Ekran i dotyk
 
@@ -427,16 +431,29 @@ uart -x -t 1000         przez 1 s pokazuje odebrane bajty szesnastkowo
 Gdy działa sterownik pada, port należy do niego i `uart` nie zobaczy danych (albo zabierze
 sterownikowi część bajtów). Przed testami portu: `rmmod esp32-pad`.
 
+**STM32H7S78-DK.** Konsola (UART4, wirtualny port COM ST-LINK) jest wbudowana w jądro.
+Pozostałe USART/UART obsługuje moduł `uart-stm32` (ten sam interfejs co wyżej, FIFO
+sprzętowe i pierścienie po 2 KB). Włączony jest UART7 na złączu Arduino:
+
+| Port | Nadawanie (TX) | Odbiór (RX) | Masa |
+|---|---|---|---|
+| `/dev/ttyS7` (UART7) | D1 (PE8) | D0 (PE7, podciągnięty do 3,3 V) | GND złącza Arduino |
+
+USART nie ma pętli wewnętrznej: `TTY_IOC_SET_LOOPBACK` (`uart -l`) włącza tryb półdupleksu,
+w którym odbiornik słyszy to, co nadaje TX (na pinie D1, pin D0 nieużywany).
+
 ## Pad DualSense (mostek ESP32)
 
 Pad Sony DualSense albo DualSense Edge łączy się przez Bluetooth z modułem ESP32 z
 oprogramowaniem z katalogu `esp32-s3-bt-mod/` (aplikacja Zephyr; opis i budowanie w jego
 `README.md`). ESP32 wysyła stan pada przez UART do płytki:
 
-| ESP32 | EVKB |
-|---|---|
-| GPIO17 (TX UART2) | J22 pin 1 (RX LPUART3, `/dev/ttyS3`) |
-| GND | masa, np. J24 pin 7 |
+| ESP32 | EVKB | STM32H7S78-DK |
+|---|---|---|
+| GPIO17 (TX UART2) | J22 pin 1 (RX LPUART3, `/dev/ttyS3`) | D0 złącza Arduino (PE7, RX UART7, `/dev/ttyS7`) |
+| GND | masa, np. J24 pin 7 | GND złącza Arduino |
+
+Oba układy mają logikę 3,3 V. ESP32 najlepiej zasilać z jego własnego USB.
 
 Sterownik `esp32-pad` czyta port i tworzy urządzenie wejścia `DualSense (ESP32 link)`.
 Przyciski dostają kody padów z Linuksa (`kernel/include/crtos/keys.h`): krzyżyk
@@ -464,7 +481,11 @@ W drzewie urządzeń:
 };
 ```
 
-Sprawdzenie: `dmesg` pokazuje `gamepad: listening on /dev/ttyS3 at 460800 baud`, a po
+Na STM32H7S78-DK to samo robią `&uart7` (piny PE7/PE8, funkcja AF7, 460800 bodów) i węzeł
+`gamepad` z `port = "/dev/ttyS7"` w `dts/stm32h7s78dk.dts`.
+
+Sprawdzenie: `dmesg` pokazuje `gamepad: listening on /dev/ttyS3 at 460800 baud` (STM32:
+`/dev/ttyS7`), a po
 pierwszej poprawnej ramce z ESP32 `gamepad: pad link up`. Gdy ESP32 milknie na 700 ms
 (odłączony, wyłączony), sterownik puszcza wszystkie przyciski i pisze `pad link quiet`.
 Przyciski i gałki na żywo: `evtest /dev/event1` albo `crtos kmon "evtest event1 5"`
@@ -568,6 +589,12 @@ df                            (w sh) miejsce na /sd, /flash0 i /ram
 
 Pliki kopiuje się zwykłym `cp` albo `crtos deploy` z katalogu `build/flash0` (program z
 `crtos_app(... DEST flash0:bin)` trafia do `/flash0/bin`, które jest na początku `PATH`).
+
+Gry są w `/flash0/apps` (`DEST flash0:apps`): NES i voxel jako programy XIP (kod czytany
+z flasha zostawia PSRAM danym; NES na STM32H7S78-DK: 266 zamiast 247 kl./s w `nes -b`), SNES
+jako zwykły program (ładowany z flasha do RAM), bo XIP nie może mieć szybkiego kodu w ITCM.
+Menu programów (`launcher.cfg`) bierze grę z `/flash0`, a gdy jej tam nie ma – z karty;
+`crtos run NAZWA` szuka programu najpierw w `build/flash0`.
 
 Czego się spodziewać:
 - **Każdy plik zajmuje całe bloki po 256 KB.** Mały plik też zabiera 256 KB.

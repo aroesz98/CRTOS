@@ -26,7 +26,7 @@
 #include "elf.h"
 #include <crtos/syscall.h>
 #include <string.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 #define APP_STACK_DEFAULT   (16u * 1024u)
 #define APP_HEAP_DEFAULT    (64u * 1024u)

@@ -19,14 +19,23 @@ wybrane), testy jądra z monitora (`crtos kmon "test sem"` itd.), log startu i `
 | `thread` | dwa wątki programu podają sobie futex: 2 przełączenia i 4 wywołania na obrót |
 | `pipe` | dwa procesy, 1 bajt tam i z powrotem przez potoki |
 | `port` | dwa procesy, wywołanie IPC z odpowiedzią (4 bajty) |
-| `memcpy`, `memset` | 16 KB (mieści się w pamięci podręcznej danych) i 256 KB (SDRAM) |
+| `memcpy`, `memset` | 16 KB (mieści się w pamięci podręcznej danych) i 256 KB (SDRAM, na STM32H7S78-DK PSRAM) |
+| `memread` | samo czytanie (suma słów): 16 KB z pamięci podręcznej danych i 256 KB z SDRAM (na STM32H7S78-DK z PSRAM) |
 | `read` | czytanie dużego pliku z karty SD kawałkami po 32 KB |
 | `spawn` | uruchomienie `hello.app`: wczytanie z karty, start, koniec, `wait` |
+| `gpufill` | akcelerator 2D (`/dev/gpu2d`, tak jak używa go `gfxd`): wypełnienie ekranu 800×480 RGB565 w pamięci bez cache, ms na operację |
+| `gpucopy` | kopia okna 800×480 RGB565 (pamięć z cache, jak u programów) na ekran |
+| `gpuconv` | kopia okna 800×480 XRGB8888 na ekran RGB565 (z przeliczeniem formatu) |
+| `gpublend` | okno 800×480 ARGB8888 (półprzezroczyste) mieszane z ekranem |
+| `gpuop` | koszt samej operacji: 64 kopie 32×32 w jednej paczce `GPU2D_IOC_HBATCH`, ns na kopię |
 | `k-switch` | przełączenie między wątkami jądra (z operacjami na semaforze), w cyklach |
 | `irq-avg`, `irq-max` | opóźnienie przerwania: od zgłoszenia do obsługi, w cyklach |
 | `kmalloc`, `kfree` | sterta jądra: mieszanka wszystkich pul i wyrównań (także niebuforowanej SDRAM) |
 | `boot`, `init` | od startu jądra do wczytania sterowników i do pierwszego procesu |
 | `fps`, `compose` | animacja w oknie (sama i z rysowaniem w drugim oknie) i czas składania klatki przez `gfxd` |
+
+Testy akceleratora wybiera się razem: `crtos run bench gpu` (bez `/dev/gpu2d` program
+zgłasza `gpu` z `failed: no /dev/gpu2d`).
 
 Procesor ma 600 MHz: 1 cykl to 1,67 ns.
 
@@ -117,11 +126,16 @@ crtos_app(gra SOURCES ... FAST gra_fast.txt FAST_KB 62)
   po kolei, aż do `FAST_KB` (domyślnie 48). Program musi być budowany z
   `-ffunction-sections` (domyślnie tak jest).
 - Przy starcie jądro przydziela obszar szybkiego kodu na szczycie ITCM (`crtos kmon mem`,
-  pula `fastcode`, ok. 72 KB) i umieszcza tam te funkcje. Wywołania między ITCM a SDRAM
+  pula `fastcode`: 64 KB na RT i na STM32H7S78-DK z ITCM 128 KB, ok. 8 KB na STM32H7S78-DK
+  z fabrycznym podziałem ITCM 64 KB, [Architektura](architektura.md#stm32h7s78-dk))
+  i umieszcza tam te funkcje. Blok ma rozmiar dający się opisać jednym regionem MPU
+  (górne ósme części regionu kończącego się na szczycie ITCM). Wywołania między ITCM a SDRAM
   idą przez veneery. Komunikat `gra: 64 KB of fast code at 0x00010000` w logu potwierdza, że
   się udało.
 - Obszar ma jednego właściciela naraz. Drugi program z `FAST` albo program, któremu obszar
-  nie wystarczy, ładuje się normalnie (cały kod w SDRAM) i działa tak samo, tylko wolniej.
+  nie wystarczy, dostaje blok szybkiego kodu w pamięci wewnętrznej układu (OCRAM, na
+  STM32H7S78-DK AXI SRAM), jeśli zostało tam miejsce; inaczej ładuje się normalnie (cały kod
+  w SDRAM) i działa tak samo, tylko wolniej.
 - Blok szybkiego kodu zajmuje jedno z trzech okien pamięci współdzielonej procesu.
 - Listę najlepiej ułożyć z profilu (próbkowanie PC przez sondę, jak w
   [debugowaniu](debugowanie.md)): funkcje w kolejności udziału w czasie na KB kodu.

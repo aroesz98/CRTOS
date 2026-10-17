@@ -4,6 +4,7 @@
  * "gfxinfo -b [s]" measures the frame rate of an animation, alone and while another window
  * is damaged at random moments (as by a finger in paint).
  */
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,6 +100,18 @@ int main(int argc, char **argv)
     } else {
         printf("devmgr: not running\n");
     }
+    int gpu = open("/dev/gpu2d", O_RDONLY);
+    struct gpu2d_stats gs;
+    if (gpu >= 0 && ioctl(gpu, GPU2D_IOC_STATS, &gs) == 0) {
+        uint64_t looks = (uint64_t)gs.cache_hits + gs.cache_misses;
+        printf("gpu2d: %s, %lu operations in %lu batches, %lu jobs, busy %lu ms", gs.name, (unsigned long)gs.ops,
+               (unsigned long)gs.batches, (unsigned long)gs.lists, (unsigned long)(gs.busy_us / 1000u));
+        if (looks)
+            printf(", read cache %lu%% hits", (unsigned long)(gs.cache_hits * 100ull / looks));
+        printf("\n");
+    }
+    if (gpu >= 0)
+        close(gpu);
     struct gfx *g = gfx_open();
     if (!g) {
         printf("gfxd: not running\n");

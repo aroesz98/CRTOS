@@ -6,8 +6,8 @@
 |---|---|
 | Identyfikator | T01 |
 | Warstwa | komputer (nie działa na płytce) |
-| Pliki | `crtos`, `crtos.cmd` (uruchamiacze), `tools/*.py`, `cmake/*.cmake`, `CMakeLists.txt`, `dts/` (źródła drzewa urządzeń), `sdk/` (szablony i SDK programów), `third_party/sources.txt` (kod z zewnątrz), `patches/` (zmiany CRTOS w nim) |
-| Wymaga | Python 3.8+ (z Tk dla `crtos desktop`), CMake 3.20+, Ninja, Arm GNU Toolchain 14.3.Rel1, Git i sieć (pierwsze pobranie kodu z zewnątrz), pyOCD (sonda), Pillow (zrzuty ekranu, skalowanie obrazu `crtos desktop`), opcjonalnie LinkServer, Java 11+ (diagramy) |
+| Pliki | `crtos`, `crtos.cmd` (uruchamiacze), `tools/*.py`, `cmake/*.cmake`, `cmake/boards/*.cmake` (płytki), `CMakeLists.txt`, `drivers/<płytka>.cmake` (moduły płytki), `dts/` (źródła drzewa urządzeń), `sdk/` (szablony i SDK programów), `third_party/sources.txt` (kod z zewnątrz), `patches/` (zmiany CRTOS w nim) |
+| Wymaga | Python 3.8+ (z Tk dla `crtos desktop`), CMake 3.20+, Ninja, Arm GNU Toolchain 14.3.Rel1, Git i sieć (pierwsze pobranie kodu z zewnątrz), pyOCD (sonda), Pillow (zrzuty ekranu, skalowanie obrazu `crtos desktop`), dla STM32H7S78-DK STM32CubeProgrammer (zapis flasha), opcjonalnie LinkServer, Java 11+ (diagramy) |
 
 | Narzędzie | Rola |
 |---|---|
@@ -18,7 +18,8 @@
 | `tools/modcheck.py` | kontrola symboli i relokacji modułów `.ko` i programów `.app` |
 | `tools/stackcheck.py` | ostrzeżenia o ramkach stosu jądra większych niż strażnik MPU (256 B) |
 | `tools/swdcon.py` | monitor jądra i szybkie wgrywanie przez sondę SWD (bez zatrzymywania rdzenia) |
-| `tools/netdeploy.py` | klient `deployd` (U06): wykrywanie płytek, wgrywanie, `FLASH`, pobieranie plików i list katalogów (`crtos scp`) |
+| `tools/netdeploy.py` | klient `deployd` (U06): wykrywanie płytek, wgrywanie, `FLASH`, pobieranie plików i list katalogów (`crtos scp`), log jądra (`GET /dev/kmsg`, `crtos dmesg`), linia poleceń na płytce z jej wyjściem i kodem wyjścia (`EXEC`, `crtos sh`) |
+| `tools/imagehdr.py` | nagłówek obrazu jądra STM32H7S78-DK (od 0x400: `CRKN`, rozmiar, CRC-32 zlib liczone z polem CRC = 0): wypełnia go budowanie jądra, `--check` i `crtos flash` sprawdzają go przed zapisem; ten sam nagłówek sprawdza program startowy i aktualizacja jądra |
 | `tools/vnc.py` | klient VNC (RFB 3.8) zdalnego pulpitu (`crtos desktop`, U08): uwierzytelnianie DES, dekodowanie Zlib, Raw i Hextile (RGB565), okno Tk (zmaksymalizowane albo pełny ekran, obraz skalowany do okna) z myszą, kółkiem, klawiaturą i schowkiem, jeden obraz do PNG |
 | `tools/netbench.py` | klient testów przepustowości sieci (`crtos netbench`, D05): TCP i UDP w obie strony z programem `nettest` na płytce (A03), pomiar u odbiorcy |
 | `tools/boardsrc.py` | źródła programów z plikami `Makefile` dla kompilatora na płytce (`build/src`, `crtos src`) |
@@ -28,7 +29,7 @@
 | `tools/rescue.py` | odzyskanie dostępu debugera do płytki, której firmware go blokuje |
 | `tools/fontconv.py` | czcionka TrueType → nagłówek Adafruit GFX albo plik `.fnt` wczytywany w czasie działania (L02) |
 | `tools/fonts.py` | czcionki systemu: rodziny DejaVu Sans, Noto Sans, Liberation Sans, DejaVu Serif i DejaVu Sans Mono w rozmiarach skal interfejsu → `rootfs/share/fonts` (pliki `.fnt`, `families.txt`, licencje); źródła pobierane raz, przypięte SHA-256 |
-| `tools/thirdparty.py` | kod z zewnątrz: płytkie checkouty gita commitów z `third_party/sources.txt` (grupa `base` przy każdej konfiguracji CMake, `netsurf` na życzenie), łatki z `patches/` (zdejmowane i nakładane przy zmianie commitu albo łatki), `--status`, `--save` |
+| `tools/thirdparty.py` | kod z zewnątrz: płytkie checkouty gita commitów z `third_party/sources.txt` (grupa `base` przy każdej konfiguracji CMake, do tego grupa płytki – `stm32` dla STM32H7S78-DK: STM32CubeH7RS – a `netsurf` na życzenie), łatki z `patches/` (zdejmowane i nakładane przy zmianie commitu albo łatki), `--status`, `--save` |
 | `tools/netsurf_prepare.py`, `nsmake.py` | przygotowanie budowania NetSurf (A02; źródła i łatki z `thirdparty.py netsurf`): nsgenbind budowany kompilatorem komputera i nim wiązania DOM z `.bnd` i Web IDL, skrypty przygotowujące strony jako osobne tablice w `polyfill.js.inc` (`page_scripts`) |
 | `tools/diagrams.py` | rysowanie diagramów PlantUML tej dokumentacji (lokalnie) |
 
@@ -38,16 +39,21 @@
   urządzeń `.dtb`, usługi, programy, pliki `rootfs/` → `build/sdcard/crtos/`.
 - Kontrole przy budowaniu: symbole modułów i programów (`modcheck.py`), ramki stosu jądra
   (`stackcheck.py`), plik `modules.alias` (`compatible` → moduł).
-- Kod z zewnątrz (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK; NetSurf): nie jest
-  w repozytorium; przy każdej konfiguracji budowania pobranie brakujących checkoutów
-  przypiętych commitów (`third_party/sources.txt`) i nałożenie zmian CRTOS (`patches/`).
-- Wgranie jądra do flash (sonda: pyOCD, awaryjnie LinkServer; sieć: `flash --net`).
+- Budowanie dla wybranej płytki (`crtos board`, `CRTOS_BOARD`: NXP MIMXRT1050-EVKB albo ST
+  STM32H7S78-DK), każdej we własnym katalogu (`build/`, `build-<płytka>/`).
+- Kod z zewnątrz (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK; STM32CubeH7RS dla
+  STM32H7S78-DK; NetSurf): nie jest w repozytorium; przy każdej konfiguracji budowania
+  pobranie brakujących checkoutów przypiętych commitów (`third_party/sources.txt`) i nałożenie
+  zmian CRTOS (`patches/`).
+- Wgranie jądra do flash (sonda: pyOCD, awaryjnie LinkServer; STM32H7S78-DK:
+  STM32CubeProgrammer, także program startowy; sieć: `flash --net`).
 - Wgranie plików na kartę SD płytki: tylko zmienione (manifest CRC), przez sieć (`deployd`)
   albo przez sondę; alternatywnie na kartę włożoną do komputera (`crtos sdcard`).
 - Diagnostyka: monitor jądra (`kmon`), log, zrzut ekranu, raport awarii z liniami kodu,
   uruchamianie programów z wyjściem na komputerze, pomiary (`crtos bench`), `doctor`.
-- Praca z płytką przez sieć: kopiowanie plików w obie strony (`crtos scp`) i zdalny pulpit
-  (`crtos desktop`, hasło VNC instalowane na płytce przez `deployd`).
+- Praca z płytką przez sieć: kopiowanie plików w obie strony (`crtos scp`), zdalny pulpit
+  (`crtos desktop`, hasło VNC instalowane na płytce przez `deployd`), polecenia powłoki
+  (`crtos sh`) i log jądra (`crtos dmesg`) bez sondy i kabla konsoli.
 - Tapeta z obrazu komputera (`crtos wallpaper`): zmniejszenie, zapis w formacie, który
   czyta płytka, wysłanie i ustawienie.
 
@@ -76,15 +82,16 @@
 ## 4. Interfejs udostępniany
 
 Polecenia `crtos` (pełna lista: `crtos --help`, [Polecenie crtos](../../polecenie-crtos.md)):
-`doctor`, `setup`, `build [--base] [--rtos [KATALOG]]`, `flash [--net] [--rtos]`, `sdcard`, `deploy`, `put`, `run`, `new`, `kmon`,
-`serial`, `log`, `shot`, `reboot`, `scp [-r]`, `desktop [--fullscreen] [--zoom N] [--password] [--stats] [--shot PLIK]`,
+`doctor`, `board [NAZWA]`, `setup`, `build [--board NAZWA] [--base] [--rtos [KATALOG]]`, `flash [--net] [--rtos] [--boot]`, `sdcard`, `deploy`, `put`, `run`, `new`, `kmon`,
+`serial`, `log`, `shot`, `reboot`, `sh [--time S] POLECENIE...`, `dmesg`, `scp [-r]`, `desktop [--fullscreen] [--zoom N] [--password] [--stats] [--shot PLIK]`,
 `netbench [--time S] [--only TESTY] [--rate MBIT]`,
 `wallpaper OBRAZ [--name N] [--size SZERxWYS] [--fit fill|fit|stretch|center|tile] [--no-set]`,
 `find`, `crash`, `bench`, `sdk`, `src`, `toolchain` (T02), `clean`, `kbuild`.
 
-Zmienne środowiska: `CRTOS_PROBE`, `CRTOS_PORT`, `CRTOS_HOST`, `CRTOS_GCC_BIN`,
-`CRTOS_BUILD`, `CRTOS_DEVICE`, `CRTOS_PLANTUML`. Pliki użytkownika: `~/.crtos/deploy.token`,
-`~/.crtos/board.host`, `~/.crtos/vnc.passwd`, `~/.crtos/tools/`.
+Zmienne środowiska: `CRTOS_BOARD`, `CRTOS_PROBE`, `CRTOS_PORT`, `CRTOS_HOST`, `CRTOS_GCC_BIN`,
+`CRTOS_BUILD`, `CRTOS_DEVICE`, `CRTOS_STM32PROG`, `CRTOS_PLANTUML`. Pliki użytkownika: `~/.crtos/deploy.token`,
+`~/.crtos/board.host`, `~/.crtos/vnc.passwd`, `~/.crtos/tools/`; w repozytorium (poza gitem)
+`.crtos-board` – płytka wybrana przez `crtos board`.
 
 Funkcje CMake – [Struktura projektu, rozdz. 3](../01-struktura-projektu.md#3-budowanie).
 
@@ -93,7 +100,9 @@ Funkcje CMake – [Struktura projektu, rozdz. 3](../01-struktura-projektu.md#3-b
 U06 (`deployd`, TCP/UDP 5555), U08 (`vncd`, TCP 5900), A03 (`appearance` dla `crtos
 wallpaper`), K19 (monitor jądra przez UART i przez kanał SWD
 `g_swd_chan`), D07 (`MTD_IOC_KERNEL_UPDATE` przez `deployd`), sonda CMSIS-DAP (pyOCD),
-Arm GNU Toolchain (gcc, ld, strip, readelf, nm, addr2line).
+na STM32H7S78-DK ST-LINK (pyOCD do pamięci i konsoli SWD, STM32CubeProgrammer z external
+loaderem `MX66UW1G45G_STM32H7S78-DK.stldr` do flasha), Arm GNU Toolchain (gcc, ld, strip,
+readelf, nm, addr2line).
 
 ## 6. Struktura statyczna
 
@@ -134,8 +143,24 @@ Arm GNU Toolchain (gcc, ld, strip, readelf, nm, addr2line).
   gita i nic nie wypisuje (ok. 0,3 s na konfigurację). `--save` zapisuje `git diff
   --binary` commitu jako łatkę; `--status` pokazuje własne zmiany jako różnicę zmienionych
   linii względem nałożonej łatki. Sterowniki `fsl_*` są w katalogach bloków repozytoriów SDK;
-  `CRTOS_SDK_DRIVER_DIRS` (`cmake/crtos.cmake`) wymienia wersje bloków i.MX RT1052, a
-  `SDK_DRIVERS` szuka w nich pliku (`crtos_sdk_drivers`).
+  `CRTOS_SDK_DRIVER_DIRS` (`cmake/boards/<płytka>.cmake`) wymienia wersje bloków i.MX RT1052
+  (na STM32H7S78-DK katalog `Src` HAL STM32CubeH7RS), a `SDK_DRIVERS` szuka w nich pliku
+  (`crtos_sdk_drivers`). Konfiguracja CMake woła `thirdparty.py --build <CRTOS_BOARD_GROUP>`,
+  więc grupa płytki (`stm32`) jest pobierana tylko dla niej.
+- Płytki: tabela `BOARDS` w `crtos.py` (cel pyOCD, rodzaj sondy, VID jej portu COM, sposób
+  zapisu flasha, adres i rozmiar jądra, czy BREAK na porcie resetuje płytkę). `board()` bierze
+  `CRTOS_BOARD`, potem `.crtos-board`, domyślnie `evkbimxrt1050`; `build_dir()` daje `build/`
+  dla płytki domyślnej i `build-<płytka>/` dla innych (`CRTOS_BUILD` ma pierwszeństwo), a
+  `configure()` podaje CMake `-DCRTOS_BOARD`. Poza drzewem (SDK) liczy się tylko `CRTOS_BOARD`.
+- `crtos flash` na STM32H7S78-DK (`flash_stm32`): sprawdza obraz `imagehdr.check`, czyta przez
+  SWD program startowy z 0x08000000 i porównuje go z `crtos-boot.bin` (inny albo `--boot`: też
+  jest zapisywany), potem `STM32_Programmer_CLI -c port=SWD mode=UR reset=HWrst` z `-d plik
+  adres -v` (jądro z `-el` external loadera NOR) i `-hardRst` na końcu; wynik bez
+  „verified successfully” to błąd. Restart przed odczytem konsoli (`crtos log --reset`) robi
+  na tej płytce linia reset ST-LINK (BREAK na porcie COM resetuje tylko EVKB, przez DAPLink).
+- `crtos sh` i `crtos dmesg` (`netdeploy.Session.execute`, `get('/dev/kmsg')`): sesja z tokenem
+  jak `scp`; `sh` łączy słowa spacjami, czeka na odpowiedź `--time` + 15 s i kończy się kodem 0
+  albo 1 według kodu wyjścia polecenia.
 - Sonda: kanał `g_swd_chan` w pamięci jądra (bufory wejścia i wyjścia) obsługuje druga
   instancja monitora; pliki trafiają do bufora w RAM (`stage`), potem na kartę (`savestage`).
 - Wgrywanie jądra przez sondę: pyOCD (12 MHz) + reset sprzętowy; przy błędzie LinkServer.
@@ -269,8 +294,9 @@ Arm GNU Toolchain (gcc, ld, strip, readelf, nm, addr2line).
 Zmienne środowiska (rozdz. 4), `CMakeLists.txt` (lista modułów, programów, `crtos_dtb`),
 `third_party/sources.txt` (repozytoria i commity kodu z zewnątrz, grupy `base` – także newlib
 i źródła GCC bibliotek XIP (T02) – i `netsurf`; wpis może ciągnąć się przez linie zakończone `\`),
-`patches/` (zmiany CRTOS w nim), `CRTOS_SDK_DRIVER_DIRS` w `cmake/crtos.cmake` (katalogi
-sterowników NXP SDK układu), `tools/requirements.txt` (pakiety Pythona).
+`patches/` (zmiany CRTOS w nim), `cmake/boards/<płytka>.cmake` (BSP, drzewo urządzeń, grupa
+kodu z zewnątrz, `CRTOS_SDK_DRIVER_DIRS` – katalogi sterowników SDK układu), `.crtos-board`,
+`tools/requirements.txt` (pakiety Pythona).
 
 ## 11. Weryfikacja
 
@@ -299,3 +325,6 @@ sterowników NXP SDK układu), `tools/requirements.txt` (pakiety Pythona).
   (`crtos kbuild`).
 - `crtos wallpaper` ustawia tapetę przez sondę SWD (monitor jądra); bez sondy obraz trafia na
   kartę, a wybiera się go w Settings.
+- Poza drzewem (SDK) `crtos` czyta płytkę tylko ze zmiennej `CRTOS_BOARD`; `.crtos-board`
+  zapisany tam przez `crtos board NAZWA` nie ma skutku.
+- `crtos kbuild` (MCUXpresso IDE) buduje tylko jądro EVKB.

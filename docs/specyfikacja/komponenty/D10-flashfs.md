@@ -6,7 +6,7 @@
 |---|---|
 | Identyfikator | D10 |
 | Warstwa | L1 (moduł `.ko`) |
-| Moduł | `flashfs.ko` (`crtos,flashfs`), zależy od `flexspi-mtd.ko` (D07, `MODULE_DEPENDS`) |
+| Moduł | `flashfs.ko` (`crtos,flashfs`), zależy od sterownika flasha (D07, `MODULE_DEPENDS`): `flexspi-mtd.ko` na EVKB, `xspi-mtd.ko` na STM32H7S78-DK |
 | Pliki | `drivers/fs/flashfs.c`; ABI `kernel/include/crtos/flashfs.h`; polecenie `system/commands/flashfs`; test `drivers/fs/test/flashtest.sh` |
 | Interfejs | montowanie `/flash0` (`vfs_fs_ops`, K13), `file_ops.xip`, urządzenie `/dev/flashfs0` |
 
@@ -55,7 +55,7 @@ Węzeł DT:
 ```
 flashfs {
 	compatible = "crtos,flashfs";
-	partition = <&flash0_part>;   /* partycja z &flexspi (D07) */
+	partition = <&flash0_part>;   /* partycja z &flexspi albo &xspi2 (D07) */
 	mountpoint = "/flash0";
 };
 ```

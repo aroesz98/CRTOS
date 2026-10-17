@@ -13,7 +13,7 @@
  * All scheduler state is protected by irq_lock() (BASEPRI), PendSV performs the switch.
  */
 #include "kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <string.h>
 
 task_t *volatile g_current;

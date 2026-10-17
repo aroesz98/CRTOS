@@ -20,8 +20,7 @@
 #include <crtos/tty.h>
 #include <crtos/vfs.h>
 #include <string.h>
-#include "fsl_device_registers.h"
-#include "fsl_clock.h"
+#include <crtos/device.h>
 #include "tusb.h"
 #include "device/usbd_pvt.h"
 #include "usb.h"
@@ -57,7 +56,7 @@ static struct {
     volatile bool work_queued;  /* acm_work() is on the USB thread's queue */
     volatile bool rx_held;      /* TinyUSB holds data the rx ring had no room for */
     uint8_t tmp[CHUNK];         /* the USB thread's copy buffer */
-    char serial[20];
+    char serial[28];
     uint16_t str[32];
     uint8_t other_speed[CONFIG_LEN];
 } s_acm;
@@ -457,10 +456,15 @@ int usb_acm_start(void)
     memset(&s_acm, 0, sizeof(s_acm));
     event_init(&s_acm.ev);
     poll_head_init(&s_acm.ph);
-    /* the serial number: the chip's unique ID (fuses) */
-    CLOCK_EnableClock(kCLOCK_Ocotp);
-    ksnprintf(s_acm.serial, sizeof(s_acm.serial), "%08lX%08lX", (unsigned long)OCOTP->CFG1,
-              (unsigned long)OCOTP->CFG0);
+    /* the serial number: the chip's unique ID (the i.MX RT's fuses, the STM32's factory UID),
+     * its last word first */
+    uint32_t id[3] = { 0, 0, 0 };
+    size_t words = board_unique_id(id, sizeof(id)) / 4u;
+    if (words > 3u)
+        words = 3u;
+    int n = 0;
+    for (size_t i = words; i > 0; i--)
+        n += ksnprintf(s_acm.serial + n, sizeof(s_acm.serial) - (size_t)n, "%08lX", (unsigned long)id[i - 1]);
     int r = devfs_register(DEV_NAME, &acm_ops, NULL);
     s_acm.registered = !r;
     return r;

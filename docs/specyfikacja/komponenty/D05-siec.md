@@ -6,8 +6,8 @@
 |---|---|
 | Identyfikator | D05 |
 | Warstwa | L1 (moduły `.ko`) |
-| Moduły | `enet-imxrt.ko` (`fsl,imxrt1050-enet`), `net-lwip.ko` (`crtos,lwip`) |
-| Pliki | `drivers/net/enet-imxrt.c` (+ SDK `fsl_enet.c`, `fsl_phyksz8081.c`); `drivers/net/lwip/crtos_lwip.c` (strona jądra), `lwip_side.c` (strona lwIP), `lw.h` (wąski interfejs między nimi), `sys_arch.c` (warstwa systemu dla lwIP), `lwipopts.h`; `third_party/lwip` (lwIP 2.2.1) |
+| Moduły | `enet-imxrt.ko` (`fsl,imxrt1050-enet`), `net-lwip.ko` (`crtos,lwip`); STM32H7S7: `eth-stm32.ko` (`st,stm32-ethernet`) i ten sam `net-lwip.ko` |
+| Pliki | `drivers/net/enet-imxrt.c` (+ SDK `fsl_enet.c`, `fsl_phyksz8081.c`); `drivers/net/eth-stm32.c` (rejestry, bez HAL); `drivers/net/lwip/crtos_lwip.c` (strona jądra), `lwip_side.c` (strona lwIP), `lw.h` (wąski interfejs między nimi), `sys_arch.c` (warstwa systemu dla lwIP), `lwipopts.h`; `third_party/lwip` (lwIP 2.2.1) |
 | Interfejsy realizowane | `netdev_ops`, `net_stack_ops` (S05) |
 
 ## 2. Odpowiedzialność
@@ -19,6 +19,13 @@
   przez kontroler, reset PHY przez GPIO, sprawdzanie łącza co 1 s i ustawianie
   prędkości/dupleksu MAC, sterowanie przepływem 802.3x (gdy partner je ogłasza), adres MAC
   z unikalnego ID układu (albo z DT).
+- **eth-stm32** (STM32H7S78-DK): MAC Ethernet układu (Synopsys Ethernet QoS) z PHY LAN8742A
+  (RMII, adres MDIO 0; zegar odniesienia 50 MHz daje PHY). Ten sam podział pracy co
+  `enet-imxrt`: pierścienie deskryptorów (RX 16, TX 8), odbiór w wątku `eth` po przerwaniu
+  wprost z buforów DMA, wysyłanie pod mutexem z czekaniem na przerwanie przy pełnym
+  pierścieniu, sumy kontrolne IPv4/TCP/UDP/ICMP w MAC, sprawdzanie łącza co 1 s (standardowe
+  rejestry MII) i ustawianie prędkości/dupleksu MAC, adres MAC z DT albo z unikalnego ID
+  (lokalnie administrowany). Bez sterowania przepływem 802.3x i bez linii resetu PHY.
 - **net-lwip**: stos TCP/IP lwIP (IPv4: ARP, IP, ICMP, UDP, TCP, DHCP, DNS) za
   interfejsem `net_stack_ops`: interfejsy (`netif`), adresy (DHCP, statyczne), DNS,
   gniazda lwIP używane tylko w trybie nieblokującym; zdarzenia gniazd lwIP budzą gniazda
@@ -38,6 +45,13 @@
 | REQ-D05-07 | Deskryptory leżą w DTCM (gdy jest w niej miejsce, inaczej w SDRAM bez cache), bufory odbiorcze w pamięci z cache (w OCRAM, gdy jest miejsce): przy animacji na ekranie 800×480 odbiór z pełną prędkością nie gubi ramek w FIFO kontrolera. | `crtos netbench` z `gfxdemo` (02.10.2026: TCP do płytki 94,8 Mbit/s, 0 uszkodzonych ramek; wcześniej 65,8 Mbit/s i 347) |
 | REQ-D05-08 | Na łączu 100 Mbit/s: TCP w każdą stronę co najmniej 90 Mbit/s, UDP co najmniej 94 Mbit/s bez strat ponad 0,1%, także przy czasie obiegu kilku ms (okna TCP 64 segmenty ze skalowaniem, RFC 7323; pula pbuf na całe okno). | `crtos netbench --time 10` (02.10.2026, komputer przez Wi-Fi: TCP 93,7 i 89,9–94,7, UDP 94,5–95,7 Mbit/s) |
 | REQ-D05-09 | Stos zgłasza jądru zdarzenie gniazda (`net_sock_event`) tylko wtedy, gdy może ono odblokować czekające wywołanie: dane albo miejsce na wysłanie po ich braku, błąd (te same, przy których lwIP budzi czekających w `select`). | `crtos run apptest` (gniazda, `poll`; 1762 sprawdzenia), `crtos netbench` |
+| REQ-D05-10 | `eth-stm32`: deskryptory leżą w pamięci bez cache, a bufory ramek w pamięci z cache osiągalnej dla DMA (`KM_DMA`: AXI SRAM albo PSRAM, nie TCM). Bufor nadawczy jest czyszczony po kopii ramki, odbiorczy unieważniany przed oddaniem ramki stosowi, a cały obszar odbiorczy czyszczony i unieważniany raz przed startem DMA. | przegląd kodu |
+| REQ-D05-11 | `eth-stm32` nie czeka bez końca na sprzęt: MAC, który nie wychodzi z resetu w 100 ms (brak zegara 50 MHz z PHY), kończy `probe` błędem `-ETIMEDOUT`; każda operacja MDIO ma limit 10 ms. Krytyczny błąd magistrali DMA (zatrzymuje interfejs) jest liczony i zgłaszany w logu. | przegląd kodu |
+
+`net-lwip` jest ten sam na obu płytkach (REQ-D05-04, 05, 09). `eth-stm32` ma te same
+mechanizmy co REQ-D05-01–03 i 06 (wątek `eth`, ramka do 1536 B, te same kody błędów,
+zerowanie pól sum w kopii ramki), sprawdzone tylko przeglądem kodu; REQ-D05-07 i 08 dotyczą
+EVKB.
 
 ## 4. Interfejs udostępniany
 
@@ -45,10 +59,13 @@
 |---|---|---|
 | `enet-imxrt` | S05 (`netdev_register` → `eth0`) | `open`, `stop`, `xmit(frame, len)`; `features` = `NETDEV_F_TX_CSUM` \| `NETDEV_F_RX_CSUM`; `netdev_rx`, `netdev_set_link` z wątku |
 | `net-lwip` | S05 (`net_stack_register`) | `attach/detach/rx/link`, gniazda (`socket` … `getname`, `poll`), `ioctl`: `NET_IOC_IFCOUNT/IFINFO/IFCONF/DNS_GET/DNS_SET/RESOLVE/FIONREAD` |
+| `eth-stm32` | S05 (`netdev_register` → `eth0`) | jak `enet-imxrt`: `open`, `stop`, `xmit` (`-ENETDOWN`, `-EMSGSIZE`, `-EAGAIN`), te same `features` |
 
 Parametry DT (`&enet`): `reg`, `interrupts`, `clocks` `ipg` + `ref` (50 MHz z PLL ENET),
 `phy-reset-gpios`, `phy-reset-duration`, `phy-handle` (adres MDIO z `reg` PHY), opcjonalnie
-`local-mac-address`.
+`local-mac-address`. STM32 (`&mac`): `reg`, `interrupts` (92), `clocks` `mac`, `tx`, `rx`,
+`phy-handle` (węzeł `mdio/ethernet-phy@0`), opcjonalnie `local-mac-address`; `phy-mode =
+"rmii"` jest w DT, ale sterownik zawsze ustawia RMII.
 
 ## 5. Interfejsy wymagane
 
@@ -56,7 +73,10 @@ S05, S01 (zegary, GPIO resetu PHY, piny RMII), K02 (przerwanie ENET, priorytet 6
 (wątki: `enet` 18, `tcpip` 19), K06 (semafory RX i TX, mutex TX; semafory/muteksy/skrzynki
 lwIP w `sys_arch.c`), K07 (`KM_FAST` na deskryptory w DTCM, `KM_NOCACHE` na bufory
 nadawcze, `KM_DMA` na bufory odbiorcze, sterta lwIP przez `crtos_lwip_malloc`), SDK
-`fsl_cache` (`DCACHE_InvalidateByRange`, eksport jądra), K16 (`module_pin`).
+`fsl_cache` (`DCACHE_InvalidateByRange`, eksport jądra), K16 (`module_pin`). `eth-stm32`:
+S01 (zegary `mac`, `tx`, `rx`, piny RMII), K02 (priorytet 6), K05 (wątek `eth` 18, stos
+2 KB), K07 (`KM_NOCACHE | KM_DMA` na deskryptory, `KM_DMA` na bufory), CMSIS
+(`SCB_*DCache_by_Addr`), `board_unique_id`.
 
 ## 6. Struktura statyczna
 
@@ -123,6 +143,20 @@ nadawcze, `KM_DMA` na bufory odbiorcze, sterta lwIP przez `crtos_lwip_malloc`), 
 - **Dwie połowy modułu** (`crtos_lwip.c` i `lwip_side.c`) nie mogą widzieć nawzajem swoich
   nagłówków (kolizja definicji gniazd), stąd wąski interfejs `lw.h` z typami prostymi.
 - Moduł `net-lwip` zajmuje ok. 300 KB (ładowany do SDRAM; większość to pula pbuf).
+- **eth-stm32** (STM32H7S78-DK):
+  - deskryptory 16 B (RX 16, TX 8) w pamięci bez cache, bufory po 1536 B (cała ramka,
+    wielokrotność linii 32 B) w pamięci z cache (REQ-D05-10). Wskaźniki ogona jak w HAL ST:
+    nadawanie do deskryptora za ostatnią ramką, odbiór do ostatniego oddanego. Ramka w więcej
+    niż jednym deskryptorze jest za długa (błąd);
+  - MAC, MTL i DMA jak domyślne ustawienia HAL: store and forward w obie strony, ramki ze złą
+    sumą odrzucane, filtr: własny adres, rozgłoszenia i wszystkie multicast. Kopia ramki
+    nadawczej z wyzerowanymi polami sum (`clear_csums`, jak w `enet-imxrt`), deskryptor
+    z wstawianiem sum nagłówka i danych (`CIC`);
+  - RMII wybierane w SBS `PMCR`, gdy MAC jest w resecie; MDC = HCLK / 124 (2,4 MHz), na płytce
+    PC1 tylko ze zworką JP6 w tej pozycji;
+  - PHY: reset programowy (`BMCR`), ogłoszenie 10/100 bez PAUSE, autonegocjacja; łącze z
+    `BMSR` (czytany dwa razy, bo zatrzaskuje spadek), prędkość i dupleks z części wspólnej
+    `ANAR` i `ANLPAR`; nadajnik i odbiornik MAC włączane dopiero z łączem.
 
 ## 9. Obsługa błędów i mechanizmy bezpieczeństwa
 
@@ -134,12 +168,17 @@ nadawcze, `KM_DMA` na bufory odbiorcze, sterta lwIP przez `crtos_lwip_malloc`), 
 | brak łącza | `-ENETDOWN`, `link down` w logu |
 | brak pamięci w lwIP | ramka odrzucona (`-ENOMEM` z `lw_if_input`), TCP retransmituje |
 | czekanie w lwIP (blokada rdzenia, DNS) | nieprzerywalne, ale krótkie; długie czekanie jest w S05 (przerywalne) |
+| `eth-stm32`: brak zegara 50 MHz z PHY (MAC nie wychodzi z resetu) | `probe`: `-ETIMEDOUT`, „no 50 MHz reference clock from the PHY” (REQ-D05-11) |
+| `eth-stm32`: brak PHY pod adresem MDIO (np. JP6 nie na PC1) | „no PHY at MDIO 0 (is JP6 on PC1?)”, łącze nie wstaje |
+| `eth-stm32`: krytyczny błąd magistrali DMA | licznik, `E:` w logu; interfejs stoi do ponownego załadowania modułu |
 
 ## 10. Konfiguracja
 
 `RX_RING` (32), `TX_RING` (16), `TX_WAITS` (20), `TX_WAIT_MS` (5), `LINK_CHECK_MS` (1000)
 w `enet-imxrt.c`; `lwipopts.h` (wątki, pule, okna TCP, sumy kontrolne na interfejs, opcje
-protokołów); `rootfs/etc/network.cfg` (U05).
+protokołów); `rootfs/etc/network.cfg` (U05). `eth-stm32.c`: `RX_RING` (16), `TX_RING` (8),
+`BUF_SIZE` (1536), `TX_WAITS` (20), `TX_WAIT_MS` (5), `LINK_CHECK_MS` (1000); `&mac` z węzłem
+`mdio` i piny RMII w `dts/stm32h7s78dk.dts`.
 
 ## 11. Weryfikacja
 
@@ -165,6 +204,8 @@ protokołów); `rootfs/etc/network.cfg` (U05).
 - Sumy kontrolne: ping z komputera 32, 1400, 3000 i 8000 B; ping z płytki (gniazdo surowe);
   echo UDP 32–2047 B; DHCP i DNS. `crtos kmon "test all"` (13/13), `crtos run apptest`
   (1762/0).
+- STM32H7S78-DK: te same polecenia (`ping`, `nc`, `crtos netbench`); wyników pomiarów
+  `eth-stm32` ta dokumentacja nie zawiera.
 
 ## 12. Ograniczenia i znane problemy
 
@@ -186,3 +227,6 @@ protokołów); `rootfs/etc/network.cfg` (U05).
 - Tylko IPv4.
 - Router użytkownika nie ogłasza ramek PAUSE, więc sterowanie przepływem zwykle jest
   wyłączone.
+- STM32: `eth-stm32` nie ma sterowania przepływem ani linii resetu PHY; pierścienie są
+  mniejsze (RX 16, TX 8), a przepustowości nie zmierzono. Po krytycznym błędzie magistrali
+  DMA interfejs działa dopiero po ponownym załadowaniu modułu.

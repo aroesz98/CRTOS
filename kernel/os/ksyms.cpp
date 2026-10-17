@@ -25,10 +25,8 @@
 #include <crtos/vfs.h>
 #include <stdlib.h>
 #include <string.h>
-#include "fsl_device_registers.h"
-#include "fsl_clock.h"
-#include "fsl_common.h"
-#include "fsl_cache.h"
+#include "platform.h"
+#include "platform_ksyms.h"
 #include "../lib/kformat.h"
 #include "../lib/crc32.h"
 
@@ -65,7 +63,7 @@ static const struct ksym s_ksyms[] = {
     /* driver model */
     KSYM(driver_register) KSYM(driver_unregister) KSYM(device_create_of) KSYM(device_destroy)
     KSYM(device_get_match_data) KSYM(device_get_reg) KSYM(device_map) KSYM(device_get_irq) KSYM(devm_kzalloc)
-    KSYM(devm_add_action) KSYM(device_foreach) KSYM(driver_foreach)
+    KSYM(devm_add_action) KSYM(device_foreach) KSYM(driver_foreach) KSYM(board_unique_id)
     /* files */
     KSYM(vfs_open) KSYM(vfs_opendir) KSYM(vfs_file_get) KSYM(vfs_close) KSYM(vfs_read) KSYM(vfs_write)
     KSYM(vfs_lseek) KSYM(vfs_ioctl) KSYM(vfs_readdir) KSYM(vfs_fstat) KSYM(vfs_sync) KSYM(vfs_stat)
@@ -97,11 +95,8 @@ static const struct ksym s_ksyms[] = {
     KSYM(memcpy) KSYM(memmove) KSYM(memset) KSYM(memcmp) KSYM(memchr) KSYM(strlen) KSYM(strnlen) KSYM(strcmp)
     KSYM(strncmp) KSYM(strcpy) KSYM(strncpy) KSYM(strcat) KSYM(strncat) KSYM(strchr) KSYM(strrchr) KSYM(strstr)
     KSYM(strspn) KSYM(strcspn) KSYM(strtoul) KSYM(strtol) KSYM(atoi) KSYM(qsort) KSYM(crc32)
-    /* SDK services implemented in the kernel image */
-    KSYM(CLOCK_GetFreq) KSYM(CLOCK_GetPllFreq) KSYM(CLOCK_GetSysPfdFreq) KSYM(CLOCK_GetUsb1PfdFreq)
-    KSYM(CLOCK_InitVideoPll) KSYM(CLOCK_DeinitVideoPll) KSYM(CLOCK_InitSysPfd) KSYM(CLOCK_InitUsb1Pfd)
-    KSYM(CLOCK_InitEnetPll) KSYM(SDK_DelayAtLeastUs) KSYM(SystemCoreClock)
-    KSYM(DCACHE_CleanByRange) KSYM(DCACHE_InvalidateByRange) KSYM(DCACHE_CleanInvalidateByRange)
+    /* the board support's services in the kernel image (platform_ksyms.h) */
+    PLATFORM_KSYMS
 };
 
 const void *ksym_kernel_lookup(const char *name)

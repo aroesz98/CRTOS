@@ -1,11 +1,12 @@
 /*
  * kernel/os/boot/boot.cpp - second boot stage (kernel thread): SD card, device tree, drivers.
  *
- *   1. mount the SD card at /sd (built-in USDHC + FAT)
+ *   1. mount the SD card at /sd (the board's built-in SD card controller + FAT)
  *   2. load /sd/crtos/boot/board.dtb and create devices for its nodes
  *   3. bind the built-in drivers, then load driver modules for the remaining devices
  *      according to /sd/crtos/drivers/modules.alias ("<compatible> <module>" lines)
- * Holding SW8 while booting (safe mode) skips step 3.
+ * Holding the board's safe mode button while booting (platform_safe_mode(): SW8 on the
+ * i.MX RT board, USER on the STM32 one) skips step 3.
  */
 #define CRTOS_KERNEL 1
 #include "kernel.h"
@@ -16,8 +17,6 @@
 #include <crtos/of.h>
 #include <crtos/vfs.h>
 #include <string.h>
-#include "fsl_gpio.h"
-#include "fsl_iomuxc.h"
 
 #define BOOT_PRIO  (PRIO_HIGH - 2)
 
@@ -31,19 +30,20 @@ static int builtin_ok_probe(struct device *)
 static const struct of_device_id bus_ids[] = { { "simple-bus", nullptr }, { "arm,armv7m-nvic", nullptr }, { nullptr, nullptr } };
 static struct driver bus_driver = { "builtin-bus", bus_ids, builtin_ok_probe, nullptr, nullptr, LIST_HEAD_INIT(bus_driver.node) };
 
-static int usdhc_probe(struct device *dev)
+/* the board's SD card controller (USDHC on the i.MX RT, SDMMC on the STM32): the kernel's own */
+static int sdcard_probe(struct device *dev)
 {
     /* only the controller the kernel booted from */
     uint32_t addr;
-    if (device_get_reg(dev, 0, &addr, nullptr) || addr != (uint32_t)(uintptr_t)USDHC1)
+    if (device_get_reg(dev, 0, &addr, nullptr) || addr != (uint32_t)platform_sd_base)
         return -ENODEV;
     struct sdcard_info info;
     sdcard_get_info(&info);
     return info.ready ? 0 : -ENODEV;
 }
 
-static const struct of_device_id usdhc_ids[] = { { "fsl,imxrt1050-usdhc", nullptr }, { nullptr, nullptr } };
-static struct driver usdhc_driver = { "builtin-usdhc", usdhc_ids, usdhc_probe, nullptr, nullptr, LIST_HEAD_INIT(usdhc_driver.node) };
+static const struct of_device_id sdcard_ids[] = { { platform_sd_compatible, nullptr }, { nullptr, nullptr } };
+static struct driver sdcard_driver = { "builtin-sdcard", sdcard_ids, sdcard_probe, nullptr, nullptr, LIST_HEAD_INIT(sdcard_driver.node) };
 
 static int earlycon_probe(struct device *dev)
 {
@@ -52,21 +52,8 @@ static int earlycon_probe(struct device *dev)
     return dev->of_node == of_stdout_node() ? 0 : -ENODEV;
 }
 
-static const struct of_device_id earlycon_ids[] = { { "fsl,imxrt1050-lpuart", nullptr }, { nullptr, nullptr } };
+static const struct of_device_id earlycon_ids[] = { { platform_console_compatible, nullptr }, { nullptr, nullptr } };
 static struct driver earlycon_driver = { "earlycon", earlycon_ids, earlycon_probe, nullptr, nullptr, LIST_HEAD_INIT(earlycon_driver.node) };
-
-/* ---- safe mode ------------------------------------------------------------------------------ */
-
-static bool safe_mode_requested(void)
-{
-    /* SW8 on the WAKEUP pad (GPIO5_IO00), active low */
-    IOMUXC_SetPinMux(IOMUXC_SNVS_WAKEUP_GPIO5_IO00, 0U);
-    IOMUXC_SetPinConfig(IOMUXC_SNVS_WAKEUP_GPIO5_IO00, 0x01B0A0U); /* pull-up, hysteresis */
-    gpio_pin_config_t in = { kGPIO_DigitalInput, 0U, kGPIO_NoIntmode };
-    GPIO_PinInit(GPIO5, 0U, &in);
-    task_sleep_ms(2);
-    return GPIO_PinRead(GPIO5, 0U) == 0U;
-}
 
 /* ---- module autoloading ----------------------------------------------------------------------- */
 
@@ -242,7 +229,7 @@ int boot_setup_devices(const char *dtb, const char *driver_dir)
     if (r)
         return r;
     driver_register(&bus_driver);
-    driver_register(&usdhc_driver);
+    driver_register(&sdcard_driver);
     driver_register(&earlycon_driver);
     device_populate();
     if (driver_dir)
@@ -283,9 +270,9 @@ static void boot_thread(void *)
     gpu2d_init();
     ramfs_mount("/ram");
     mount_sd();
-    bool safe = safe_mode_requested();
+    bool safe = platform_safe_mode();
     if (safe)
-        printk("safe mode (SW8 held): driver modules and init are not loaded\n");
+        printk("safe mode (%s held): driver modules and init are not loaded\n", platform_safe_mode_button);
     boot_setup_devices(CRTOS_DTB_PATH, safe ? nullptr : CRTOS_DRIVER_DIR);
     printk("boot: done in %lu ms\n", (unsigned long)((time_us() - t0) / 1000u));
     if (!safe)

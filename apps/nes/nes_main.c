@@ -44,6 +44,7 @@
 #include "nes_sound.h"
 
 #define FRAME_ROOM 46             /* the task bar and the window's title */
+#define BAR_COVER 24              /* the window's bottom under the task bar */
 #define REPEAT_DELAY_US 380000u   /* held direction in the menus: first repeat */
 #define REPEAT_US 70000u          /* then */
 #define STALE_US 100000u          /* a picture the display did not take by then is dropped */
@@ -65,8 +66,17 @@ static struct nes_rom_info s_info;
 static char s_save[400];          /* battery RAM file ("" if the game has none) */
 static uint32_t s_save_sum;
 
-/* the picture on the window: s_lines lines from s_first at (s_gx, s_gy) */
-static int s_gx, s_gy, s_first, s_lines;
+/* the picture on the window: s_lines lines from s_first, at (s_gx, s_gy) s_gw x s_gh */
+static int s_gx, s_gy, s_gw, s_gh, s_first, s_lines;
+
+/* The picture: the PPU draws into a buffer that the accelerator stretches over the window's
+ * height, filtered or sharp; or straight into the window as it is (1:1, the default without an
+ * accelerator that stretches). The choice is kept in PICTURE_CFG. */
+enum picture { PIC_SMOOTH, PIC_SHARP, PIC_1X, PICTURES };
+static const char *const PICTURE_NAME[PICTURES] = {"SMOOTH", "SHARP", "1:1"};
+#define PICTURE_CFG NES_VAR_DIR "/picture"
+static enum picture s_picture = PIC_1X;
+static struct gfx_buffer *s_pic;  /* the PPU's picture for the accelerator */
 
 /* pacing */
 static bool s_lock;               /* one frame per display frame */
@@ -269,9 +279,12 @@ static void layout(void)
 {
     s_lines = H >= NES_H ? NES_H : H >= 224 ? 224 : H;
     s_first = (NES_H - s_lines) / 2;
-    s_gx = (W - NES_W) / 2;
-    s_gy = (H - s_lines) / 2;
-    int pw = s_gx, rx = s_gx + NES_W;
+    /* stretched: as high as the window but its bottom, which the task bar covers */
+    s_gh = s_picture == PIC_1X ? s_lines : H - BAR_COVER;
+    s_gw = s_picture == PIC_1X ? NES_W : (NES_W * s_gh / s_lines) & ~1;
+    s_gx = (W - s_gw) / 2;
+    s_gy = s_picture == PIC_1X ? (H - s_gh) / 2 : 0;
+    int pw = s_gx, rx = s_gx + s_gw;
     r_menu = (struct rect){8, 8, pw - 16, 20};
     r_select = (struct rect){8, H - 28, pw - 16, 20};
     r_start = (struct rect){rx + 8, H - 28, W - rx - 16, 20};
@@ -310,7 +323,7 @@ static uint16_t touch_at(int x, int y, bool *menu)
             b |= dy > 0 ? DOWN : UP;
         return b;
     }
-    if (x >= s_gx + NES_W)
+    if (x >= s_gx + s_gw)
     {
         int db = dist2(x, y, s_b_x, s_b_y), da = dist2(x, y, s_a_x, s_a_y);
         int r = BUTTON_R + 10;
@@ -354,9 +367,9 @@ static void draw_panels(void)
     const struct gfx_surface *s = &w->s;
     uint16_t panel = RGB565(40, 40, 48), on = s_touch;
     draw_fill(s, 0, 0, s_gx, H, panel);
-    draw_fill(s, s_gx + NES_W, 0, W - s_gx - NES_W, H, panel);
-    draw_fill(s, s_gx, 0, NES_W, s_gy, C_BLACK);
-    draw_fill(s, s_gx, s_gy + s_lines, NES_W, H - s_gy - s_lines, C_BLACK);
+    draw_fill(s, s_gx + s_gw, 0, W - s_gx - s_gw, H, panel);
+    draw_fill(s, s_gx, 0, s_gw, s_gy, C_BLACK);
+    draw_fill(s, s_gx, s_gy + s_gh, s_gw, H - s_gy - s_gh, C_BLACK);
     draw_button(s, &r_menu, "MENU", s_mode == MODE_MENU);
     draw_button(s, &r_select, "SELECT", on & SELECT);
     draw_button(s, &r_start, "START", on & START);
@@ -386,18 +399,24 @@ static void draw_panels(void)
     /* frames per second on the screen */
     char fps[16];
     snprintf(fps, sizeof(fps), "%u FPS", s_fps);
-    int rx = s_gx + NES_W;
+    int rx = s_gx + s_gw;
     draw_text(s, rx + ((W - rx) - text_width(fps, 1)) / 2, 14, fps, s_fps >= 55 ? C_GREEN : s_fps >= 40 ? C_GOLD : C_RED, 1);
     s_fps_shown = s_fps;
 }
 
 /*
- * The emulator draws its lines straight into the window (the SDRAM's bandwidth is what
+ * 1:1, the emulator draws its lines straight into the window (the memory's bandwidth is what
  * drawing costs most: no picture of its own, no copy). The next frame starts only after the
- * display has taken the last one (window_busy), else the picture would tear.
+ * display has taken the last one (window_busy), else the picture would tear. Stretched, it
+ * draws into s_pic, which the accelerator stretches into the window when it is shown.
  */
 static void game_output(void)
 {
+    if (s_picture != PIC_1X)
+    {
+        nes_set_output(&s_emu.ppu, (uint16_t *)s_pic->s.pix, (int)(s_pic->s.stride / 2u), s_first, s_lines);
+        return;
+    }
     uint16_t *pix = (uint16_t *)((uint8_t *)w->s.pix + s_gy * w->s.stride) + s_gx;
     nes_set_output(&s_emu.ppu, pix, (int)(w->s.stride / 2u), s_first, s_lines);
 }
@@ -408,16 +427,29 @@ static bool window_busy(uint64_t now)
     return w->frame_pending && now - s_damage_at < STALE_US;
 }
 
-/* the picture into the PPU's own buffer (under the menu), and back */
+/* 1:1, the picture into the PPU's own buffer (under the menu), and back; stretched, s_pic
+ * keeps it */
 static void save_picture(void)
 {
+    if (s_picture != PIC_1X)
+        return;
     uint16_t *buf = nes_screen(&s_emu.ppu);
     for (int y = 0; y < s_lines; y++)
         memcpy(buf + y * NES_W, (uint8_t *)w->s.pix + (s_gy + y) * w->s.stride + s_gx * 2, NES_W * 2);
 }
 
+static void set_picture(enum picture p);
+
 static void blit(void)
 {
+    if (s_picture != PIC_1X)
+    {
+        if (gfx_gpu_scale(w, s_gx, s_gy, s_gw, s_gh, s_pic, 0, 0, NES_W, s_lines,
+                          s_picture == PIC_SMOOTH ? GFX_GPU_SMOOTH : 0) == 0)
+            return;
+        printf("nes: the accelerator does not stretch the picture: 1:1\n");
+        set_picture(PIC_1X);
+    }
     const uint16_t *buf = nes_screen(&s_emu.ppu);
     for (int y = 0; y < s_lines; y++)
         memcpy((uint8_t *)w->s.pix + (s_gy + y) * w->s.stride + s_gx * 2, buf + y * NES_W, NES_W * 2);
@@ -425,11 +457,9 @@ static void blit(void)
 
 static void show(void)
 {
-    if (s_restore)
-    {
+    if (s_restore || s_picture != PIC_1X)
         blit();
-        s_restore = false;
-    }
+    s_restore = false;
     if (s_panels_dirty || s_fps != s_fps_shown)
     {
         draw_panels();
@@ -438,7 +468,7 @@ static void show(void)
     }
     else
     {
-        gfx_damage(w, s_gx, s_gy, NES_W, s_lines);
+        gfx_damage(w, s_gx, s_gy, s_gw, s_gh);
     }
     s_damage_at = crtos_time_us();
     s_have_frame = false;
@@ -551,10 +581,60 @@ static void sound_volume(int volume)
 
 /* ---- the pause menu -------------------------------------------------------------------------- */
 
-enum { ITEM_CONTINUE, ITEM_RESET, ITEM_VOLUME, ITEM_QUIT, MENU_ITEMS };
-static const char *const MENU[MENU_ITEMS] = {"CONTINUE", "RESET", "VOLUME", "QUIT GAME"};
+enum { ITEM_CONTINUE, ITEM_RESET, ITEM_VOLUME, ITEM_PICTURE, ITEM_QUIT, MENU_ITEMS };
+static const char *const MENU[MENU_ITEMS] = {"CONTINUE", "RESET", "VOLUME", "PICTURE", "QUIT GAME"};
 static int s_menu_sel;
 static struct rect s_menu_rect[MENU_ITEMS];
+
+/* Another picture (in the menu: the paused picture moves along, the window is drawn anew) */
+static void set_picture(enum picture p)
+{
+    if (p != PIC_1X && !s_pic)
+        p = PIC_1X;
+    if (p == s_picture)
+        return;
+    uint16_t *buf = nes_screen(&s_emu.ppu);
+    for (int y = 0; y < s_lines && s_pic; y++)
+    {
+        uint16_t *pic = (uint16_t *)((uint8_t *)s_pic->s.pix + y * s_pic->s.stride);
+        if (s_picture == PIC_1X)
+            memcpy(pic, buf + y * NES_W, NES_W * 2);
+        else if (p == PIC_1X)
+            memcpy(buf + y * NES_W, pic, NES_W * 2);
+    }
+    s_picture = p;
+    layout();
+    if (s_loaded)
+        game_output();
+    s_panels_dirty = true;
+    s_restore = true;
+    s_dirty = true;
+    mkdir("/sd/crtos/var", 0755);
+    mkdir(NES_VAR_DIR, 0755);
+    FILE *f = fopen(PICTURE_CFG, "w");
+    if (f)
+    {
+        fprintf(f, "%s\n", PICTURE_NAME[p]);
+        fclose(f);
+    }
+}
+
+static void picture_init(void)
+{
+    s_pic = gfx_buffer_create(NES_W, NES_H, GPU2D_FMT_RGB565);
+    enum picture p = s_pic && (gfx_gpu_caps() & GPU2D_CAP_SCALE) ? PIC_SMOOTH : PIC_1X;
+    FILE *f = fopen(PICTURE_CFG, "r");
+    char line[16] = "";
+    if (f)
+    {
+        if (fgets(line, sizeof(line), f))
+            for (int i = 0; i < PICTURES; i++)
+                if (!strncmp(line, PICTURE_NAME[i], strlen(PICTURE_NAME[i])))
+                    p = (enum picture)i;
+        fclose(f);
+    }
+    s_picture = p != PIC_1X && !s_pic ? PIC_1X : p;
+}
 
 static void resume(void)
 {
@@ -592,6 +672,9 @@ static void menu_choose(void)
         sound_volume(s_volume >= 100 ? 0 : (int)s_volume + 10);
         s_dirty = true;
         break;
+    case ITEM_PICTURE:
+        set_picture((enum picture)((s_picture + 1) % PICTURES));
+        break;
     default:
         stop_game();
         break;
@@ -610,9 +693,12 @@ static void menu_nav(enum nav nav)
         break;
     case NAV_LEFT:
     case NAV_RIGHT:
-        if (s_menu_sel != ITEM_VOLUME)
+        if (s_menu_sel == ITEM_PICTURE)
+            set_picture((enum picture)((s_picture + (nav == NAV_LEFT ? PICTURES - 1 : 1)) % PICTURES));
+        else if (s_menu_sel == ITEM_VOLUME)
+            sound_volume((int)s_volume + (nav == NAV_LEFT ? -10 : 10));
+        else
             return;
-        sound_volume((int)s_volume + (nav == NAV_LEFT ? -10 : 10));
         break;
     case NAV_OK:
         menu_choose();
@@ -632,9 +718,9 @@ static void draw_menu(uint64_t now)
     const struct gfx_surface *s = &w->s;
     blit();
     draw_panels();
-    draw_dim(s, s_gx, s_gy, NES_W, s_lines);
-    int bw = 160, bh = 30 + MENU_ITEMS * 16 + 6;
-    int bx = s_gx + (NES_W - bw) / 2, by = s_gy + (s_lines - bh) / 2;
+    draw_dim(s, s_gx, s_gy, s_gw, s_gh);
+    int bw = 200, bh = 30 + MENU_ITEMS * 16 + 6;
+    int bx = s_gx + (s_gw - bw) / 2, by = s_gy + (s_gh - bh) / 2;
     draw_frame(s, bx, by, bw, bh, C_WHITE, C_NAVY);
     draw_text_shadow(s, bx + (bw - text_width("PAUSE", 1)) / 2, by + 9, "PAUSE", C_GOLD, 1);
     bool blink = (now / 400000u) & 1u;
@@ -649,6 +735,8 @@ static void draw_menu(uint64_t now)
             snprintf(text, sizeof(text), "NO SOUND");
         else if (i == ITEM_VOLUME)
             snprintf(text, sizeof(text), "VOLUME < %lu >", (unsigned long)s_volume);
+        else if (i == ITEM_PICTURE)
+            snprintf(text, sizeof(text), "PICTURE < %s >", PICTURE_NAME[s_picture]);
         else
             snprintf(text, sizeof(text), "%s", MENU[i]);
         draw_text(s, bx + 30, y, text, i == s_menu_sel ? C_WHITE : C_GREY, 1);
@@ -746,7 +834,9 @@ static void start_game(const char *path)
     g_ppu_skip = 0;
     gfx_wait_frame(w, 50);
     draw_panels();
-    draw_fill(&w->s, s_gx, s_gy, NES_W, s_lines, C_BLACK);
+    draw_fill(&w->s, s_gx, s_gy, s_gw, s_gh, C_BLACK);
+    if (s_pic)
+        memset(s_pic->s.pix, 0, (size_t)s_pic->s.stride * (size_t)s_pic->s.h);
     gfx_present(w);
 }
 
@@ -1191,6 +1281,7 @@ int main(int argc, char **argv)
         printf("nes: no window\n");
         return 1;
     }
+    picture_init();
     layout();
 
     /* a folder to browse, or a game to start */

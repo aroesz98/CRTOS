@@ -1,6 +1,7 @@
 /*
- * flashfs.ko - a file system on a flash partition (/flash0 on the HyperFlash), for programs
- * that run in place (XIP) and for anything else worth keeping out of the SD card.
+ * flashfs.ko - a file system on a flash partition (/flash0 on the board's NOR flash: the
+ * HyperFlash of the EVKB, the octal flash of the STM32H7S78-DK), for programs that run in
+ * place (XIP) and for anything else worth keeping out of the SD card.
  *
  * Layout on the partition (erase blocks of 256 KB):
  *   block 0, block 1   the record log, one of them active (the higher valid generation)
@@ -23,8 +24,8 @@
  * is pinned in place, so the loader can run its code from the flash (file_ops.xip).
  *
  * The flash stands still while it programs or erases, and so does the whole system (the
- * kernel runs from it): writing costs about 0.5 ms per 512 bytes, plus up to about a second
- * per erase block. Reads are plain memory reads of the mapped flash.
+ * kernel runs from it): on the HyperFlash writing costs about 0.5 ms per 512 bytes, plus up to
+ * about a second per erase block. Reads are plain memory reads of the mapped flash.
  *
  * /dev/flashfs0 (crtos/flashfs.h): information, a check of every file's data, formatting.
  */
@@ -1249,4 +1250,11 @@ static void fini(void)
     driver_unregister(&flashfs_driver);
 }
 
-MODULE_DEPENDS("flashfs", "file system on a flash partition (/flash0), files run in place", "flexspi-mtd", init, fini);
+/* the board's flash driver (it exports mtd_part_*, crtos/mtd.h) */
+#if defined(CRTOS_BOARD_STM32H7S78DK)
+#define MTD_MODULE "xspi-mtd"
+#else
+#define MTD_MODULE "flexspi-mtd"
+#endif
+
+MODULE_DEPENDS("flashfs", "file system on a flash partition (/flash0), files run in place", MTD_MODULE, init, fini);

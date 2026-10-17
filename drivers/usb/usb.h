@@ -1,7 +1,7 @@
 /*
- * usb.h - the parts of the USB driver (drivers/usb): the controllers (usb-imxrt.c) start the
- * two sides, each on its own controller. A side runs its TinyUSB work in its controller's USB
- * thread.
+ * usb.h - the parts of the USB driver (drivers/usb): the controllers (usb-imxrt.c, usb-stm32.c)
+ * start the two sides, each on its own controller. A side runs its TinyUSB work in its
+ * controller's USB thread.
  */
 #ifndef DRIVERS_USB_H
 #define DRIVERS_USB_H

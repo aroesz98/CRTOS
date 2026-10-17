@@ -2,18 +2,19 @@
 # programs' part (crtos_app, crtos_file, crtos_rootfs) is in crtos-app.cmake, shared with
 # the SDK.
 #
-#   crtos_module(<name> SOURCES <src...> [ALIASES <compatible...>] [SDK_DRIVERS fsl_x.c...]
+#   crtos_module(<name> SOURCES <src...> [ALIASES <compatible...>] [SDK_DRIVERS file.c...]
 #                [INCLUDES <dir...>] [DEFINES <def...>])
 #       builds build/sdcard/crtos/drivers/<name>.ko; ALIASES are the device tree "compatible"
 #       strings the module drives (they go to modules.alias, so it is loaded automatically)
 #   crtos_dtb(<name> <dts>)            -> build/sdcard/crtos/boot/<name>.dtb
 #   crtos_toolchain()                  fills build/toolchain/arm-crtos (see below)
 #   crtos_finish()                     writes modules.alias, checks the modules' symbols
-#   crtos_rtos_app(SOURCES <src...> [SDK_DRIVERS fsl_x.c...] [INCLUDES <dir...>] [DEFINES <def...>])
+#   crtos_rtos_app(SOURCES <src...> [SDK_DRIVERS file.c...] [INCLUDES <dir...>] [DEFINES <def...>])
 #       the application of the RTOS build (CRTOS_PROFILE=rtos): its sources become part of the
 #       kernel (firmware), compiled like the kernel; it defines app_main() (crtos/rtos.h).
-#       SDK_DRIVERS: NXP SDK drivers (CRTOS_SDK_DRIVER_DIRS below) the application uses
-#       (the board support has GPIO, LPUART, clocks and caches already)
+#       SDK_DRIVERS: drivers of the board's SDK (CRTOS_SDK_DRIVER_DIRS: NXP fsl_*.c on the
+#       i.MX RT board - its board support has GPIO, LPUART, clocks and caches already - or the
+#       STM32Cube HAL/LL on the STM32 board) the application uses
 
 set(CRTOS_TOOLS ${CRTOS_TOP}/tools)
 set(CRTOS_APP_INCLUDES
@@ -100,25 +101,17 @@ endfunction()
 
 # ---- kernel modules --------------------------------------------------------------------------
 
-set(CRTOS_PLATFORM ${CRTOS_TOP}/kernel/platform/evkbimxrt1050)
+# The board (CRTOS_BOARD, cmake/boards/<board>.cmake): its kernel support, device tree, SDK
+# drivers (the NXP SDK's fsl_*.c or the STM32Cube HAL), the modules' include path and definitions
+set(CRTOS_BOARD evkbimxrt1050 CACHE STRING "The board: evkbimxrt1050 (NXP MIMXRT1050-EVKB) or stm32h7s78dk (ST STM32H7S78-DK)")
+set_property(CACHE CRTOS_BOARD PROPERTY STRINGS evkbimxrt1050 stm32h7s78dk)
+if(NOT EXISTS ${CRTOS_TOP}/cmake/boards/${CRTOS_BOARD}.cmake)
+  message(FATAL_ERROR "CRTOS_BOARD=${CRTOS_BOARD}: no such board (cmake/boards has the ones there are)")
+endif()
+include(${CRTOS_TOP}/cmake/boards/${CRTOS_BOARD}.cmake)
+message(STATUS "CRTOS board: ${CRTOS_BOARD}")
 
-# The NXP SDK's peripheral drivers (fsl_*.c, .h) of the i.MX RT1052, as the MCUXpresso SDK
-# 25.06 repositories hold them (third_party/sources.txt): one directory per IP block, and
-# several versions of some blocks (dcdc_1 or dcdc_2...) - these are the ones of this chip.
-# SDK_DRIVERS names a file of one of them; all of them are on the modules' include path.
-set(CRTOS_SDK ${CRTOS_TOP}/third_party/nxp-sdk)
-set(CRTOS_SDK_DRIVER_DIRS ${CRTOS_SDK}/devices-rt/RT1050/MIMXRT1052/drivers)
-foreach(d flexram nic301 romapi)
-  list(APPEND CRTOS_SDK_DRIVER_DIRS ${CRTOS_SDK}/devices-rt/RT1050/MIMXRT1052/drivers/${d})
-endforeach()
-foreach(d adc_12b1msps_sar adc_etc aipstz aoi bee cache/armv7-m7 cmp common csi dcdc_1 dcp dmamux
-          edma elcdif enc enet ewm flexcan flexio flexio/i2c flexio/i2s flexio/spi flexio/uart
-          flexram flexspi gpc_1 gpt igpio kpp lpi2c lpspi lpuart ocotp pit pmu pwm pxp qtmr_1
-          rtwdog sai semc snvs_hp snvs_lp spdif src tempmon trng tsc usdhc wdog01 xbara xbarb)
-  list(APPEND CRTOS_SDK_DRIVER_DIRS ${CRTOS_SDK}/core/drivers/${d})
-endforeach()
-
-# crtos_sdk_drivers(<var> fsl_x.c...): the paths of these SDK driver sources
+# crtos_sdk_drivers(<var> file.c...): the paths of these SDK driver sources
 function(crtos_sdk_drivers var)
   set(paths)
   foreach(f ${ARGN})
@@ -130,7 +123,7 @@ function(crtos_sdk_drivers var)
       endif()
     endforeach()
     if(NOT found)
-      message(FATAL_ERROR "SDK_DRIVERS: ${f} is not in the NXP SDK drivers of this chip (CRTOS_SDK_DRIVER_DIRS)")
+      message(FATAL_ERROR "SDK_DRIVERS: ${f} is not among the SDK drivers of the board ${CRTOS_BOARD} (CRTOS_SDK_DRIVER_DIRS)")
     endif()
     list(APPEND paths ${found})
   endforeach()
@@ -147,18 +140,7 @@ set(CRTOS_MODULE_CFLAGS
   "$<$<COMPILE_LANGUAGE:CXX>:-fno-rtti;-fno-threadsafe-statics;-fno-use-cxa-atexit>"
 )
 
-set(CRTOS_MODULE_INCLUDES
-  ${CRTOS_TOP}/kernel/include
-  ${CRTOS_PLATFORM}/device
-  ${CRTOS_PLATFORM}/device/periph
-  ${CRTOS_PLATFORM}/CMSIS
-  ${CRTOS_PLATFORM}/CMSIS/m-profile
-  ${CRTOS_PLATFORM}/drivers
-  ${CRTOS_SDK_DRIVER_DIRS}
-  ${CRTOS_TOP}/dts/include
-)
-
-set(CRTOS_MODULE_DEFINES CPU_MIMXRT1052DVL6B CPU_MIMXRT1052DVL6B_cm7 NDEBUG CRTOS_MODULE=1)
+# (CRTOS_MODULE_INCLUDES and CRTOS_MODULE_DEFINES: the board's file)
 
 set_property(GLOBAL PROPERTY CRTOS_ALIAS_LINES "")
 
@@ -222,7 +204,7 @@ function(crtos_finish)
   get_property(mods GLOBAL PROPERTY CRTOS_MODULE_TARGETS)
   add_custom_target(modcheck ALL
     COMMAND ${CMAKE_COMMAND} -E env CRTOS_GCC_BIN=${CRTOS_GCC_BIN}
-            ${Python3_EXECUTABLE} ${CRTOS_TOP}/tools/modcheck.py ${CRTOS_SDCARD}/drivers
+            ${Python3_EXECUTABLE} ${CRTOS_TOP}/tools/modcheck.py --platform ${CRTOS_PLATFORM} ${CRTOS_SDCARD}/drivers
     DEPENDS ${mods}
     COMMENT "Checking module symbols"
     VERBATIM)
@@ -242,7 +224,7 @@ function(crtos_rtos_app)
   target_sources(kernel PRIVATE ${A_SOURCES} ${sdk})
   # (after the kernel's own: the board support's drivers win over the SDK's copies)
   target_include_directories(kernel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${A_INCLUDES}
-                             ${CRTOS_SDK_DRIVER_DIRS})
+                             ${CRTOS_SDK_INCLUDES})
   if(A_DEFINES)
     target_compile_definitions(kernel PRIVATE ${A_DEFINES})
   endif()
