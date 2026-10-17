@@ -3,7 +3,7 @@
 autonumber
 participant "DualSense (Bluetooth)" as DS
 participant "mostek ESP32\n(esp32-s3-bt-mod)" as E
-participant "LPUART3\n(lpuart-imxrt, /dev/ttyS3)" as U
+participant "port szeregowy\n(EVKB: lpuart-imxrt, /dev/ttyS3;\nSTM32: uart-stm32, /dev/ttyS7)" as U
 participant "wątek esp32-pad" as T
 participant "S04 input\n(/dev/event1)" as N
 participant "inputd (U04)" as I

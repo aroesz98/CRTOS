@@ -64,6 +64,44 @@ wtedy samo jądro z monitorem, więc można naprawić pliki na karcie (`crtos de
 
 `crtos kmon mem` pokazuje zajętość każdej puli, `crtos kmon vmem` stan pamięci emulowanej.
 
+### STM32H7S78-DK
+
+| Pamięć | Rozmiar | Do czego |
+|---|---|---|
+| NOR flash (XSPI2) | 128 MB | jądro w pierwszych 2 MB (XIP), reszta to `/flash0` (programy, także gry: `/flash0/apps`) |
+| ITCM | 64 albo 128 KB (option bytes, niżej) | gorący kod jądra (ok. 54 KB), mała sterta jądra i obszar szybkiego kodu jednego programu (przy 128 KB: 64 KB od 0x10000, przy 64 KB: ok. 8 KB) |
+| DTCM | 64 KB | dane i stosy jądra, dane programu startowego |
+| AXI SRAM2–4 | 328 KB (od 0x24020000) | dane jądra, kod i dane sterowników `.ko`, bufory DMA, listy poleceń GPU |
+| AXI SRAM1, górna połowa | 64 KB (0x24010000) | pamięć kafelków GPU: tu NeoChrom rysuje prymitywy 3D pasami ([sterowniki](sterowniki.md)) |
+| PSRAM (XSPI1) | 30 MB | obszary pamięci procesów, duże bufory |
+| PSRAM bez pamięci podręcznej | 2 MB | bufory ekranu |
+
+Podział 192 KB pamięci między ITCM a AXI SRAM1 ustawiają option bytes układu
+(`ITCM_AXI_SHARE`). Jądro czyta go przy starcie, a obszar szybkiego kodu kończy się tam,
+gdzie ITCM:
+
+| `ITCM_AXI_SHARE` | ITCM | Szybki kod programu | Kiedy |
+|---|---|---|---|
+| 0 (fabrycznie) | 64 KB | ok. 8 KB | płytka dzielona z Zephyrem i MCUboot: ich RAM zaczyna się od 0x24000000 (dolna połowa SRAM1), a przy wartości 1 MCUboot od razu pada; CRTOS tej połowy nie używa |
+| 1 | 128 KB | 64 KB od 0x10000 | zalecane, gdy na płytce jest tylko CRTOS: ITCM bierze dolną połowę SRAM1 |
+| 2 | 192 KB | – | nie używać: ITCM zabiera też górną połowę SRAM1, czyli pamięć kafelków GPU |
+
+Przy 64 KB jądro pisze w logu `itcm: 64 KB, the option bytes' default (ITCM_AXI_SHARE=1,
+128 KB, gives programs more fast code)`. Programy
+korzystają z obszaru szybkiego kodu przez `crtos_app(... FAST lista.txt FAST_KB n)`; SNES ma
+tam ok. 60 KB najgorętszych funkcji (80% czasu emulacji; przy ITCM 128 KB Zelda 80,5 kl./s,
+Yoshi's Island 65 kl./s w pomiarze `snes -b`). Gdy obszar jest za mały (przy 64 KB ITCM taki
+program jak SNES z `FAST_KB 64`), loader próbuje zmieścić blok szybkiego kodu w AXI SRAM2–4,
+a gdy i tam brak miejsca, ładuje program w jednym bloku do PSRAM (`W: ...: no room for N
+bytes of fast code`). Program działa wtedy normalnie, tylko wolniej.
+
+Zmiana przez ST-LINK (płytka się zrestartuje, a działający system padnie, bo programator
+ładuje swój kod do AXI SRAM; potem zrestartuj płytkę, czasem dwa razy):
+
+```
+STM32_Programmer_CLI -c port=SWD -ob ITCM_AXI_SHARE=1      (0: z powrotem 64 KB)
+```
+
 Procesor nie ma MMU, więc pamięć emulowana nie jest pamięcią wirtualną. Pod jej adresami
 nie ma żadnej pamięci, a region 0 MPU zabrania tam dostępu. Każdy dostęp programu kończy
 się wyjątkiem MemManage. Jądro dekoduje wtedy instrukcję i wykonuje ją za program na
@@ -155,7 +193,7 @@ CRTOS nie zmienia niczego poza katalogiem `/crtos`.
 | `osk` | klawiatura ekranowa, gdy nie ma podłączonej klawiatury: pokazuje ją przycisk na pasku zadań, a klawisze trafiają do aktywnego okna jak z prawdziwej klawiatury |
 | `netmgr` | konfiguracja sieci z `network.cfg`: DHCP, DNS, zegar z NTP |
 | `httpd` | mały serwer WWW: `/status`, `/api/status`, pliki z `/sd/crtos/www` |
-| `deployd` | odbiera pliki z komputera (`crtos deploy`, `crtos scp`) i nowe jądro (`crtos flash --net`, zapis do flash przez `/dev/mtd0`), wysyła pliki do komputera (`crtos scp board:...`); chroniony tokenem, pisze pliki tylko w `/sd/crtos`, `/flash0` i `/ram`. Narzędzie deweloperskie: w produkcie usunąć z `init.cfg` |
+| `deployd` | odbiera pliki z komputera (`crtos deploy`, `crtos scp`) i nowe jądro (`crtos flash --net`, zapis do flash przez `/dev/mtd0`), wysyła pliki i log jądra do komputera (`crtos scp board:...`, `crtos dmesg`), wykonuje linię poleceń powłoki i odsyła jej wyjście (`EXEC`, `crtos sh`: płytka bez kabla konsoli); chroniony tokenem, sam pisze pliki tylko w `/sd/crtos`, `/flash0` i `/ram` (polecenia `crtos sh` mają uprawnienia `deployd`: `spawn`, `kill`, `sys`, `dev`). Narzędzie deweloperskie: w produkcie usunąć z `init.cfg` |
 | `vncd` | zdalny pulpit: serwer VNC (port 5900, hasło w `/sd/crtos/etc/vnc.passwd`) – obraz ekranu, mysz, klawiatura i schowek dla `crtos desktop` albo innej przeglądarki VNC |
 | `getty` | powłoka na porcie szeregowym USB (`/dev/ttyACM0`): startuje, gdy program terminala na komputerze otworzy port, i kończy się, gdy go zamknie |
 | `wm` | menedżer okien: ramki (z ikoną programu), pasek zadań (okna jako ikony, podpowiedź z tytułem po najechaniu myszą), menu **Apps** z ikonami; w skali interfejsu, półprzezroczyste i z zaokrąglonymi rogami według ustawień wyglądu. Można go zakończyć i uruchomić ponownie bez zamykania programów |

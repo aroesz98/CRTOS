@@ -13,15 +13,19 @@
  *   HQ: full or half resolution, NEW: another island
  * Keyboard: W A S D walk, arrows turn and look, space jump / up, shift down, F fly,
  *   Q or backspace mine, E or enter build (at the cross), 1-9 hotbar, tab next page,
- *   M mine / build, N new island.
+ *   M mine / build, N new island, H full / half resolution, G the view drawn by the GPU or by
+ *   the processor.
  * Gamepad (DualSense): left stick walk, right stick look around, cross jump / up, circle
  *   down (flying), R2 mine and L2 build at the cross (again and again while held), L1 / R1
  *   the block before / after, triangle fly, square next page, create HQ / LQ, options twice
  *   a new island. The d-pad is not used: the pad makes one of the left stick as well.
  *
  * The 3D view is drawn into a buffer of our own (at half the window resolution by default)
- * while the graphics server shows the previous frame, then copied (scaled) into the window
- * with the controls on top.
+ * while the graphics server shows the previous frame, then copied into the window - stretched
+ * and smoothed by the 2D accelerator, which reads the buffer from shared memory (the processor
+ * does it when there is none) - with the controls on top. Where the accelerator draws textured
+ * primitives (the NeoChrom of the STM32H7S7), it draws the view as well; -c: the processor does.
+ * -v: frame times every few seconds, -b: a benchmark, a number: the island's seed (hex).
  */
 #include <fcntl.h>
 #include <math.h>
@@ -56,6 +60,9 @@ static gfx *g;
 static gfx_win *w;
 static int W, H;
 static int s_scale = 2;
+static bool s_gpu;             /* the accelerator draws the view (G switches) */
+static gfx_buffer *s_view; /* the 3D view in shared memory (the accelerator copies it), or null */
+static bool view_init(void);
 
 static World s_world;
 static Meshes s_mesh;
@@ -432,8 +439,11 @@ static void press(int b)
         break;
     case BUT_HQ:
         s_scale = s_scale == 1 ? 2 : 1;
-        if (!render_init(&s_r, (W + s_scale - 1) / s_scale, (H + s_scale - 1) / s_scale))
+        if (!view_init())
+        {
             s_scale = 2;
+            view_init();
+        }
         message(s_scale == 1 ? "full resolution" : "half resolution (faster)");
         break;
     case BUT_NEW: new_world(); break;
@@ -558,6 +568,10 @@ static void key(const gfx_event *ev)
     case KEY_M: press(BUT_MODE); break;
     case KEY_N: press(BUT_NEW); break;
     case KEY_H: press(BUT_HQ); break;
+    case KEY_G:
+        s_gpu = !s_gpu && render_gpu_init();
+        message(s_gpu ? "drawn by the GPU" : "drawn by the processor");
+        break;
     case KEY_TAB: next_page(); break;
     case KEY_Q:
     case KEY_BACKSPACE:
@@ -613,10 +627,45 @@ static void steer(float dt, Controls *c)
 
 /* ---- the picture ----------------------------------------------------------------------------------- */
 
+/* the 3D view for a window of W x H at the current scale: in shared memory when there is some
+ * (its width even, so its rows are the renderer's rows), else the renderer's own */
+static bool view_init(void)
+{
+    int vw = ((W + s_scale - 1) / s_scale + 1) & ~1, vh = (H + s_scale - 1) / s_scale;
+    /* the old one first: a process has room for three pieces of shared memory (the window,
+     * this, the renderer's textures) */
+    if (s_view && render_init(&s_r, vw, vh, nullptr))
+    {
+        gfx_buffer_free(s_view);
+        s_view = nullptr;
+    }
+    gfx_buffer *b = gfx_buffer_create(vw, vh, GPU2D_FMT_RGB565);
+    if (b && b->s.stride != vw * 2)
+    {
+        gfx_buffer_free(b);
+        b = nullptr;
+    }
+    if (!render_init(&s_r, vw, vh, b ? (uint16_t *)b->s.pix : nullptr))
+    {
+        gfx_buffer_free(b);
+        return false;
+    }
+    gfx_buffer_free(s_view); /* (the renderer no longer draws there) */
+    s_view = b;
+    return true;
+}
+
 static void blit(void)
 {
     gfx_surface *s = &w->s;
     int ww = s->w < W ? s->w : W, hh = s->h < H ? s->h : H;
+    if (s_view)
+    {
+        int r = s_scale == 1 ? gfx_gpu_copy(w, 0, 0, s_view, 0, 0, ww, hh, 0)
+                             : gfx_gpu_scale(w, 0, 0, ww, hh, s_view, 0, 0, (ww + 1) / 2, (hh + 1) / 2, GFX_GPU_SMOOTH);
+        if (r == 0)
+            return;
+    }
     for (int y = 0; y < hh; y++)
     {
         uint16_t *d = (uint16_t *)((uint8_t *)s->pix + y * s->stride);
@@ -663,7 +712,7 @@ static void hud(unsigned fps, unsigned ms)
     fill_alpha(cx - 1, cy + 1, 2, 6, GFX_RGB(255, 255, 255), 200);
 
     char line[64];
-    snprintf(line, sizeof(line), "%u fps %u ms", fps, ms);
+    snprintf(line, sizeof(line), "%u fps %u ms %s", fps, ms, s_gpu ? "GPU" : "CPU");
     text_shadow(5, 14, line, GFX_RGB(255, 255, 255));
     snprintf(line, sizeof(line), "%d %d %d", (int)floorf(s_p.x), (int)floorf(s_p.y), (int)floorf(s_p.z));
     text_shadow(5, 28, line, GFX_RGB(200, 210, 225));
@@ -716,12 +765,15 @@ static void hud(unsigned fps, unsigned ms)
 int main(int argc, char **argv)
 {
     bool bench = false; /* -b: turn around for 12 s at each quality, print the frame rates, end */
+    bool cpu = false;   /* -c: the processor draws the view */
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "-v"))
             s_verbose = true;
         else if (!strcmp(argv[i], "-b"))
             bench = true;
+        else if (!strcmp(argv[i], "-c"))
+            cpu = true;
         else
             s_seed_arg = (uint32_t)strtoul(argv[i], nullptr, 16);
     }
@@ -749,12 +801,13 @@ int main(int argc, char **argv)
             s_icon[b][i] = (icon[i] >> 24) ? to565(icon[i]) : (uint16_t)TEX_HOLE;
     }
     mesh_init(&s_mesh);
-    if (!world_alloc(&s_world) || !render_init(&s_r, (W + 1) / 2, (H + 1) / 2))
+    if (!world_alloc(&s_world) || !view_init())
     {
         printf("voxel: not enough memory\n");
         return 1;
     }
     new_world();
+    s_gpu = !cpu && render_gpu_init();
 
     uint64_t last = now_us(), t_fps = last;
     unsigned frames = 0, fps = 0, ms = 0;
@@ -795,7 +848,7 @@ int main(int argc, char **argv)
                 {
                     W = nw;
                     H = nh;
-                    render_init(&s_r, (W + s_scale - 1) / s_scale, (H + s_scale - 1) / s_scale);
+                    view_init();
                 }
             }
         }
@@ -826,8 +879,9 @@ int main(int argc, char **argv)
             if (t >= 24.0f)
             {
                 for (int i = 0; i < 2; i++)
-                    printf("voxel: benchmark %s: %u fps, %lu ms per frame drawn\n", i ? "full resolution" : "half resolution",
-                           bench_frames[i] / 12u, (unsigned long)(bench_busy[i] / (bench_frames[i] ? bench_frames[i] : 1) / 1000u));
+                    printf("voxel: benchmark %s (%s): %u fps, %lu ms per frame drawn\n", i ? "full resolution" : "half resolution",
+                           s_gpu ? "GPU" : "processor", bench_frames[i] / 12u,
+                           (unsigned long)(bench_busy[i] / (bench_frames[i] ? bench_frames[i] : 1) / 1000u));
                 gfx_close(g);
                 return 0;
             }
@@ -843,7 +897,8 @@ int main(int argc, char **argv)
         Camera cam = {o[0], o[1], o[2], s_p.yaw, s_p.pitch};
         Hit h = aim(0, 0, true);
         int target[3] = {h.x, h.y, h.z};
-        render_frame(&s_r, &s_world, &s_mesh, &cam, h.hit ? target : nullptr);
+        if (!s_gpu || !render_frame_gpu(&s_r, s_view, &s_world, &s_mesh, &cam, h.hit ? target : nullptr))
+            render_frame(&s_r, &s_world, &s_mesh, &cam, h.hit ? target : nullptr);
         busy += now_us() - now;
         if (bench)
             bench_busy[s_scale == 1] += now_us() - now;
@@ -858,7 +913,11 @@ int main(int argc, char **argv)
         {
             fps = (unsigned)(frames * 1000000ull / (now - t_fps));
             ms = frames ? (unsigned)(busy / frames / 1000u) : 0;
-            if (s_verbose && ++s_report % 5 == 0)
+            if (s_verbose && ++s_report % 5 == 0 && s_gpu)
+                printf("voxel: %u fps, frame %u ms (order %lu, faces %lu, GPU %lu us), %d sections, %d faces, %d primitives\n",
+                       fps, ms, (unsigned long)s_r.us_sky, (unsigned long)s_r.us_solid, (unsigned long)s_r.us_water,
+                       s_r.sections, s_r.quads, s_r.triangles);
+            else if (s_verbose && s_report % 5 == 0)
                 printf("voxel: %u fps, frame %u ms (sky %lu, solid %lu, water %lu us), %d sections, %d faces, %d triangles, %d rows, %d pixels\n",
                        fps, ms, (unsigned long)s_r.us_sky, (unsigned long)s_r.us_solid, (unsigned long)s_r.us_water,
                        s_r.sections, s_r.quads, s_r.triangles, s_r.rows, s_r.pixels);

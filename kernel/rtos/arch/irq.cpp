@@ -6,7 +6,7 @@
  */
 #include "../kernel.h"
 #include <crtos/irq.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <string.h>
 
 extern "C" void (*const g_pfnVectors[])(void);

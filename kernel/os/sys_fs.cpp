@@ -3,8 +3,9 @@
  *
  * Paths are resolved against the process' current directory and normalised before any
  * check, so "/sd/../dev/fb0" is treated as "/dev/fb0". Without CAP_DEV a process may only
- * open the console, /dev/null, /dev/zero, the random number devices and the sound output
- * (/dev/audio) among the devices. Pointers are checked against the caller's memory; ioctl
+ * open the console, /dev/null, /dev/zero, the random number devices, the sound output
+ * (/dev/audio) and the 2D accelerator (/dev/gpu2d: it takes surfaces only by the caller's own
+ * shared memory) among the devices. Pointers are checked against the caller's memory; ioctl
  * arguments by the size encoded in the command.
  */
 #define CRTOS_KERNEL 1
@@ -54,7 +55,8 @@ static bool dev_allowed(const char *path)
     if (!p || (p->caps & CAP_DEV) || strncmp(path, "/dev/", 5))
         return true;
     return !strcmp(path, "/dev/console") || !strcmp(path, "/dev/null") || !strcmp(path, "/dev/zero") ||
-           !strcmp(path, "/dev/random") || !strcmp(path, "/dev/urandom") || !strcmp(path, "/dev/audio");
+           !strcmp(path, "/dev/random") || !strcmp(path, "/dev/urandom") || !strcmp(path, "/dev/audio") ||
+           !strcmp(path, "/dev/gpu2d");
 }
 
 static struct file *file_of(int fd)

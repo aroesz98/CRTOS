@@ -16,7 +16,7 @@
  */
 #define CRTOS_KERNEL 1
 #include "kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <crtos/syscall.h>
 #include <string.h>
 

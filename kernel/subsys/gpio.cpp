@@ -6,7 +6,7 @@
 #include <crtos/gpio.h>
 #include <string.h>
 
-#define MAX_CHIPS 8
+#define MAX_CHIPS 16     /* (STM32H7S7: 12 ports) */
 
 struct gpio_chip {
     struct device_node *np;

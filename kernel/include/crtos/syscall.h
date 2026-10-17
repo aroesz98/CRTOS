@@ -102,7 +102,9 @@
 #define VMEM_MAP        0   /* (size) -> address of a new region, -ENOMEM; freed at exit */
 #define VMEM_UNMAP      1   /* (address of a region) */
 #define VMEM_INFO       2   /* (struct crtos_vmeminfo *) */
-#define CRTOS_VMEM_BASE 0x90000000u
+/* nothing on either board: the SEMC window of the i.MX RT beyond its 32 MB of SDRAM, a reserved
+ * range of the STM32H7S7 (whose PSRAM is at 0x90000000) - programs work on both boards */
+#define CRTOS_VMEM_BASE 0xA0000000u
 #define CRTOS_VMEM_SPAN 0x10000000u     /* addresses that may be emulated memory */
 
 #define PIPE_TTY    0x1u    /* SYS_PIPE: answers the terminal ioctls (isatty, mode, foreground) */
@@ -247,7 +249,7 @@ struct crtos_sysinfo {
     uint64_t idle_cycles;       /* CPU time of the idle task */
     uint32_t cpu_hz;
     uint32_t nprocs, ntasks;
-    uint32_t mem_total, mem_free;       /* SDRAM: processes and large buffers */
+    uint32_t mem_total, mem_free;       /* external RAM (SDRAM, PSRAM): processes, large buffers */
     uint32_t kmem_total, kmem_free;     /* kernel heaps in on-chip RAM */
     uint32_t dma_total, dma_free;       /* non-cacheable memory */
 };

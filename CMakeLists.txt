@@ -4,8 +4,11 @@
 #   cmake -S . -B build -G Ninja && cmake --build build
 #   crtos build --rtos [DIR]                 the RTOS alone with the application in DIR
 #                                            (CRTOS_PROFILE=rtos, see below)
+#   crtos build --board stm32h7s78dk         for the ST STM32H7S78-DK (-DCRTOS_BOARD=...); the
+#                                            default is the NXP MIMXRT1050-EVKB (evkbimxrt1050)
 #
-# What comes out (everything under build/):
+# What comes out (everything under build/, which "crtos build" makes build-<board>/ for a board
+# other than the default):
 #   kernel/crtos.bin, crtos.axf   the kernel: firmware for the board's flash ('crtos flash')
 #   sdcard/crtos/                 everything that goes to the SD card as /crtos
 #                                 (drivers, services, programs, device tree, configuration)
@@ -14,7 +17,8 @@
 #   compile_commands.json         for editors (VS Code, CLion, clangd)
 #
 # Where things are:
-#   kernel/     the kernel and the board support (kernel/platform/evkbimxrt1050)
+#   kernel/     the kernel and the board support (kernel/platform/<board>: the board is
+#               CRTOS_BOARD, evkbimxrt1050 or stm32h7s78dk - cmake/boards/<board>.cmake)
 #   drivers/    kernel modules (.ko) for the devices of the device tree (dts/)
 #   system/     the base system (user space): the programs' libraries (system/lib: libcrtos,
 #               libgfx, TFTLIB), services, command-line programs, the window manager,
@@ -49,7 +53,8 @@ include(cmake/crtos.cmake)
 # about 40 MB once), brings every checkout to the commit of third_party/sources.txt and applies
 # patches/. Changing either of them, or a checkout (its HEAD: also one deleted), configures
 # again.
-execute_process(COMMAND ${Python3_EXECUTABLE} ${CRTOS_TOP}/tools/thirdparty.py --build
+# (the board may need a group of its own: CRTOS_BOARD_GROUP of cmake/boards/<board>.cmake)
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CRTOS_TOP}/tools/thirdparty.py --build ${CRTOS_BOARD_GROUP}
                 WORKING_DIRECTORY ${CRTOS_TOP} RESULT_VARIABLE thirdparty_rc)
 if(thirdparty_rc)
   message(FATAL_ERROR "third_party: the sources are not complete (above); "
@@ -82,7 +87,7 @@ if(CRTOS_BUILD_KERNEL)
   add_subdirectory(kernel)
 endif()
 
-crtos_dtb(board ${CRTOS_TOP}/dts/evkbimxrt1050.dts)
+crtos_dtb(board ${CRTOS_BOARD_DTS})
 add_subdirectory(drivers)
 add_subdirectory(system)
 if(CRTOS_BUILD_APPS)

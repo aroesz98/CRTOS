@@ -15,7 +15,7 @@
 #define CRTOS_KERNEL 1
 #include "../kernel.h"
 #include <crtos/syscall.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 extern "C" {
 void sched_switch(void);

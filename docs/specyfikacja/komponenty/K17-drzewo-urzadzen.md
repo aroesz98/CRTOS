@@ -107,7 +107,7 @@ K16 (`module_loading()` – właściciel sterownika), S01 (`pinctrl_select_state
   tworzy `device_node` i `property` w pamięci jądra; nazwy i wartości wskazują w blob,
   który jądro zachowuje na stałe.
 - `populate_bus` rekurencyjnie tworzy urządzenia dla dzieci korzenia i węzłów
-  `simple-bus`. Wbudowane sterowniki K18 (`builtin-bus`, `builtin-usdhc`, `earlycon`)
+  `simple-bus`. Wbudowane sterowniki K18 (`builtin-bus`, `builtin-sdcard`, `earlycon`)
   dołączają się do magistral, kontrolera karty i konsoli, żeby moduły nie były ładowane
   dla urządzeń obsługiwanych przez jądro.
 - Wszystkie operacje na listach urządzeń i sterowników pod jednym mutexem; `probe`

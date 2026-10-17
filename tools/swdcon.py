@@ -7,8 +7,9 @@ Uploads write the file straight into a RAM buffer (kmon "stage"), then have it s
 "savestage"), which is far faster than the serial line.
 
 The control block is found in the running kernel itself (it is among the first initialised
-data in DTCM), so no .axf file is needed; the probe is the board's CMSIS-DAP (DAPLink) probe
-unless CRTOS_PROBE names one.
+data in DTCM), so no .axf file is needed; the probe is the board's own (the CMSIS-DAP DAPLink of
+the i.MX RT board, the ST-LINK of the STM32 one) unless CRTOS_PROBE names one. crtos.py tells
+which board it is (setup()).
 """
 import logging
 import os
@@ -21,6 +22,9 @@ import time
 import zlib
 
 TARGET = os.environ.get('CRTOS_TARGET', 'mimxrt1050_hyperflash')
+PROBE_TYPE = 'CMSISDAPProbe'    # the kind of probe the board has
+BOARD = 'evkbimxrt1050'
+DEBUG_USB = 'J28'               # the board's debug USB connector
 MAGIC = 0x57535243
 PROMPT = b'kmon> '
 DTCM = 0x20000000
@@ -29,9 +33,20 @@ SCAN_BYTES = 0x8000             # where the kernel's initialised data starts
 _probe = None
 
 
+def setup(board, target, probe_type, debug_usb=None):
+    """The board (crtos.py's BOARDS): its pyOCD target, the kind of its debug probe and the
+    connector the probe is on"""
+    global BOARD, TARGET, PROBE_TYPE, DEBUG_USB
+    BOARD = board
+    TARGET = os.environ.get('CRTOS_TARGET', target)
+    PROBE_TYPE = probe_type
+    if debug_usb:
+        DEBUG_USB = debug_usb
+
+
 def find_probe():
-    """Unique id of the board's debug probe: CRTOS_PROBE, else the only CMSIS-DAP probe
-    (the board's DAPLink), else the only probe there is"""
+    """Unique id of the board's debug probe: CRTOS_PROBE, else the only probe of the board's kind
+    (DAPLink, ST-LINK), else the only probe there is"""
     global _probe
     if _probe:
         return _probe
@@ -39,13 +54,14 @@ def find_probe():
     if _probe:
         return _probe
     logging.getLogger('pyocd').setLevel(logging.ERROR)
+    logging.getLogger('pyocd.coresight.rom_table').setLevel(logging.CRITICAL)   # the STM32H7's empty ROM entries
     from pyocd.core.helpers import ConnectHelper
     probes = ConnectHelper.get_all_connected_probes(blocking=False, print_wait_message=False)
-    dap = [p for p in probes if type(p).__name__ == 'CMSISDAPProbe']
-    found = dap or probes
+    own = [p for p in probes if type(p).__name__ == PROBE_TYPE]
+    found = own or probes
     if not found:
         raise RuntimeError('no debug probe found: is the board connected to this computer '
-                           '(USB cable in the board\'s debug port, J28)?')
+                           '(USB cable in the board\'s debug port, %s)?' % DEBUG_USB)
     if len(found) > 1:
         raise RuntimeError('several debug probes: %s - choose one with CRTOS_PROBE=<id>' %
                            ', '.join('%s (%s)' % (p.unique_id, p.description) for p in found))
@@ -56,6 +72,7 @@ def find_probe():
 def open_session(probe=None):
     """A pyOCD session attached to the running target (it keeps running)"""
     logging.getLogger('pyocd').setLevel(logging.ERROR)
+    logging.getLogger('pyocd.coresight.rom_table').setLevel(logging.CRITICAL)   # the STM32H7's empty ROM entries
     from pyocd.core.helpers import ConnectHelper
     probe = probe or find_probe()
     session = ConnectHelper.session_with_chosen_probe(
@@ -248,30 +265,62 @@ def run_kmon(axf, cmds, timeout=60.0):
 LCDIF = 0x402B8000
 LCDIF_TRANSFER_COUNT = LCDIF + 0x30
 LCDIF_CUR_BUF = LCDIF + 0x40
+LTDC = 0x50001000                   # STM32H7S7: layer 1 shows the frame buffer
+
+
+def _display(t):
+    """(width, height, address, bytes per pixel, pitch) of the frame the display shows"""
+    if BOARD == 'stm32h7s78dk':
+        bpcr, awcr = t.read32(LTDC + 0x0C), t.read32(LTDC + 0x10)
+        w = ((awcr >> 16) & 0xFFF) - ((bpcr >> 16) & 0xFFF)
+        h = (awcr & 0x7FF) - (bpcr & 0x7FF)
+        if not (t.read32(LTDC + 0x84) & 1) or not (0 < w <= 2048 and 0 < h <= 2048):
+            raise RuntimeError('display not running (LTDC layer 1 off)')
+        fmt = t.read32(LTDC + 0x94) & 7
+        bpp = {0: 4, 2: 2}.get(fmt)
+        if not bpp:
+            raise RuntimeError('LTDC pixel format %d is not handled' % fmt)
+        pitch = (t.read32(LTDC + 0xB0) >> 16) & 0x1FFF
+        return w, h, t.read32(LTDC + 0xAC), bpp, pitch
+    count = t.read32(LCDIF_TRANSFER_COUNT)
+    w, h = count & 0xFFFF, count >> 16
+    if not (0 < w <= 2048 and 0 < h <= 2048):
+        raise RuntimeError('display not running (TRANSFER_COUNT %08x)' % count)
+    return w, h, t.read32(LCDIF_CUR_BUF), 2, w * 2
 
 
 def screenshot(axf, path):
-    """Save the frame the display shows (RGB565 frame buffer read through the probe) as PNG"""
+    """Save the frame the display shows (frame buffer read through the probe) as PNG"""
     from PIL import Image
     con = SwdCon(axf)
     try:
         t = con.t
-        count = t.read32(LCDIF_TRANSFER_COUNT)
-        w, h = count & 0xFFFF, count >> 16
-        if not (0 < w <= 2048 and 0 < h <= 2048):
-            raise RuntimeError('display not running (TRANSFER_COUNT %08x)' % count)
+        w, h, addr, bpp, pitch = _display(t)
         t.halt()  # no composition into the buffer while we read it (~0.3 s)
         try:
-            addr = t.read32(LCDIF_CUR_BUF)
-            raw = bytes(t.read_memory_block8(addr, w * h * 2))
+            raw = bytes(t.read_memory_block8(addr, pitch * (h - 1) + w * bpp))
         finally:
             t.resume()
     finally:
         con.close()
-    img = Image.frombytes('RGB', (w, h), raw, 'raw', 'BGR;16')
+    if pitch != w * bpp:
+        raw = b''.join(raw[y * pitch:y * pitch + w * bpp] for y in range(h))
+    if bpp == 2:
+        img = Image.frombytes('RGB', (w, h), raw, 'raw', 'BGR;16')
+    else:
+        img = Image.frombytes('RGB', (w, h), raw, 'raw', 'BGRX')
     img.save(path)
     print('screenshot: %dx%d from %08x -> %s' % (w, h, addr, path))
     return True
+
+
+def read_memory(addr, size, probe=None):
+    """@size bytes of the running target's memory (it keeps running)"""
+    session = open_session(probe)
+    try:
+        return bytes(session.target.read_memory_block8(addr, size))
+    finally:
+        session.close()
 
 
 def upload_files(axf, pairs, on_done=None):
@@ -295,6 +344,7 @@ def reset(probe=None, method='hw'):
     reboot does. (pyOCD's default for i.MX RT, a VECTRESET of the core, does nothing on the
     Cortex-M7 - the board keeps running.)"""
     logging.getLogger('pyocd').setLevel(logging.ERROR)
+    logging.getLogger('pyocd.coresight.rom_table').setLevel(logging.CRITICAL)   # the STM32H7's empty ROM entries
     from pyocd.core.helpers import ConnectHelper
     from pyocd.core.target import Target
     probe = probe or find_probe()

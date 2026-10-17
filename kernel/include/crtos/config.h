@@ -29,8 +29,13 @@
 #define CONFIG_NVIC_PRIO_BITS       4
 #define CONFIG_IRQ_KERNEL_PRIO      2
 #define CONFIG_IRQ_DEFAULT_PRIO     8
+#if defined(CRTOS_BOARD_STM32H7S78DK)
+#define CONFIG_NUM_IRQS             156         /* STM32H7S7 NVIC lines */
+#else
 #define CONFIG_NUM_IRQS             152         /* i.MX RT1052 NVIC lines */
-#define CONFIG_NUM_VIRQS            192         /* GPIO interrupt lines (5 ports x 32 + spare) */
+#endif
+#define CONFIG_NUM_VIRQS            192         /* GPIO interrupt lines (i.MX RT: 5 ports x 32 + spare,
+                                                 * STM32H7S7: 12 ports x 16) */
 
 #define CONFIG_KTHREAD_STACK        2048u       /* default kernel thread stack */
 #define CONFIG_KSTACK_SIZE          3072u       /* kernel (syscall) stack of every user thread */

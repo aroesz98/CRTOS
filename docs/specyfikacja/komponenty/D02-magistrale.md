@@ -6,8 +6,8 @@
 |---|---|
 | Identyfikator | D02 |
 | Warstwa | L1 (moduły `.ko`) |
-| Moduły | `lpi2c-imxrt.ko` (`fsl,imxrt1050-lpi2c`), `lpspi-imxrt.ko` (`fsl,imxrt1050-lpspi`), `lpuart-imxrt.ko` (`fsl,imxrt1050-lpuart`) |
-| Pliki | `drivers/imxrt/lpi2c-imxrt.c`, `drivers/spi/lpspi-imxrt.c`, `drivers/tty/lpuart-imxrt.c`; SDK: `fsl_lpi2c.c`, `fsl_lpspi.c`, `fsl_lpuart.c` (dołączane do modułów) |
+| Moduły | `lpi2c-imxrt.ko` (`fsl,imxrt1050-lpi2c`), `lpspi-imxrt.ko` (`fsl,imxrt1050-lpspi`), `lpuart-imxrt.ko` (`fsl,imxrt1050-lpuart`); STM32H7S7: `i2c-stm32.ko` (`st,stm32-i2c`), `uart-stm32.ko` (`st,stm32-uart`) |
+| Pliki | `drivers/imxrt/lpi2c-imxrt.c`, `drivers/spi/lpspi-imxrt.c`, `drivers/tty/lpuart-imxrt.c`, `drivers/stm32/i2c-stm32.c`, `drivers/stm32/uart-stm32.c`; SDK: `fsl_lpi2c.c`, `fsl_lpspi.c`, `fsl_lpuart.c` (dołączane do modułów) |
 | Interfejsy realizowane | `i2c_adapter_ops`, `spi_controller_ops` (S02), `file_ops` `/dev/ttyS*` (K13), polecenia `TTY_IOC_*` (`crtos/tty.h`) |
 
 ## 2. Odpowiedzialność
@@ -15,10 +15,19 @@
 - **lpi2c-imxrt**: kontroler I2C w trybie master, transfery warstwą transakcyjną SDK
   z przerwaniem; zapis ≤ 4 B + odczyt z tego samego adresu jako jedna transakcja (adres
   rejestru + powtórzony start).
+- **i2c-stm32** (STM32H7S78-DK): kontroler I2C układu STM32 w trybie master, na rejestrach
+  (bez HAL), z przerwaniami zdarzeń i błędów; komunikaty jednego transferu idą jeden po drugim
+  z powtórzonym startem, dłuższe niż 255 B z RELOAD. TIMINGR liczony z zegara jądra
+  i `clock-frequency` (domyślnie 100 kHz). Przekroczenie czasu (100 ms) albo błąd magistrali
+  resetuje kontroler. Na płytce: I2C1 (dotyk GT911, TCPP03 portu USB-C, kodek WM8904).
 - **lpspi-imxrt**: kontroler SPI master (LPSPI3 na J24), słowa 8-bitowe, chip select
   sprzętowy (PCS0..3) aktywny przez cały komunikat, zegar do 32 MHz (korzeń 65 MHz).
 - **lpuart-imxrt**: porty szeregowe inne niż konsola jądra (`/dev/ttyS3` na J22),
   surowe bajty 8N1, pierścienie 2 KB, przerwania, `poll`, prędkość, pętla wewnętrzna.
+- **uart-stm32** (STM32H7S78-DK): to samo dla USART/UART układu STM32 (`/dev/ttyS7`: UART7
+  na złączu Arduino, D0/D1), z FIFO sprzętowymi; zegar jądra UART to zegar szyny (PCLK1
+  150 MHz, BRR przy nadpróbkowaniu ×16). Bez pętli wewnętrznej w sprzęcie: zastępuje ją tryb
+  półdupleksu (odbiornik słyszy linię TX).
 
 ## 3. Wymagania
 
@@ -28,20 +37,22 @@
 | REQ-D02-02 | Brak potwierdzenia adresu I2C (NAK) zwraca `-ENXIO` (skanowanie `i2cdetect`). | `kmon i2cdetect 1` |
 | REQ-D02-03 | Części komunikatu SPI o tej samej prędkości, bez `cs_change` i opóźnień, są wysyłane jako jeden transfer (chip select aktywny między nimi) niezależnie od długości. | `crtos run spi -c -r 10000 9f` |
 | REQ-D02-04 | SDO kontrolera SPI jest w stanie wysokiej impedancji, gdy chip select jest nieaktywny (na EVKB to także pin ID gniazda J9). | `CFGR1.OUTCFG` = 1 (odczyt przez SWD, 27.09.2026) |
-| REQ-D02-05 | `lpuart-imxrt` nie przejmuje UART wskazanego jako konsola jądra (`/chosen/stdout-path`). | przegląd kodu, start |
+| REQ-D02-05 | `lpuart-imxrt` i `uart-stm32` nie przejmują UART wskazanego jako konsola jądra (`/chosen/stdout-path`). | przegląd kodu, start (STM32: UART4 zostaje przy `earlycon`, `uart-stm32` bierze tylko UART7, 04.10.2026) |
 | REQ-D02-06 | Przerwany (zabity) wątek czekający na transfer SPI przerywa transfer, zanim bufory przestaną istnieć. | przegląd kodu |
+| REQ-D02-07 | `uart-stm32` odrzuca prędkość, dla której dzielnik BRR wypada poza 16…65535 (`-EINVAL`, przy sondowaniu: moduł nie wiąże urządzenia). | przegląd kodu |
 
 ## 4. Interfejs udostępniany
 
 | Moduł | Dla kogo | Operacje |
 |---|---|---|
 | `lpi2c-imxrt` | S02 (magistrala `i2c1` z aliasu) | `xfer(msgs, num)`: `num` albo `-ETIMEDOUT`, `-ENXIO` (NAK), `-EIO`, `-EBUSY` |
+| `i2c-stm32` | S02 (magistrala `i2c1` z aliasu) | `xfer(msgs, num)`: `num` albo `-ETIMEDOUT`, `-ENXIO` (NAK), `-EIO` (błąd magistrali, arbitraż), `-EINVAL` (komunikat długości 0) |
 | `lpspi-imxrt` | S02 (magistrala `spi3`) | `transfer(spi, xfers, num)`: 0, `-EINVAL` (słowo ≠ 8 bitów, zegar 0), `-ENOTSUP` (`SPI_LOOP`), `-ENOMEM`, `-EIO`, `-EINTR` |
-| `lpuart-imxrt` | programy (`/dev/ttyS<n>`, `n` z aliasu `serial<n>`) | `read` (≥ 1 bajt, `O_NONBLOCK` → `-EAGAIN`), `write` (czeka na miejsce), `poll`, `ioctl`: `TTY_IOC_GET_MODE` (0 = surowy), `TTY_IOC_GET/SET_SPEED`, `TTY_IOC_SET_LOOPBACK`, `TTY_IOC_GET_SIZE` |
+| `lpuart-imxrt`, `uart-stm32` | programy (`/dev/ttyS<n>`, `n` z aliasu `serial<n>`) | `read` (≥ 1 bajt, `O_NONBLOCK` → `-EAGAIN`), `write` (czeka na miejsce), `poll`, `ioctl`: `TTY_IOC_GET_MODE` (0 = surowy), `TTY_IOC_GET/SET_SPEED`, `TTY_IOC_SET_LOOPBACK`, `TTY_IOC_GET_SIZE` |
 
-Parametry DT: `clock-frequency` (I2C, domyślnie 100 kHz), `clocks` `ipg` + `per`,
-`interrupts`, `pinctrl-0`, `current-speed` (UART, domyślnie 115200), dzieci magistral
-(S02).
+Parametry DT: `clock-frequency` (I2C, domyślnie 100 kHz), `clocks` `ipg` + `per`
+(`uart-stm32`: jedna bramka szyny), `interrupts`, `pinctrl-0`, `current-speed` (UART,
+domyślnie 115200), dzieci magistral (S02).
 
 ## 5. Interfejsy wymagane
 

@@ -6,11 +6,13 @@
  * and done with kernel interrupts masked, so kmalloc/kfree are usable from interrupts.
  *
  * The end of ITCM from an 8 KB boundary is no pool but the fast code area: one program's
- * hottest code (app.cpp), a block at the top of ITCM that an MPU region with subregions
- * describes - 8 KB ones of the top 64 KB, or 16 KB ones of all 128 KB (TLSF could not align
- * such a block within the little ITCM there is).
+ * hottest code (app.cpp), a block at the top of ITCM that one MPU region describes - a power
+ * of two aligned to its size, of which the block takes the top eighths (subregions); TLSF
+ * could not align such a block within the little ITCM there is. The top is the ITCM the chip
+ * has (platform_itcm_top: on the STM32H7S7 the option bytes set it), at most the linker's.
  */
 #include "../kernel.h"
+#include "platform.h"
 #include "tlsf.h"
 #include <string.h>
 
@@ -64,11 +66,24 @@ void mm_init(void)
     pool_add(P_DTCM, "dtcm", (uintptr_t)_pvHeapLimit, (uintptr_t)_vStackBase, KM_FAST);
     s_fc_base = ALIGN_UP((uintptr_t)__end_noinit_SRAM_ITC + ITCM_HEAP_MIN, FASTCODE_ALIGN);
     s_fc_end = (uintptr_t)__top_SRAM_ITC;
+    if (platform_itcm_top() < s_fc_end)
+        s_fc_end = platform_itcm_top();
     if (s_fc_base >= s_fc_end)
         s_fc_base = s_fc_end;
+    /* a block can start only on an eighth of its region (kmalloc_fastcode): below the lowest
+     * such start the ITCM stays the kernel's heap */
+    uintptr_t lowest = s_fc_end;
+    for (uintptr_t region = 2048u; region <= (1u << 20); region <<= 1) {
+        uintptr_t sub = region / 8u, lo = ALIGN_UP(s_fc_base, sub);
+        if (lo < ALIGN_DOWN(s_fc_end - 1u, region))
+            lo = ALIGN_DOWN(s_fc_end - 1u, region);
+        if (s_fc_end % sub == 0 && lo < lowest)
+            lowest = lo;
+    }
+    s_fc_base = lowest;
     pool_add(P_ITCM, "itcm", (uintptr_t)__end_noinit_SRAM_ITC, s_fc_base, KM_FAST | KM_EXEC);
-    pool_add(P_OCRAM, "ocram", (uintptr_t)__end_noinit_SRAM_OC, (uintptr_t)__top_SRAM_OC, KM_EXEC | KM_DMA);
-    pool_add(P_SDRAM, "sdram", (uintptr_t)__end_noinit_BOARD_SDRAM, (uintptr_t)__top_BOARD_SDRAM,
+    pool_add(P_OCRAM, PLATFORM_POOL_ONCHIP, (uintptr_t)__end_noinit_SRAM_OC, (uintptr_t)__top_SRAM_OC, KM_EXEC | KM_DMA);
+    pool_add(P_SDRAM, PLATFORM_POOL_EXT, (uintptr_t)__end_noinit_BOARD_SDRAM, (uintptr_t)__top_BOARD_SDRAM,
              KM_EXEC | KM_DMA | KM_LARGE);
     pool_add(P_NCACHE, "ncache", (uintptr_t)__end_noinit_NCACHE_REGION, (uintptr_t)__top_NCACHE_REGION,
              KM_NOCACHE | KM_DMA);
@@ -120,14 +135,23 @@ void *kzalloc(size_t size, unsigned flags)
 
 void *kmalloc_fastcode(size_t size, size_t *got)
 {
-    size_t step = size <= 65536u ? 8192u : 16384u;
-    size = ALIGN_UP(size, step);
+    /* the smallest region (from 2 KB: subregions of 256 bytes) whose top eighths hold @size
+     * and end where the area ends */
+    uintptr_t start = 0;
+    for (uintptr_t region = 2048u; size && region <= (1u << 20); region <<= 1) {
+        uintptr_t base = ALIGN_DOWN(s_fc_end - 1u, region), sub = region / 8u;
+        uintptr_t need = ALIGN_UP(size, sub);
+        if (s_fc_end % sub == 0 && need <= s_fc_end - base && need <= s_fc_end - s_fc_base) {
+            start = s_fc_end - need;
+            break;
+        }
+    }
     uint32_t key = irq_lock();
     void *p = nullptr;
-    if (!s_fc_block && size && size <= s_fc_end - s_fc_base) {
-        s_fc_block = s_fc_end - size;
-        p = (void *)s_fc_block;
-        *got = size;
+    if (!s_fc_block && start) {
+        s_fc_block = start;
+        p = (void *)start;
+        *got = s_fc_end - start;
     }
     irq_unlock(key);
     return p;

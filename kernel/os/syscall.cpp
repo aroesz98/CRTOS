@@ -6,7 +6,7 @@
 #include "kernel.h"
 #include <crtos/rtc.h>
 #include <crtos/syscall.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 /* sys_fs.cpp */
 int64_t sys_open(const char *path, uint32_t flags);

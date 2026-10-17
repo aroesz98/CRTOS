@@ -6,7 +6,7 @@
 |---|---|
 | Identyfikator | K14 |
 | Warstwa | L0 (sterownik wbudowany w jądro – potrzebny, żeby wczytać wszystko inne) |
-| Pliki | `kernel/os/boot/sdcard.cpp`, `sdcard.h` (USDHC1), `kernel/os/boot/fat.cpp` (FatFs + VFS), `kernel/platform/evkbimxrt1050/fatfs/` (FatFs R0.15), `kernel/ffconf.h` |
+| Pliki | `kernel/os/boot/sdcard.cpp`, `sdcard.h` (USDHC1), `kernel/os/boot/fat.cpp` (FatFs + VFS), `kernel/platform/evkbimxrt1050/fatfs/` (FatFs R0.15), `kernel/ffconf.h`; STM32H7S78-DK: `kernel/platform/stm32h7s78dk/sdcard_sdmmc.cpp` (SDMMC1, zamiast `sdcard.cpp`; ten sam `sdcard.h`, `fat.cpp` i FatFs) |
 | Interfejs | `sdcard.h` (wewnętrzny), montowanie `/sd` przez `vfs_fs_ops` (K13) |
 
 ## 2. Odpowiedzialność
@@ -19,6 +19,11 @@
   pełna ponowna inicjalizacja (wyłączenie zasilania gniazda), zejście do wolniejszego trybu.
 - System plików FAT/exFAT (FatFs) z pamięcią podręczną bloków (zbieranie zapisów,
   czytanie z wyprzedzeniem), zamontowany w `/sd`.
+- Na STM32H7S78-DK gniazdo microSD (CN13) obsługuje `sdcard_sdmmc.cpp` na SDMMC1, z tym
+  samym interfejsem, odtwarzaniem po błędach i statystyką: wewnętrzne DMA kontrolera (IDMA,
+  jeden bufor) z przerwaniem, tryby DS 25 MHz i HS 50 MHz przy 3,3 V (gniazdo nie ma
+  przetwornika 1,8 V, więc bez UHS-I i strojenia), zegar jądra 200 MHz (PLL2 S) z programu
+  startowego. FAT (`fat.cpp`, FatFs) jest wspólny.
 
 ## 3. Wymagania
 
@@ -32,6 +37,11 @@
 | REQ-K14-06 | Dane zapisane przez `fsync`/`close` są na karcie (zebrane zapisy wysłane przed `CTRL_SYNC`). | `apptest` (pliki na /sd), `crtos deploy` (sumy CRC po zapisie) |
 | REQ-K14-07 | Odczyt bloków zebranych do zapisu zwraca nowe dane (zapis przed odczytem nakładających się bloków). | przegląd kodu |
 | REQ-K14-08 | Zapisywany plik dostaje czas z zegara ściennego (UTC, `get_fattime` → `fat_time_now`), a gdy data jest nieznana – 2021-01-01; `stat` i `fstat` otwartego pliku zwracają ten czas. | apptest (czas pliku na `/sd`) |
+
+Wymagania dotyczą też `sdcard_sdmmc.cpp` (STM32): REQ-K14-01, 02, 04–08 w całości (REQ-K14-05
+obejmuje tam też bufory w TCM i we flashu, których IDMA nie widzi), z REQ-K14-03 tylko zejście
+do 25 MHz po trzech zawieszeniach (trybów UHS nie ma). Na STM32 są sprawdzone przeglądem kodu
+i startem systemu z karty (moduły i programy z `/sd`); wyniki w tabeli są z EVKB.
 
 ## 4. Interfejs udostępniany
 
@@ -49,11 +59,17 @@
 | `fat_raw_io(lba, buf, count, write)` | wątek | bloki karty pod blokadą woluminu FatFs i przez pamięć podręczną bloków (spójnie z systemem plików) | 0, `-EIO`, `-ETIMEDOUT` |
 | `fat_cache_invalidate()` | wątek | porzucenie czytanych z wyprzedzeniem bloków | — |
 
+Na STM32 te same funkcje; `sdcard_set_mode` zna tylko DS i HS, `sdcard_set_clock` przyjmuje
+0,4–50 MHz, `sdcard_set_pads(speed, …)` zmienia tylko szybkość wyjść pinów (`OSPEEDR` 0–3),
+a `sdcard_info.v18` i `tunings` są zawsze 0.
+
 ## 5. Interfejsy wymagane
 
 K02 (`irq_request` USDHC1, priorytet 6), K06 (`event` końca komendy/danych, mutex karty,
 mutex FatFs), K07 (`kmalloc` na bufory pamięci podręcznej), K13 (`vfs_mount`), NXP SDK
 `fsl_usdhc` (warstwa transakcyjna), `fsl_gpio`, `fsl_iomuxc`, `fsl_clock`, `fsl_cache`.
+STM32: K02 (`irq_request` SDMMC1, priorytet 6), te same K06, K07, K13; rejestry SDMMC1, GPIO
+i RCC wprost i CMSIS `SCB_*DCache_by_Addr` (bez HAL).
 
 ## 6. Struktura statyczna
 
@@ -100,6 +116,19 @@ mutex FatFs), K07 (`kmalloc` na bufory pamięci podręcznej), K13 (`vfs_mount`),
   z `kmalloc`.
 - Wydajność (karta użytkownika, exFAT): zapis plików 15–20 MB/s, odczyt 19–24 MB/s;
   `read` przez program 35 MB/s w `crtos bench`.
+- **STM32H7S78-DK** (`sdcard_sdmmc.cpp`, rejestry SDMMC1 bez HAL):
+  - piny w kodzie: PC8–PC11 dane, PC12 zegar, PD2 komenda (podciągnięte, poza zegarem), PM14
+    wykrywanie karty (niski = karta; przy starcie 30 ms stabilnie w ciągu 150 ms);
+  - transfer: komenda i dane pod jednym `CMD` z `CMDTRANS`, IDMA wprost do bufora, gdy leży
+    w AXI SRAM albo PSRAM i jest wyrównany do 4 B (odczyt do pamięci z cache: całe linie
+    32 B); inaczej bufor pośredni 8 bloków w AXI SRAM. Zapis: czyszczenie linii; odczyt:
+    czyszczenie z unieważnieniem przed i unieważnienie po (linie pobrane spekulatywnie);
+  - zegar magistrali 200 MHz / (2 × `CLKDIV`): 25 MHz albo 50 MHz (HS po CMD6, gdy karta go
+    zgłasza); sprzętowe sterowanie przepływem (zegar staje, zamiast przepełnić FIFO);
+  - te same limity czasu; sprzętowy licznik danych (`DTIMER`) ustawiony na ten sam czas;
+  - pełna ponowna inicjalizacja: reset kontrolera (RCC) i inicjalizacja karty od CMD0, bez
+    wyłączania zasilania karty;
+  - CMD23 tylko dla zapisów (gdy karta ma go w SCR), odczyty wielu bloków kończy CMD12.
 
 ## 9. Obsługa błędów i mechanizmy bezpieczeństwa
 
@@ -112,6 +141,8 @@ mutex FatFs), K07 (`kmalloc` na bufory pamięci podręcznej), K13 (`vfs_mount`),
 | powtarzające się błędy w trybie UHS | zejście o jeden tryb |
 | transfer wolniejszy niż 250 ms | wpis w logu (statystyka `slow`) |
 | seria błędów | wypisanie śladu ostatnich transferów (`sd trace`) |
+| STM32: bufor poza zasięgiem IDMA (TCM, flash) albo niewyrównany | bufor pośredni w AXI SRAM |
+| STM32: karta nie odpowiada | reset kontrolera i inicjalizacja karty od nowa (bez wyłączania jej zasilania) |
 
 ## 10. Konfiguracja
 
@@ -119,7 +150,9 @@ Stałe w `sdcard.cpp` (`CMD_GAP_US` 50, `RETRIES` 3, `MODE_FAILURES` 3, `MAX_LOC
 `MAX_BLOCKS` 2048, `BOUNCE_BLOCKS` 8, zegar źródła 198 MHz) i `fat.cpp` (`WB_BLOCKS`
 512, `RA_BLOCKS` 256, `RA_FIRST` 32); konfiguracja FatFs w `kernel/ffconf.h`. Piny,
 zasilanie gniazda i wykrywanie karty są ustawiane w kodzie (sterownik działa przed drzewem
-urządzeń).
+urządzeń). STM32: stałe w `sdcard_sdmmc.cpp` (`CMD_GAP_US` 50, `RETRIES` 3, `MAX_LOCKUPS` 3,
+`MAX_BLOCKS` 2048, `BOUNCE_BLOCKS` 8, `SD_KER_CLK` 200 MHz); węzeł `&sdmmc1` (`bus-width`,
+`cd-gpios`) w `dts/stm32h7s78dk.dts` tylko opisuje kontroler – piny są w kodzie.
 
 ## 11. Weryfikacja
 
@@ -128,6 +161,9 @@ urządzeń).
   `sd hist`, `df`.
 - `crtos bench`: `read`.
 - `crtos deploy`: każdy plik po zapisie ma sprawdzaną sumę CRC-32 (U06).
+- STM32H7S78-DK: start systemu z karty (moduły, `init`, programy z `/sd`); te same polecenia
+  kmon (log: `sd: 4-bit bus, high speed, 50 MHz, 3.3 V signalling`); pomiarów z tej płytki
+  dokumentacja nie zawiera.
 
 ## 12. Ograniczenia i znane problemy
 
@@ -142,3 +178,6 @@ urządzeń).
   ponownym włożeniu karta działa dopiero po `crtos kmon "sd reinit"` (albo restarcie) –
   jądro nie wykrywa włożenia samo (zaobserwowane 27.09.2026: `card initialisation failed
   (-116)`, po włożeniu i `sd reinit` pliki znów dostępne bez restartu).
+- STM32: bez trybów UHS-I (brak 1,8 V) magistrala ma najwyżej 50 MHz, więc karta jest
+  wolniejsza niż w SDR104 na EVKB. Sterownik nie steruje zasilaniem karty: karta zawieszona
+  wewnętrznie wraca dopiero po odcięciu zasilania płytki.

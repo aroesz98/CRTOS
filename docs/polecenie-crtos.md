@@ -8,11 +8,29 @@ Uruchamiasz je z katalogu repozytorium:
 
 `crtos --help` pokazuje listę poleceń, a `crtos POLECENIE --help` opcje jednego polecenia.
 
+## Płytka
+
+CRTOS działa na dwóch płytkach: **NXP MIMXRT1050-EVKB** (`evkbimxrt1050`, domyślna) i **ST
+STM32H7S78-DK** (`stm32h7s78dk`). Polecenia pracują z płytką wybraną przez `crtos board`:
+
+| Polecenie | Działanie |
+|---|---|
+| `crtos board` | pokazuje płytki (`*` przy wybranej) i jej katalog budowania |
+| `crtos board stm32h7s78dk` | wybiera płytkę; wybór zostaje w pliku `.crtos-board` w repozytorium (poza gitem) |
+| `crtos build --board NAZWA` | wybiera płytkę jak wyżej i od razu buduje |
+
+Zmienna środowiska `CRTOS_BOARD` ma pierwszeństwo przed `.crtos-board` (a `crtos board`
+odmawia wyboru innej płytki, gdy jest ustawiona). Każda płytka ma własny katalog budowania:
+`build/` dla EVKB, `build-<płytka>/` dla pozostałych (np. `build-stm32h7s78dk/`), więc
+przełączanie płytek nie wymaga budowania od nowa. Niżej `build/` oznacza katalog wybranej
+płytki. Od płytki zależy też sonda i port szeregowy (EVKB: DAPLink, gniazdo J28;
+STM32H7S78-DK: ST-LINK, gniazdo CN1) i sposób zapisu flasha (`crtos flash`).
+
 ## Przygotowanie
 
 | Polecenie | Działanie |
 |---|---|
-| `crtos doctor` | sprawdza narzędzia, sondę, port szeregowy, czy CRTOS działa na płytce i czy odpowiada przez sieć |
+| `crtos doctor` | sprawdza narzędzia, sondę, port szeregowy, czy CRTOS działa na płytce i czy odpowiada przez sieć; pokazuje wybraną płytkę (na STM32H7S78-DK także, czy jest STM32CubeProgrammer) |
 | `crtos setup` | instaluje brakujące narzędzia i pakiety Pythona, pobiera kod z zewnątrz do `third_party/` (`tools/thirdparty.py`, robi to też `crtos build`) |
 | `crtos setup --netsurf` | dodatkowo pobiera źródła przeglądarki NetSurf (grupa `netsurf` w `third_party/sources.txt`) i jej narzędzia |
 
@@ -45,8 +63,9 @@ Uruchamiasz je z katalogu repozytorium:
 
 | Polecenie | Działanie |
 |---|---|
-| `crtos flash` | zapisuje jądro (`build/kernel/crtos.bin`) w pamięci flash i restartuje płytkę |
+| `crtos flash` | zapisuje jądro (`build/kernel/crtos.bin`) w pamięci flash i restartuje płytkę (EVKB: pyOCD, awaryjnie LinkServer; STM32H7S78-DK: STM32CubeProgrammer, niżej) |
 | `crtos flash PLIK` | zapisuje wskazany obraz (`.bin` albo `.axf`) |
+| `crtos flash --boot` | STM32H7S78-DK: zapisuje też program startowy (`build-stm32h7s78dk/kernel/crtos-boot.bin`) we flashu wewnętrznym, nawet gdy płytka ma już taki sam |
 | `crtos flash --net` | to samo przez sieć, bez sondy: jądro wgrywa działający system ([Aktualizacja jądra bez sondy](sterowniki.md#aktualizacja-jądra-bez-sondy)) |
 | `crtos flash --net --host ADRES` | płytka o podanym adresie IP |
 | `crtos deploy` | wysyła zmienione pliki systemu na kartę SD płytki i na `/flash0` (z `build/flash0`; sieć, a gdy jej nie ma, sonda USB) |
@@ -56,6 +75,14 @@ Uruchamiasz je z katalogu repozytorium:
 | `crtos deploy --host ADRES` | płytka o podanym adresie IP |
 | `crtos sdcard E:` | kopiuje pliki na kartę w czytniku komputera (tylko do `E:\crtos`) |
 | `crtos put PLIK ŚCIEŻKA` | wysyła jeden plik, np. `crtos put a.cfg /sd/crtos/etc/network.cfg` |
+
+**`crtos flash` na STM32H7S78-DK** potrzebuje STM32CubeProgrammer od ST (`STM32_Programmer_CLI`
+z katalogu instalacji, z `PATH` albo ze zmiennej `CRTOS_STM32PROG`) i jego external loadera
+dla pamięci NOR płytki (`ExternalLoader/MX66UW1G45G_STM32H7S78-DK.stldr`). Przed zapisem
+sprawdza nagłówek obrazu (rozmiar i CRC-32, `tools/imagehdr.py`). Jądro trafia do NOR flash
+(0x70000000), a program startowy (64 KB flasha wewnętrznego, 0x08000000) tylko wtedy, gdy na
+płytce jest inny niż w `build-stm32h7s78dk/kernel/crtos-boot.bin` albo z `--boot`. Sonda musi
+być wolna (bez otwartej sesji debugera).
 
 ## Praca z płytką
 
@@ -72,10 +99,20 @@ Uruchamiasz je z katalogu repozytorium:
 | `crtos log --reset --time 20` | restartuje płytkę i przez 20 s pokazuje komunikaty startowe |
 | `crtos shot [PLIK.png]` | zrzut ekranu płytki (domyślnie `screenshot-DATA-GODZINA.png`) |
 | `crtos reboot` | restart płytki (przez sondę, a bez niej przez sieć) |
+| `crtos sh POLECENIE...` | wykonuje linię poleceń w powłoce płytki przez sieć (`deployd`, `sh -c`) i pokazuje jej wyjście (najwyżej 64 KB); `crtos` kończy się kodem 0, gdy polecenie zwróciło 0, inaczej 1. Bez sondy i kabla konsoli |
+| `crtos sh --time 60 POLECENIE...` | dłuższy limit czasu (domyślnie 30 s, potem polecenie jest przerywane); opcje przed poleceniem |
+| `crtos dmesg` | log jądra przez sieć (`deployd` czyta `/dev/kmsg`), bez sondy |
 | `crtos find` | płytki z CRTOS w sieci lokalnej |
 | `crtos crash` | ostatni raport awarii z płytki, z adresami zamienionymi na linie kodu ([Debugowanie](debugowanie.md)) |
 | `crtos bench` | pomiar wydajności: wywołania systemowe, przełączanie, IPC, pamięć, karta SD, start, grafika ([Wydajność](wydajnosc.md)) |
 | `crtos bench --save NAZWA` / `--compare NAZWA` | zapisuje wyniki / porównuje z zapisanymi (`build/bench/`) |
+
+**`crtos sh`** łączy słowa spacjami i wysyła je jako jedną linię; znaki powłoki (`;`, `|`,
+`&&`) podaj w cudzysłowie, np. `crtos sh "ls /flash0/bin; df"`. Polecenie dostaje uprawnienia
+usługi `deployd` (`spawn`, `kill`, `sys`, `dev`) i nie ma wejścia (programy czytające
+klawiaturę od razu dostają koniec pliku). Linia po zakodowaniu (spacja to 3 znaki) może mieć
+najwyżej 255 znaków. W cmd i PowerShell `.\crtos` (`crtos.cmd`) przepuszcza argumenty przez
+cmd, więc linię z `>` albo `|` wygodniej podać przez `python tools/crtos.py sh "..."`.
 
 ## Pliki i zdalny pulpit przez sieć
 
@@ -161,12 +198,14 @@ sytuacjach:
 
 | Zmienna | Znaczenie |
 |---|---|
+| `CRTOS_BOARD` | płytka (`evkbimxrt1050`, `stm32h7s78dk`) zamiast wybranej przez `crtos board` |
 | `CRTOS_PROBE` | identyfikator sondy, gdy podłączonych jest kilka (pokazuje go `crtos doctor`) |
 | `CRTOS_PORT` | port szeregowy, np. `COM5` albo `/dev/ttyACM0` |
 | `CRTOS_HOST` | adres IP płytki, gdy nie odpowiada na rozgłoszenia UDP |
 | `CRTOS_GCC_BIN` | katalog `bin` kompilatora `arm-none-eabi-gcc` |
-| `CRTOS_BUILD` | inny katalog budowania niż `build/` |
+| `CRTOS_BUILD` | inny katalog budowania niż `build/` (albo `build-<płytka>/`) |
 | `CRTOS_BAUD` | prędkość portu szeregowego (domyślnie 1000000) |
+| `CRTOS_STM32PROG` | `STM32_Programmer_CLI` z STM32CubeProgrammer (STM32H7S78-DK), gdy `crtos` go nie znajduje |
 
 Pliki `crtos` poza repozytorium:
 
@@ -175,4 +214,6 @@ Pliki `crtos` poza repozytorium:
 - `~/.crtos/board.host`: ostatni adres płytki,
 - `~/.crtos/vnc.passwd`: hasło zdalnego pulpitu (jego kopia jest na karcie w
   `/crtos/etc/vnc.passwd`),
-- `build/deployed.json`: co zostało wysłane na płytkę (sumy CRC).
+- `build/deployed.json`: co zostało wysłane na płytkę (sumy CRC; osobno dla każdej płytki,
+  w jej katalogu budowania),
+- `.crtos-board` (w repozytorium, poza gitem): płytka wybrana przez `crtos board`.

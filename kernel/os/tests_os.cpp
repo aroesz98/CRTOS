@@ -8,7 +8,7 @@
 #include "kernel.h"
 #include "ktest.h"
 #include <crtos/syscall.h>
-#include "fsl_device_registers.h"
+#include "platform.h"
 #include <string.h>
 
 #define XSTR(x) STR(x)

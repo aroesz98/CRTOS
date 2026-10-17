@@ -1,5 +1,7 @@
-# build results ("crtos build" -> build/, MCUXpresso IDE -> Release/, Debug/)
+# build results ("crtos build" -> build/, for a board other than the default build-<board>/;
+# MCUXpresso IDE -> Release/, Debug/)
 /build/
+/build-*/
 /Release/
 /Debug/
 
@@ -20,3 +22,5 @@ __pycache__/
 .DS_Store
 screenshot-*.png
 /dts/*.dtb
+# the board "crtos board NAME" chose
+/.crtos-board

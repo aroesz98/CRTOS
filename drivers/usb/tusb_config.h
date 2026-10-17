@@ -1,13 +1,22 @@
 /*
- * tusb_config.h - TinyUSB in CRTOS (drivers/usb): the ChipIdea/EHCI controllers of the i.MX RT
- * as a device (a CDC ACM serial port) and as a host (hubs, HID keyboards and mice); the device
- * tree gives each controller its side. The stack's data lives in the module's memory, which is
- * cached: TinyUSB cleans and invalidates the cache lines the controller works on.
+ * tusb_config.h - TinyUSB in CRTOS (drivers/usb): the USB controllers as a device (a CDC ACM
+ * serial port) and as a host (hubs, HID keyboards and mice); the device tree gives each
+ * controller its side.
+ *   - i.MX RT: the ChipIdea/EHCI controllers (DMA). The stack's data lives in the module's
+ *     memory, which is cached: TinyUSB cleans and invalidates the lines the controller works on.
+ *   - STM32H7RS: the Synopsys DWC2 controllers (OTG_FS, OTG_HS) in slave mode: the processor
+ *     moves the data through their FIFOs, no cache maintenance.
  */
 #ifndef TUSB_CONFIG_H_
 #define TUSB_CONFIG_H_
 
+#if defined(CRTOS_BOARD_STM32H7S78DK)
+#define CFG_TUSB_MCU                  OPT_MCU_STM32H7RS
+#define USB_DMA_DCACHE                0
+#else
 #define CFG_TUSB_MCU                  OPT_MCU_MIMXRT1XXX
+#define USB_DMA_DCACHE                1
+#endif
 #define CFG_TUSB_OS                   OPT_OS_CUSTOM
 #define CFG_TUSB_DEBUG                0
 /* a failed assertion: counted by the driver - TinyUSB's own would stop the core with BKPT
@@ -19,7 +28,7 @@
 #define CFG_TUD_MAX_SPEED             OPT_MODE_HIGH_SPEED
 #define CFG_TUD_MEM_SECTION
 #define CFG_TUD_MEM_ALIGN             __attribute__((aligned(32)))
-#define CFG_TUD_MEM_DCACHE_ENABLE     1
+#define CFG_TUD_MEM_DCACHE_ENABLE     USB_DMA_DCACHE
 #define CFG_TUD_MEM_DCACHE_LINE_SIZE  32
 #define CFG_TUD_ENDPOINT0_SIZE        64
 #define CFG_TUD_TASK_QUEUE_SZ         32
@@ -33,7 +42,7 @@
 #define CFG_TUH_MAX_SPEED             OPT_MODE_HIGH_SPEED
 #define CFG_TUH_MEM_SECTION
 #define CFG_TUH_MEM_ALIGN             __attribute__((aligned(32)))
-#define CFG_TUH_MEM_DCACHE_ENABLE     1
+#define CFG_TUH_MEM_DCACHE_ENABLE     USB_DMA_DCACHE
 #define CFG_TUH_MEM_DCACHE_LINE_SIZE  32
 
 /* also holds a HID report descriptor, which gives a mouse's wheel (gaming mice: ~300 bytes) */

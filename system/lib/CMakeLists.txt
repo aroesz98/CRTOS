@@ -33,7 +33,7 @@ set(CRTOS_LIB_SOURCES
   libcrtos/src/appinfo.c
 )
 set(GFX_SOURCES libgfx/src/gfx.c libgfx/src/draw.c libgfx/src/image.c libgfx/src/fonts.c libgfx/src/ui.c libgfx/src/keys.c
-  libgfx/src/settings.c libgfx/src/wallpaper.c)
+  libgfx/src/settings.c libgfx/src/wallpaper.c libgfx/src/gpu.c)
 set(TFTLIB_SOURCES
   tftlib/TFTLIB_8BIT.cpp
   tftlib/Print.cpp

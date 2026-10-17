@@ -33,7 +33,7 @@ tworzy `python tools/diagrams.py`.
 | K12 | [Potoki i poll](K12-potoki-i-poll.md) | 5 | 3 |
 | K13 | [System plików (VFS)](K13-vfs.md) | 9 | 3 |
 | K14 | [Karta SD i FAT](K14-karta-sd-fat.md) | 8 | 4 |
-| K15 | [Konsola, log jądra i terminal](K15-konsola-log.md) | 6 | 4 |
+| K15 | [Konsola, log jądra i terminal](K15-konsola-log.md) | 7 | 4 |
 | K16 | [Loader: moduły i programy](K16-loader.md) | 14 | 5 |
 | K17 | [Drzewo urządzeń i model sterowników](K17-drzewo-urzadzen.md) | 7 | 3 |
 | K18 | [Start systemu](K18-start.md) | 7 | 3 |
@@ -47,7 +47,7 @@ tworzy `python tools/diagrams.py`.
 |---|---|---|---|
 | S01 | [Zegary, piny i GPIO](S01-zegary-piny-gpio.md) | 5 | 3 |
 | S02 | [Magistrale I2C i SPI](S02-i2c-spi.md) | 5 | 3 |
-| S03 | [Ekran i akcelerator 2D](S03-fb-gpu2d.md) | 7 | 2 |
+| S03 | [Ekran i akcelerator 2D](S03-fb-gpu2d.md) | 10 | 2 |
 | S04 | [Urządzenia wejścia](S04-wejscie.md) | 6 | 2 |
 | S05 | [Sieć i gniazda](S05-siec.md) | 8 | 3 |
 
@@ -55,15 +55,15 @@ tworzy `python tools/diagrams.py`.
 
 | ID | Komponent | Wymagania | Diagramy |
 |---|---|---|---|
-| D01 | [Sterowniki platformy: piny, zegary, GPIO](D01-platforma.md) | 6 | 2 |
-| D02 | [Sterowniki magistral i portów szeregowych](D02-magistrale.md) | 6 | 4 |
-| D03 | [Sterowniki ekranu i akceleratora 2D](D03-ekran.md) | 7 | 4 |
+| D01 | [Sterowniki platformy: piny, zegary, GPIO](D01-platforma.md) | 8 | 2 |
+| D02 | [Sterowniki magistral i portów szeregowych](D02-magistrale.md) | 7 | 4 |
+| D03 | [Sterowniki ekranu i akceleratora 2D](D03-ekran.md) | 10 | 4 |
 | D04 | [Sterowniki dotyku, przycisków i pada](D04-wejscie.md) | 13 | 4 |
-| D05 | [Ethernet i stos TCP/IP](D05-siec.md) | 9 | 3 |
-| D06 | [USB](D06-usb.md) | 8 | 4 |
-| D07 | [Pamięć flash (MTD) i aktualizacja jądra](D07-flash-mtd.md) | 8 | 3 |
-| D08 | [Generator liczb losowych i zegar RTC](D08-trng-rtc.md) | 5 | 3 |
-| D09 | [Dźwięk: SAI i kodek WM8960](D09-dzwiek.md) | 6 | 3 |
+| D05 | [Ethernet i stos TCP/IP](D05-siec.md) | 11 | 3 |
+| D06 | [USB](D06-usb.md) | 9 | 4 |
+| D07 | [Pamięć flash (MTD) i aktualizacja jądra](D07-flash-mtd.md) | 10 | 3 |
+| D08 | [Generator liczb losowych i zegar RTC](D08-trng-rtc.md) | 8 | 3 |
+| D09 | [Dźwięk: SAI i kodek WM8960](D09-dzwiek.md) | 8 | 3 |
 | D10 | [System plików flash: /flash0](D10-flashfs.md) | 9 | 3 |
 
 ## L2: usługi
@@ -75,7 +75,7 @@ tworzy `python tools/diagrams.py`.
 | U03 | [gfxd: serwer grafiki](U03-gfxd.md) | 14 | 5 |
 | U04 | [inputd i osk](U04-inputd-osk.md) | 9 | 4 |
 | U05 | [netmgr](U05-netmgr.md) | 3 | 2 |
-| U06 | [httpd i deployd](U06-httpd-deployd.md) | 7 | 3 |
+| U06 | [httpd i deployd](U06-httpd-deployd.md) | 8 | 3 |
 | U07 | [getty](U07-getty.md) | 4 | 2 |
 | U08 | [vncd: zdalny pulpit](U08-vncd.md) | 10 | 3 |
 
@@ -92,7 +92,7 @@ tworzy `python tools/diagrams.py`.
 | ID | Komponent | Wymagania | Diagramy |
 |---|---|---|---|
 | L01 | [libcrtos: biblioteka programów](L01-libcrtos.md) | 14 | 4 |
-| L02 | [libgfx i TFTLIB](L02-libgfx.md) | 13 | 4 |
+| L02 | [libgfx i TFTLIB](L02-libgfx.md) | 14 | 4 |
 
 ## Narzędzia (komputer)
 
@@ -101,6 +101,6 @@ tworzy `python tools/diagrams.py`.
 | T01 | [Narzędzia i budowanie](T01-narzedzia.md) | 17 | 3 |
 | T02 | [Toolchain CRTOS](T02-toolchain.md) | 15 | 5 |
 
-Razem: 51 komponentów, 419 wymagań, 173 diagramy (każdy komponent ma co najmniej jeden
+Razem: 51 komponentów, 441 wymagań, 173 diagramy (każdy komponent ma co najmniej jeden
 diagram klas i jeden diagram sekwencji). Powiązanie wymagań z weryfikacją:
 [04 Weryfikacja](../04-weryfikacja.md#4-śledzenie-wymagań).

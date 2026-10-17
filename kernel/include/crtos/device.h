@@ -68,6 +68,10 @@ int device_get_reg(const struct device *dev, int index, uint32_t *addr, uint32_t
 void *device_map(const struct device *dev, int index);     /* register block address or NULL */
 int device_get_irq(const struct device *dev, int index);   /* IRQ number or -errno */
 
+/* The chip's unique ID (its fuses): up to @len bytes of it into @buf; the length of the whole
+ * ID (i.MX RT 8, STM32 12 bytes). For MAC addresses and USB serial numbers. */
+size_t board_unique_id(void *buf, size_t len);
+
 /* Managed resources: freed/undone in reverse order when the device is unbound */
 void *devm_kzalloc(struct device *dev, size_t size, unsigned kmflags);
 int devm_add_action(struct device *dev, void (*action)(void *), void *arg);

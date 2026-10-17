@@ -280,7 +280,7 @@ void *device_map(const struct device *dev, int index)
 
 /* ---- interrupt domains ------------------------------------------------------------------------ */
 
-#define MAX_IRQ_DOMAINS 8
+#define MAX_IRQ_DOMAINS 16  /* (STM32H7S7: 12 GPIO ports) */
 
 static struct {
     struct device_node *np;

@@ -8,6 +8,8 @@
  *     r7 N and Z: the last result sign-extended (N = bit 31, Z = low byte is 0)
  *     r8 C (0 or 1)
  *     r9 the cycle budget: CPU cycles left until the lazy clock's next checkpoint
+ *        (in a program that runs in place r9 is the GOT's address for C code: a helper call
+ *        loads it from the context first)
  *     r10 the 2 KB RAM      r11 the context (struct jit_ctx: SP, V, D and I flags, helpers)
  * They are callee-saved, so the helpers (C functions for everything but RAM) keep them.
  *
@@ -55,6 +57,7 @@ struct jit_ctx {
     void *h_read, *h_write;
     uint32_t tmp;
     Emulator *emu;
+    uint32_t got;                       /* r9 of C code (XIP), for helper calls */
 };
 
 enum {
@@ -67,6 +70,7 @@ enum {
     CTX_HWRITE = offsetof(struct jit_ctx, h_write),
     CTX_TMP = offsetof(struct jit_ctx, tmp),
     CTX_RTI = offsetof(struct jit_ctx, rti),
+    CTX_GOT = offsetof(struct jit_ctx, got),
 };
 _Static_assert(offsetof(struct jit_ctx, ram) == 24, "jit_enter loads r10 from offset 24");
 _Static_assert(offsetof(struct jit_ctx, pc) == 32, "jit_leave stores r0 at offset 32");
@@ -145,6 +149,9 @@ int jit_init(Emulator *e)
     s_ctx.leave = (void *)jit_leave;
     s_ctx.h_read = (void *)jit_h_read;
     s_ctx.h_write = (void *)jit_h_write;
+#ifdef __CRTOS_XIP__
+    __asm volatile("mov %0, r9" : "=r"(s_ctx.got));
+#endif
     s_enabled = 1;
     return 0;
 }
@@ -381,6 +388,9 @@ static void call_helper(emit_t *e, uint32_t off)
     str_imm(e, R0, R11, CTX_BUDGET);
     mov_reg(e, R0, R11);
     ldr_imm(e, R3, R11, off);
+#ifdef __CRTOS_XIP__
+    ldr_imm(e, R9, R11, CTX_GOT);
+#endif
     blx(e, R3);
     ldr_imm(e, R9, R11, CTX_BUDGET);
     dp_imm(e, OP_SUB, 0, R9, R9, 1);

@@ -13,7 +13,7 @@
  * out.
  */
 #include "../kernel.h"
-#include "fsl_device_registers.h"
+#include "platform.h"
 
 extern "C" {
 uint64_t fault_handle(uint32_t *frame, uint32_t exc_return, uint32_t vect, uint32_t *regs);

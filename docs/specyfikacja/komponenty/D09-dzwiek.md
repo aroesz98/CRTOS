@@ -6,8 +6,8 @@
 |---|---|
 | Identyfikator | D09 |
 | Warstwa | L1 (moduł `.ko`) |
-| Moduł | `sai-imxrt.ko` (`fsl,imxrt1050-sai`, `wlf,wm8960`) |
-| Pliki | `drivers/sound/sai-imxrt.c` (+ SDK `fsl_sai.c`), `kernel/include/crtos/audio.h` |
+| Moduł | `sai-imxrt.ko` (`fsl,imxrt1050-sai`, `wlf,wm8960`); STM32H7S7: `i2s-stm32.ko` (`st,stm32h7-i2s`, `wlf,wm8904`) |
+| Pliki | `drivers/sound/sai-imxrt.c` (+ SDK `fsl_sai.c`), `kernel/include/crtos/audio.h`; `drivers/sound/i2s-stm32.c` (rejestry SPI6 i GPDMA1, bez HAL) |
 | Interfejsy realizowane | `file_ops` `/dev/audio` (K13); klient I2C (S02) |
 
 ## 2. Odpowiedzialność
@@ -24,6 +24,19 @@ Wyjście dźwięku płytki. W module są dwa sterowniki:
 
 Nagrywania (ADC, mikrofon) sterownik nie obsługuje.
 
+Na STM32H7S78-DK to samo urządzenie `/dev/audio` daje moduł `i2s-stm32`, też z dwoma
+sterownikami:
+
+- **wm8904**: kodek WM8904 na I2C1 (0x1a), rejestry 16-bitowe (do zapisu i odczytu). Tylko
+  odtwarzanie: DAC do wyjścia słuchawkowego. Kodek jest podrzędny I2S, jego zegar systemowy
+  to MCLK = 256 fs z procesora. `probe` sprawdza identyfikator (0x8904) i resetuje kodek;
+  włączenie (z kalibracją DC servo, która potrzebuje zegara MCLK) robi sterownik I2S, gdy
+  zegar już płynie.
+- **i2s-stm32**: SPI6 jako nadrzędny nadajnik I2S (Philips, 16-bitowe próbki stereo, wyjście
+  MCK), zegar jądra PLL3 Q (D01). Próbki idą z pierścienia do 4 okresów po 256 ramek
+  w pamięci bez cache, które kanał GPDMA1 wysyła w kółko (lista połączona); przerwanie końca
+  okresu uzupełnia ten okres z pierścienia.
+
 ## 3. Wymagania
 
 | ID | Wymaganie | Weryfikacja |
@@ -34,6 +47,12 @@ Nagrywania (ADC, mikrofon) sterownik nie obsługuje.
 | REQ-D09-04 | Gdy pierścień jest pusty, nadajnik wysyła ciszę. 100 ms po zamknięciu urządzenia i odtworzeniu wszystkiego nadajnik i jego przerwania są wyłączone. | przegląd kodu |
 | REQ-D09-05 | Częstotliwość próbkowania to jedna z 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000 Hz; zegar MCLK (12,288 albo 11,2896 MHz) i dzielnik DAC kodeka muszą ją dawać dokładnie, inaczej `-EINVAL`. | przegląd kodu, `audio tone 440 2000` (96000 ramek w 2 s) |
 | REQ-D09-06 | `write` przyjmuje tylko całe ramki i nie więcej, niż mieści pierścień; z `O_NONBLOCK` zwraca liczbę przyjętych bajtów albo `-EAGAIN`. | przegląd kodu |
+| REQ-D09-07 | `i2s-stm32`: kanał GPDMA wysyła okresy w kółko przez cały czas załadowania modułu (kodek ma zawsze zegar), a przerwanie końca okresu tylko uzupełnia skończony okres z pierścienia albo ciszą: nie blokuje i nie używa I2C. Spóźnione przerwanie (pominięty okres gra drugi raz) i niedopełnienie FIFO nadajnika są liczone (`fifo_errors`, niedopełnienie najwyżej raz na okres). Po zamknięciu urządzenia i odtworzeniu wszystkiego przerwanie wyłącza się po co najmniej 100 ms ciszy. | przegląd kodu |
+| REQ-D09-08 | `i2s-stm32`: błąd transferu GPDMA (kanał staje sam) kończy odtwarzanie: `write` zwraca `-EIO`, dopóki częstotliwość nie zostanie ustawiona od nowa (`AUDIO_IOC_SET_RATE` albo następne otwarcie do zapisu); błąd jest liczony w `fifo_errors` statystyki. | przegląd kodu |
+
+`i2s-stm32` spełnia też REQ-D09-03, 06 i listę częstotliwości z REQ-D09-05 (inna `-EINVAL`),
+sprawdzone tylko przeglądem kodu; zegar MCLK daje tam PLL3 (256 fs, rozdz. 8). REQ-D09-01, 02
+i 04 opisują SAI; ich odpowiednik to REQ-D09-07.
 
 ## 4. Interfejs udostępniany
 
@@ -57,12 +76,24 @@ bramka `SAI1` i korzeń `SAI1_ROOT`, `clock-names = "bus", "mclk"`); na płytce 
 pinów (MCLK, TX_BCLK, TX_SYNC, TX_DATA00) i `audio-codec = <&wm8960>`; kodek jako dziecko
 `&lpi2c1` (`compatible = "wlf,wm8960"`, `reg = <0x1a>`).
 
+`i2s-stm32` daje ten sam interfejs. Różnice: głośność dotyczy tylko słuchawek; w
+`AUDIO_IOC_GET_STATS` błędy FIFO obejmują też błędy DMA; `write` po błędzie DMA zwraca
+`-EIO` (REQ-D09-08). Parametry DT: węzeł `i2s6` w `dts/stm32h7s7.dtsi` (`reg`: SPI6 i GPDMA1,
+`interrupts = <63>, <41>` – SPI6 i kanał 2 GPDMA1, `clocks` `bus`, `dma`, `mclk` = PLL3 Q,
+`st,dma-channel = <2>`, `st,dma-request = <62>` – SPI6_TX); na płytce `&i2s6` z grupą pinów
+(MCK PA3, CK PA5, WS PA4, SDO PB5) i `audio-codec = <&wm8904>`; kodek jako dziecko `&i2c1`
+(`compatible = "wlf,wm8904"`, `reg = <0x1a>`).
+
 ## 5. Interfejsy wymagane
 
 S02 (`i2c_client_get`, `i2c_write`), S01 i D01 (bramka `IMXRT1050_CLK_SAI1`, korzeń
 `IMXRT1050_CLK_SAI1_ROOT` z `clk_set_rate`: PLL audio), K02 (`irq_request`, priorytet 3), K06
 (zdarzenie, mutex), K12 (`poll_head`), K13 (`devfs_register`), K17 (`of_parse_phandle`),
-SDK (`fsl_sai`: konfiguracja I2S i dzielnika zegara bitowego).
+SDK (`fsl_sai`: konfiguracja I2S i dzielnika zegara bitowego). `i2s-stm32`: S02 (także
+`i2c_write_read`), S01 i D01 (bramki SPI6 i GPDMA1, `STM32_CK_AUDIO` = PLL3 Q z
+`clk_set_rate`), K02 (GPDMA priorytet 3, SPI6 priorytet 6, `irq_enable`/`irq_disable`), K07
+(`kmalloc_bounded`: okresy i lista w jednym bloku `KM_NOCACHE | KM_DMA` w obrębie strony
+64 KB), K06, K12, K13, K17; rejestry SPI6 i GPDMA1 wprost (CMSIS).
 
 ## 6. Struktura statyczna
 
@@ -110,6 +141,25 @@ SDK (`fsl_sai`: konfiguracja I2S i dzielnika zegara bitowego).
 Pomiary (27.09.2026): `audio tone 440 2000` – 96000 ramek, 0 przerw, 0 błędów FIFO; gry
 w emulatorze NES przez ok. 110 s – 0 przerw, 0 błędów FIFO.
 
+**i2s-stm32** (STM32H7S78-DK):
+
+- Zegar: zegar jądra SPI6 = 256 fs × m (m = 2 × I2SDIV + ODD, 2–12): 24,576 MHz dla 8–48 kHz
+  poza 32 kHz, 22,5792 MHz dla rodziny 44,1 kHz, 32,768 MHz dla 32 kHz (m = 3 jest
+  niedozwolone, więc 4). MCK na pinie = 256 fs, kodek: SYSCLK = MCLK. Zmiana częstotliwości
+  zatrzymuje kanał i nadajnik (MCK staje), ustawia zegar, I2S i kodek, a potem znowu startuje
+  strumień ciszy.
+- DMA: 4 okresy po 256 ramek (1 KB) i 4 elementy listy połączonej w jednym bloku bez cache
+  (`CLBAR` wskazuje stronę 64 KB); półsłowa do `TXDR`, jedno na żądanie SPI6_TX; przerwanie
+  końca bloku co okres (5,3 ms przy 48 kHz, ok. 190 na sekundę zamiast 6000 na EVKB). Okres,
+  który kanał właśnie wysyła, wynika z `CSAR`.
+- Start odtwarzania: okresy po bieżącym dostają ramki z pierścienia; gdy jest ich mniej,
+  najpierw idzie cisza, więc następny zapis gra bez przerwy. Ten sam pierścień 4096 ramek
+  i te same liczniki co SAI.
+- Kodek: sekwencja z BSP ST bez wejść – zegar, bias, VMID (szybki start 100 ms), PGA
+  słuchawek, DAC, I2S 16 bitów podrzędny, klasa częstotliwości (`CLOCK1`), pompa ładunku,
+  stopnie słuchawek, kalibracja DC servo (do 300 ms), wyjścia, DAC bez wyciszenia. Głośność
+  0–100 → `HPOUT` 0x10–0x3F (1 dB na krok), 0 wycisza; początkowo 80.
+
 ## 9. Obsługa błędów i mechanizmy bezpieczeństwa
 
 | Sytuacja | Reakcja |
@@ -121,11 +171,18 @@ w emulatorze NES przez ok. 110 s – 0 przerw, 0 błędów FIFO.
 | nieobsługiwana częstotliwość / liczba kanałów | `-EINVAL` |
 | drugi piszący | `-EBUSY` |
 | usunięcie modułu | kodek wyciszony i wyłączony, nadajnik zatrzymany |
+| `i2s-stm32`: WM8904 nie odpowiada albo ma inny identyfikator | „no answer at 0x1a” / „not a WM8904”, `/dev/audio` nie powstaje |
+| `i2s-stm32`: DC servo nie kończy kalibracji w 300 ms | ostrzeżenie `W:`, praca dalej |
+| `i2s-stm32`: spóźnione przerwanie DMA | pominięty okres gra drugi raz, `fifo_errors++` |
+| `i2s-stm32`: niedopełnienie FIFO nadajnika | `fifo_errors++`, przerwanie SPI6 wyłączone do końca okresu |
+| `i2s-stm32`: błąd transferu GPDMA | kanał stoi, `write` `-EIO` do ponownego ustawienia częstotliwości (REQ-D09-08) |
+| `i2s-stm32`: PLL3 nie da tego zegara | błąd `clk_set_rate` (np. `-ERANGE`) z `AUDIO_IOC_SET_RATE`, częstotliwość bez zmian |
 
 ## 10. Konfiguracja
 
 `RING` (4096 ramek), `WATERMARK` (16 słów), priorytet przerwania 3, głośność początkowa 80;
-węzły DT jak w rozdz. 4.
+węzły DT jak w rozdz. 4. `i2s-stm32.c`: `RING` (4096), `PERIOD` (256), `NPER` (4), priorytety
+3 (GPDMA) i 6 (SPI6), głośność początkowa 80.
 
 ## 11. Weryfikacja
 
@@ -133,6 +190,8 @@ węzły DT jak w rozdz. 4.
   musi odpowiadać długości tonu, przerwy i błędy FIFO 0.
 - `audio -v N`, `audio play plik.wav`, słuchawki w J12 (ręcznie).
 - Emulator NES (program użytkownika) jako długi test ciągłego strumienia.
+- STM32H7S78-DK: te same polecenia (słuchawki w gnieździe płytki); `dmesg`: „WM8904 at 0x1a”,
+  „/dev/audio: I2S to …”. Wyników z tej płytki dokumentacja nie zawiera.
 
 ## 12. Ograniczenia i znane problemy
 
@@ -143,3 +202,8 @@ węzły DT jak w rozdz. 4.
   (LPSPI3 SDI, złącze kamery J35): przy włączonym dźwięku SPI na J24 tylko nadaje (D02).
 - Bez wykrywania wtyczki słuchawek: grają jednocześnie słuchawki i wyjścia głośnikowe.
 - Przy starcie kodeka (reset, VMID) może być słychać trzask.
+- STM32: tylko wyjście słuchawkowe. MCLK płynie, a DMA wysyła ciszę przez cały czas, gdy moduł
+  jest załadowany (ruch na magistrali bez przerwań). Zegar dźwięku daje PLL3 wspólny
+  z ekranem: przejście między rodzinami 48 kHz i 44,1 kHz (i na 32 kHz) restartuje PLL3,
+  a ekran gubi ramkę (D01, D03). Częstotliwość jest ustawiana częścią ułamkową PLL3, więc nie
+  zawsze jest dokładna (błąd rzędu ppm).

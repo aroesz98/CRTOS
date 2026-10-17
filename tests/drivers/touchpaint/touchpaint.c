@@ -2,8 +2,9 @@
  * touchpaint.ko - hardware check for the display, touch screen and user button.
  *
  * Draws colour bars and a canvas on /dev/fb0, paints where the screen is touched and clears
- * the canvas when SW8 (KEY_HOME) is pressed. It binds to the test node "crtos,touchpaint"
- * of the device tree; remove that node once the graphics server takes over the display.
+ * the canvas when the user button (KEY_HOME: SW8 on the EVKB, USER on the STM32H7S78-DK) is
+ * pressed. It binds to the test node "crtos,touchpaint" of the device tree; remove that node
+ * once the graphics server takes over the display.
  */
 #include <crtos/device.h>
 #include <crtos/errno.h>
@@ -88,7 +89,7 @@ static void paint_thread(void *arg)
     p->s.format = GPU2D_FMT_RGB565;
     fb_show(0, 0);
     draw_screen(p);
-    printk("touchpaint: drawing on fb0, touch to paint, SW8 clears\n");
+    printk("touchpaint: drawing on fb0, touch to paint, the home key clears\n");
 
     struct file *touch = NULL, *keys = NULL;
     int x = -1, y = -1, down = 0, color = 0;

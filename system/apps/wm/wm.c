@@ -24,8 +24,9 @@
  *
  * The programs menu comes from /sd/crtos/etc/launcher.cfg, one entry per line:
  *     Title: [caps=spawn,kill,sys,dev,module] [icon=NAME] /path/program.app [args...]
- * (the icon defaults to the program's; an entry whose program is not on the card is left out:
- * a system built without the optional programs). The Windows key opens and closes it too (gfxd gives
+ * (the icon defaults to the program's; an entry whose program is not there is left out - a
+ * system built without the optional programs - and so is one whose title an earlier entry has:
+ * a program on /flash0 first, on the card else). The Windows key opens and closes it too (gfxd gives
  * the manager that key); while it is open the keyboard is its own: arrows, Page Up/Down,
  * Home/End, a letter (the next title with it), Enter starts, Esc closes. The mouse wheel
  * scrolls it, the mouse over an entry selects it.
@@ -125,6 +126,9 @@ static int W, H;
 static struct managed s_m[MAXW];
 static int s_order[MAXW], s_norder; /* task bar order */
 static struct gfx_win *s_bar, *s_menu;
+/* the menu's window while the menu is closed: hidden, shown again at the next opening (making
+ * a window takes some milliseconds); made anew for another size or look */
+static struct gfx_win *s_menu_kept;
 static int s_cascade;
 static struct app s_apps[MAXAPPS];
 static int s_napps;
@@ -882,6 +886,11 @@ static void load_apps(void)
         struct stat st;
         if (stat(p, &st))
             continue; /* not on the card: a system built without the optional programs */
+        bool again = false;
+        for (int i = 0; i < s_napps && !again; i++)
+            again = !strcmp(s_apps[i].title, a->title);
+        if (again)
+            continue; /* the same program somewhere else, found first */
         if (!a->icon[0])
             program_name(a->cmd, a->icon, sizeof(a->icon));
         s_napps++;
@@ -933,7 +942,8 @@ static void menu_close(void)
 {
     if (!s_menu)
         return;
-    gfx_win_destroy(s_menu);
+    gfx_win_show(s_menu, false);
+    s_menu_kept = s_menu;
     s_menu = NULL;
     gfx_wm_keys(g, false); /* the keys go to the programs again */
     draw_bar();
@@ -960,11 +970,19 @@ static void menu_open(void)
     if (h > work_h() - 8)
         h = work_h() - 8;
     tip_hide();
-    s_menu = gfx_win_create(g, ui_px(2), work_h() - h - ui_px(2), MENU_W, h,
-                            GFX_WIN_TOPMOST | GFX_WIN_NOFOCUS | GFX_WIN_NOFRAME | GFX_WIN_HOVER | popup_flags(), "menu");
+    bool reused = s_menu_kept && s_menu_kept->s.h == h && s_menu_kept->s.w == MENU_W;
+    if (reused) {
+        s_menu = s_menu_kept;
+    } else {
+        if (s_menu_kept)
+            gfx_win_destroy(s_menu_kept);
+        s_menu = gfx_win_create(g, ui_px(2), work_h() - h - ui_px(2), MENU_W, h,
+                                GFX_WIN_TOPMOST | GFX_WIN_NOFOCUS | GFX_WIN_NOFRAME | GFX_WIN_HOVER | popup_flags(), "menu");
+    }
+    s_menu_kept = NULL;
     uint64_t t2 = crtos_time_us();
     printf("wm: menu: apps %lu us, window %lu us%s\n", (unsigned long)(t1 - t0), (unsigned long)(t2 - t1),
-           s_menu ? "" : " - failed");
+           !s_menu ? " - failed" : reused ? " (shown again)" : "");
     if (!s_menu)
         return;
     memset(&s_menu_list, 0, sizeof(s_menu_list));
@@ -977,6 +995,10 @@ static void menu_open(void)
     s_menu_list.sel = -1;
     s_menu_list.draw_row = menu_row;
     menu_draw();
+    if (reused) {
+        gfx_win_show(s_menu, true);
+        gfx_win_raise(s_menu);
+    }
     gfx_wm_keys(g, true); /* the menu has the keyboard while it is open */
     draw_bar();
 }
@@ -1449,6 +1471,10 @@ static void handle(const struct gfx_event *ev)
         menu_key(ev);
         break;
     case GFX_EV_SETTINGS:
+        if (s_menu_kept) { /* (another look: made anew when it opens) */
+            gfx_win_destroy(s_menu_kept);
+            s_menu_kept = NULL;
+        }
         restyle();
         break;
     case GFX_EV_WHEEL:

@@ -16,7 +16,7 @@ class init_cpp <<moduł>> {
 }
 class boot_cpp <<moduł>> {
   -driver bus_driver
-  -driver usdhc_driver
+  -driver sdcard_driver
   -driver earlycon_driver
   +boot_start()
   +boot_setup_devices(dtb, dir) : int

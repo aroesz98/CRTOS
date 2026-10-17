@@ -133,6 +133,21 @@ class Session:
             raise DeployError('%s: the CRC does not match' % remote)
         return b''.join(chunks)
 
+    def execute(self, line, seconds=30):
+        """Run a command line on the board (sh -c): (its output, exit code)"""
+        self.s.settimeout(seconds + 15)
+        n = int(self.command('EXEC %s %d' % (quote(line), seconds)))
+        data = b''
+        while len(data) < n:
+            part = self.f.read(n - len(data))
+            if not part:
+                raise DeployError('connection closed')
+            data += part
+        answer = self.line()
+        if not answer.startswith('OK'):
+            raise DeployError(answer)
+        return data, int(answer[2:].strip())
+
     def stat(self, remote):
         """('d' or 'f', size, mtime), or None when there is no such file"""
         self.s.sendall(('STAT %s\n' % quote(remote)).encode())

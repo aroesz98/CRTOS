@@ -32,6 +32,7 @@ class deployd_c <<program deployd.app>> {
   -cmd_list(c, path)
   -cmd_mkdir(c, path)
   -cmd_flash(c, path)
+  -cmd_exec(c, line, seconds)
   -answer_discovery(u)
 }
 class conn <<struct>> {

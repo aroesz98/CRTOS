@@ -396,3 +396,4 @@ Obsługa (ISO 26262-6, tabela 5):
 - Sterowniki działają w trybie uprzywilejowanym bez izolacji: błąd sterownika w przerwaniu
   albo w sekcji krytycznej zatrzymuje system (`panic`).
 - Brak nadzorcy (watchdog) sprzętowego i monitorowania przebiegu programu.
+- Szczegółowe luki względem ISO 26262: [05 Zgodność](05-zgodnosc-iso26262.md).

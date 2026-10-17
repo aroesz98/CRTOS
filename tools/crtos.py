@@ -2,11 +2,16 @@
 """crtos - build CRTOS, put it on the board, run programs.
 
     crtos doctor                    check the tools, the debug probe and the board
+    crtos board [NAME]              the boards; NAME: work with that one (evkbimxrt1050, the NXP
+                                    MIMXRT1050-EVKB - the default; stm32h7s78dk, the ST STM32H7S78-DK)
     crtos setup [--netsurf]         install what is missing (--netsurf: the web browser too)
-    crtos build [kernel|NAME...]    build everything into build/ (or the kernel, or a program;
-                                    --base: only the base system, without apps/, tests/, examples/;
-                                    --rtos [DIR]: the RTOS alone with the application in DIR)
-    crtos flash [--rtos]            write the kernel (or the RTOS build) into the board's flash
+    crtos build [kernel|NAME...]    build everything (or the kernel, or a program) into build/, for
+                                    another board than the default into build-<board>/ (--board
+                                    NAME: that board from now on; --base: only the base system,
+                                    without apps/, tests/, examples/; --rtos [DIR]: the RTOS alone
+                                    with the application in DIR)
+    crtos flash [--rtos] [--boot]   write the kernel (or the RTOS build) into the board's flash
+                                    (--boot: the STM32H7S78-DK's boot loader as well)
     crtos sdcard DRIVE              copy the system files to an SD card in this computer
     crtos deploy [--full]           send the changed system files to the board (network/probe)
     crtos run NAME [ARGS...]        run a program on the board and show its output
@@ -14,6 +19,8 @@
     crtos kmon [COMMAND...]         the kernel monitor (without a command: interactive)
     crtos serial                    terminal on the board's serial console (the shell)
     crtos log [--reset]             show what the board prints on the serial console
+    crtos sh COMMAND...             run a command line on the board (network) and show its output
+    crtos dmesg                     the kernel log over the network (no debug probe needed)
     crtos shot [FILE.png]           screenshot of the display
     crtos reboot                    restart the board
     crtos scp [-r] SRC... DST       copy files between this computer and the board (board:/path)
@@ -32,9 +39,10 @@
 Also: kbuild (the kernel with MCUXpresso IDE, into Release/), put LOCAL REMOTE (one file),
 swd kmon|deploy|put|shot (through the probe), net setup|deploy|put|reboot|find (network).
 
-Settings (environment variables, all optional): CRTOS_PROBE debug probe id, CRTOS_PORT
-serial port, CRTOS_HOST the board's IP address, CRTOS_GCC_BIN the compiler's bin directory,
-CRTOS_BUILD the build directory.
+Settings (environment variables, all optional): CRTOS_BOARD the board (instead of "crtos
+board"), CRTOS_PROBE debug probe id, CRTOS_PORT serial port, CRTOS_HOST the board's IP address,
+CRTOS_GCC_BIN the compiler's bin directory, CRTOS_BUILD the build directory, CRTOS_STM32PROG
+STM32CubeProgrammer's STM32_Programmer_CLI.
 """
 import argparse
 import glob
@@ -56,8 +64,6 @@ sys.path.insert(0, TOOLS)
 WINDOWS = os.name == 'nt'
 EXE = '.exe' if WINDOWS else ''
 BAUD = int(os.environ.get('CRTOS_BAUD', '1000000'))
-TARGET = 'mimxrt1050_hyperflash'
-FLASH_ADDR = 0x60000000
 TOKEN_REMOTE = '/sd/crtos/etc/deploy.token'
 VNC_REMOTE = '/sd/crtos/etc/vnc.passwd'
 # where programs live: source directory -> directory on the card (the base system, the optional
@@ -71,6 +77,74 @@ KINDS = {'gui': ('apps', 'apps'), 'console': ('apps', 'bin'), 'service': ('apps'
 
 class Fail(Exception):
     """An error for the user: printed without a traceback"""
+
+
+# The boards CRTOS runs on (CRTOS_BOARD, cmake/boards/<board>.cmake). "crtos board NAME" (or
+# "crtos build --board NAME") chooses the one the commands work with; it is remembered in
+# .crtos-board (CRTOS_BOARD in the environment wins). Each board builds in a directory of its own:
+# build/ for the first one, build-<board>/ for the others.
+DEFAULT_BOARD = 'evkbimxrt1050'
+BOARDS = {
+    'evkbimxrt1050': {
+        'title': 'NXP MIMXRT1050-EVKB (i.MX RT1052)',
+        'pyocd_target': 'mimxrt1050_hyperflash',    # pyOCD's target: the SWD console, flashing
+        'probe': 'CMSISDAPProbe',                   # the board's own probe: DAPLink...
+        'vcp_vid': 0x0D28,                          # ... and its virtual COM port (the console)
+        'debug_usb': 'J28',
+        'flasher': 'pyocd',
+        'kernel_addr': 0x60000000, 'kernel_size': 0x4000000,
+        'break_resets': True,                       # a BREAK on the COM port resets the board
+    },
+    'stm32h7s78dk': {
+        'title': 'ST STM32H7S78-DK (STM32H7S7)',
+        'pyocd_target': 'cortex_m',                 # memory access only (no flash algorithm)
+        'probe': 'STLinkProbe',                     # ST-LINK V3...
+        'vcp_vid': 0x0483,                          # ... and its virtual COM port
+        'debug_usb': 'CN1 (ST-LINK, USB-C)',
+        # the kernel in the NOR flash (XSPI2) through ST's external loader, the boot loader in the
+        # internal flash
+        'flasher': 'stm32cubeprog',
+        'loader': 'MX66UW1G45G_STM32H7S78-DK.stldr',
+        'kernel_addr': 0x70000000, 'kernel_size': 0x200000,
+        'boot_addr': 0x08000000,
+        'break_resets': False,
+    },
+}
+
+
+def board():
+    """The board the commands work with"""
+    b = os.environ.get('CRTOS_BOARD')
+    if not b and IN_TREE:
+        try:
+            with open(os.path.join(ROOT, '.crtos-board'), encoding='utf-8') as f:
+                b = f.read().strip()
+        except OSError:
+            pass
+    b = b or DEFAULT_BOARD
+    if b not in BOARDS:
+        raise Fail('unknown board %s (CRTOS_BOARD or .crtos-board): %s' % (b, ', '.join(sorted(BOARDS))))
+    return b
+
+
+def board_info():
+    return BOARDS[board()]
+
+
+def cmd_board(name=None):
+    if not name:
+        for b in sorted(BOARDS):
+            say('%s %-15s %s' % ('*' if b == board() else ' ', b, BOARDS[b]['title']))
+        say('build directory: %s' % rel(build_dir()))
+        return 0
+    if name not in BOARDS:
+        raise Fail('no board %s: %s' % (name, ', '.join(sorted(BOARDS))))
+    if os.environ.get('CRTOS_BOARD') and os.environ['CRTOS_BOARD'] != name:
+        raise Fail('CRTOS_BOARD=%s is set in the environment' % os.environ['CRTOS_BOARD'])
+    with open(os.path.join(ROOT, '.crtos-board'), 'w', encoding='utf-8') as f:
+        f.write(name + '\n')
+    say('board: %s - %s (build directory %s)' % (name, BOARDS[name]['title'], rel(build_dir())))
+    return 0
 
 
 def say(text=''):
@@ -95,7 +169,10 @@ def build_dir():
     d = os.environ.get('CRTOS_BUILD')
     if d:
         return os.path.abspath(d)
-    return os.path.join(ROOT, 'build') if IN_TREE else os.path.abspath('build')
+    if not IN_TREE:
+        return os.path.abspath('build')
+    b = board()
+    return os.path.join(ROOT, 'build' if b == DEFAULT_BOARD else 'build-' + b)
 
 
 def source_dir():
@@ -223,6 +300,8 @@ def need_module(name, package=None):
 def swdcon_module():
     need_module('pyocd')
     import swdcon
+    info = board_info()
+    swdcon.setup(board(), info['pyocd_target'], info['probe'], info['debug_usb'])
     return swdcon
 
 
@@ -302,7 +381,9 @@ def cache_value(bdir, name):
 def configure(bdir, fresh=False, options=None):
     """@options: {CMake variable: value} the configuration must have - configured again when one
     differs"""
-    options = options or {}
+    options = dict(options or {})
+    if IN_TREE:
+        options.setdefault('CRTOS_BOARD', board())
     if not fresh and os.path.exists(os.path.join(bdir, 'build.ninja')) and \
             all(cache_value(bdir, k) == v for k, v in options.items()):
         return          # configured (CMake itself configures again when a CMakeLists.txt changes)
@@ -683,7 +764,75 @@ def to_binary(axf):
     return binf
 
 
-def cmd_flash(path=None, net=False, host=None, rtos=False):
+def stm32_programmer():
+    """STM32CubeProgrammer's command line tool: CRTOS_STM32PROG, the PATH, the usual places"""
+    p = os.environ.get('CRTOS_STM32PROG') or shutil.which('STM32_Programmer_CLI')
+    if p:
+        return p
+    places = [r'C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe',
+              r'C:\Program Files (x86)\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe',
+              os.path.expanduser('~/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI'),
+              '/opt/st/stm32cubeprogrammer/bin/STM32_Programmer_CLI',
+              '/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI']
+    places += sorted(glob.glob(r'C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\*cubeprogrammer*\tools\bin\STM32_Programmer_CLI.exe'),
+                     key=natural, reverse=True)
+    for c in places:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def flash_stm32(binf, probe, boot_too=False):
+    """The STM32H7S78-DK: the kernel into the NOR flash with ST's external loader for it; the boot
+    loader into the internal flash when the board's differs from build/kernel/crtos-boot.bin (or
+    @boot_too)"""
+    info = board_info()
+    cli = stm32_programmer()
+    if not cli:
+        raise Fail('STM32CubeProgrammer (STM32_Programmer_CLI) not found: install it from st.com '
+                   '(or name it: CRTOS_STM32PROG=...)')
+    loader = os.path.join(os.path.dirname(cli), 'ExternalLoader', info['loader'])
+    if not os.path.exists(loader):
+        raise Fail('%s: no external loader for the board\'s NOR flash' % loader)
+    import imagehdr
+    with open(binf, 'rb') as f:
+        problem = imagehdr.check(f.read())
+    if problem:
+        raise Fail('%s is no kernel for this board: %s' % (rel(binf), problem))
+    bootf = os.path.join(os.path.dirname(binf), 'crtos-boot.bin')
+    if not os.path.exists(bootf):
+        bootf = kernel_file('-boot.bin')
+    steps = []
+    if os.path.exists(bootf):
+        with open(bootf, 'rb') as f:
+            boot = f.read()
+        if not boot_too:
+            try:
+                boot_too = swdcon_module().read_memory(info['boot_addr'], len(boot), probe) != boot
+            except Exception:
+                boot_too = True
+        if boot_too:
+            steps.append(('the boot loader', bootf, info['boot_addr'], []))
+    elif boot_too:
+        raise Fail('no %s: run "crtos build" first' % rel(bootf))
+    steps.append(('the kernel', binf, info['kernel_addr'], ['-el', loader]))
+    t0 = time.time()
+    for i, (what, f, addr, extra) in enumerate(steps):
+        say('flash: %s %s (%d KB) -> %08x, probe %s' % (what, rel(f), os.path.getsize(f) // 1024, addr, probe))
+        args = [cli, '-c', 'port=SWD', 'sn=%s' % probe, 'mode=UR', 'reset=HWrst'] + extra + \
+               ['-d', f, '0x%08x' % addr, '-v']
+        if i == len(steps) - 1:
+            args.append('-hardRst')
+        proc = subprocess.run(args, capture_output=True, text=True, errors='replace')
+        out = proc.stdout + proc.stderr
+        if proc.returncode or 'verified successfully' not in out:
+            say(out.strip()[-1500:])
+            raise Fail('writing %s failed (is the board powered and the probe free - no debug session running?)' % what)
+    say('flash: done in %.0f s, the board restarts' % (time.time() - t0))
+    return 0
+
+
+def cmd_flash(path=None, net=False, host=None, rtos=False, boot=False):
     if rtos and net:
         raise Fail('the RTOS build is written through the debug probe (it has no network to come back on)')
     binf = path or kernel_file('.bin', rtos)
@@ -709,11 +858,15 @@ def cmd_flash(path=None, net=False, host=None, rtos=False):
         probe = swdcon.find_probe()
     except RuntimeError as e:
         raise Fail(str(e))
+    info = board_info()
+    if info['flasher'] == 'stm32cubeprog':
+        return flash_stm32(binf, probe, boot_too=boot)
     say('flash: %s (%d KB) -> the board\'s flash, probe %s' % (rel(binf), os.path.getsize(binf) // 1024, probe))
     t0 = time.time()
     pyocd = [sys.executable, '-m', 'pyocd']
     # (sector erase: only the kernel's own blocks; the rest of the flash is /flash0)
-    proc = subprocess.run(pyocd + ['flash', '-u', probe, '-t', TARGET, '-f', '12000000', '-e', 'sector', '-a', hex(FLASH_ADDR), binf],
+    proc = subprocess.run(pyocd + ['flash', '-u', probe, '-t', info['pyocd_target'], '-f', '12000000', '-e', 'sector',
+                                   '-a', hex(info['kernel_addr']), binf],
                           capture_output=True, text=True, errors='replace')
     if proc.returncode == 0:
         try:
@@ -730,7 +883,7 @@ def cmd_flash(path=None, net=False, host=None, rtos=False):
     # LinkServer takes the raw image as well (its ELF loader fails on some images)
     say('flash: pyOCD failed, trying LinkServer')
     device = os.environ.get('CRTOS_DEVICE', 'MIMXRT1052B:EVKB-IMXRT1050')
-    proc = subprocess.run([ls, 'flash', device, 'load', '%s:0x%08x' % (binf, FLASH_ADDR)], capture_output=True,
+    proc = subprocess.run([ls, 'flash', device, 'load', '%s:0x%08x' % (binf, info['kernel_addr'])], capture_output=True,
                           text=True, errors='replace')
     if proc.returncode == 0 and 'Finished writing Flash successfully' in proc.stdout:
         say('flash: done (LinkServer)')
@@ -742,23 +895,39 @@ def cmd_flash(path=None, net=False, host=None, rtos=False):
 # ---- the serial console ----------------------------------------------------------------------
 
 def serial_port():
-    """CRTOS_PORT, else the serial port of the board's DAPLink probe"""
+    """CRTOS_PORT, else the serial port of the board's debug probe (DAPLink, ST-LINK)"""
     p = os.environ.get('CRTOS_PORT')
     if p:
         return p
     need_module('serial', 'pyserial')
     from serial.tools import list_ports
-    ports = [p for p in list_ports.comports() if p.vid == 0x0D28]     # Arm (DAPLink)
+    info = board_info()
+    ports = [p for p in list_ports.comports() if p.vid == info['vcp_vid']]
     if len(ports) == 1:
         return ports[0].device
     if not ports:
-        raise Fail('no DAPLink serial port: is the board connected (USB in its debug port, J28)? '
-                   '(or name the port: CRTOS_PORT=COM5)')
+        raise Fail('no serial port of the board\'s debug probe: is the board connected (USB in its debug port, %s)? '
+                   '(or name the port: CRTOS_PORT=COM5)' % info['debug_usb'])
     probe = swdcon_module().find_probe().lower()
     for p in ports:
         if (p.serial_number or '').lower() == probe:
             return p.device
-    raise Fail('several DAPLink serial ports (%s): choose one with CRTOS_PORT' % ', '.join(p.device for p in ports))
+    raise Fail('several serial ports of debug probes (%s): choose one with CRTOS_PORT' % ', '.join(p.device for p in ports))
+
+
+def reset_board_for_log(s):
+    """Restart the board for a log from the start: a BREAK on the DAPLink's port, the probe's reset
+    line on the others"""
+    if board_info()['break_resets']:
+        try:
+            s.send_break(0.3)
+        except Exception:
+            pass
+        return
+    try:
+        swdcon_module().reset(method='hw')
+    except Exception as e:
+        say('[crtos: reset failed: %s]' % e)
 
 
 def open_serial(wait=5.0):
@@ -785,14 +954,11 @@ def cmd_serial():
 
 def cmd_log(seconds=None, reset=False, out=None, until=None):
     """Show the console output (until Ctrl-C or @seconds); @reset restarts the board first
-    (the DAPLink resets it on a BREAK)"""
+    (the DAPLink resets it on a BREAK, the ST-LINK with its reset line)"""
     s = open_serial()
     s.reset_input_buffer()
     if reset:
-        try:
-            s.send_break(0.3)
-        except Exception:
-            pass
+        reset_board_for_log(s)
     data = bytearray()
     t0 = time.time()
     try:
@@ -842,10 +1008,7 @@ def kmon_serial(cmds, reset=False, timeout=30.0, boot_wait=10.0, out=None):
     ok = True
     try:
         if reset:
-            try:
-                s.send_break(0.3)
-            except Exception:
-                pass
+            reset_board_for_log(s)
             # once init runs, the shell owns the console: wait for it (or the end of the boot)
             wait_for(0, [b'boot: done'], boot_wait)
             wait_for(0, [b'crtos:', b'no /sd/crtos/sbin/init.app', b'safe mode'], 3.0)
@@ -1222,6 +1385,45 @@ def cmd_scp(paths, recursive=False, host=None):
                                                                    board))
 
 
+def cmd_sh(words, host=None, seconds=30):
+    """A command line run on the board by deployd (sh -c), its output here"""
+    if not words:
+        raise Fail('usage: crtos sh COMMAND...')
+    netdeploy = netdeploy_module()
+    net = netdeploy.Net(host)
+    try:
+        board, s = net.session()
+    except (netdeploy.DeployError, OSError) as e:
+        raise Fail('network: %s' % e)
+    try:
+        out, code = s.execute(' '.join(words), seconds)
+    except netdeploy.DeployError as e:
+        raise Fail('sh: %s (the board needs a deployd with EXEC)' % e)
+    finally:
+        s.close()
+    sys.stdout.write(out.decode('utf-8', 'replace'))
+    sys.stdout.flush()
+    return 0 if code == 0 else 1
+
+
+def cmd_dmesg(host=None):
+    """The kernel log over the network: deployd reads /dev/kmsg (no debug probe needed)"""
+    netdeploy = netdeploy_module()
+    net = netdeploy.Net(host)
+    try:
+        board, s = net.session()
+    except (netdeploy.DeployError, OSError) as e:
+        raise Fail('network: %s' % e)
+    try:
+        data = s.get('/dev/kmsg')
+    except netdeploy.DeployError as e:
+        raise Fail('dmesg: %s (the board needs a kernel with /dev/kmsg)' % e)
+    finally:
+        s.close()
+    sys.stdout.write(data.decode('utf-8', 'replace'))
+    return 0
+
+
 def vnc_password(net):
     """The password of the board's remote desktop: ~/.crtos/vnc.passwd (made at the first use),
     put on the board (through deployd) when it has another one or none. Returns (host, pw)."""
@@ -1465,6 +1667,9 @@ def program_path(name):
     if name.startswith('/') or '/' in name.replace('\\', '/'):
         return board_path(name)
     base = name[:-4] if name.endswith('.app') else name
+    for sub in ('apps', 'bin'):
+        if os.path.exists(os.path.join(flash0_dir(), sub, base + '.app')):
+            return '/flash0/%s/%s.app' % (sub, base)
     for _, card in PROGRAM_DIRS:
         local = os.path.join(sdcard_dir(), 'crtos', card, base + '.app')
         if os.path.exists(local):
@@ -1643,7 +1848,7 @@ def bench_collect(con, gfx=True):
         raise Fail('the board has no bench.app - "crtos build" and "crtos deploy" first')
     for m in re.finditer(r'bench: (\S+)\s+([\d.]+) (\S+)\s+(.*)', text):
         name, value, unit, what = m.group(1), float(m.group(2)), m.group(3), m.group(4).strip()
-        key = name if name not in ('memcpy', 'memset') else '%s %s' % (name, what.split()[0] + 'K')
+        key = name if name not in ('memcpy', 'memset', 'memread') else '%s %s' % (name, what.split()[0] + 'K')
         res[key] = (value, unit, what)
     # the kernel's own tests: switching between kernel threads, interrupts, the heap
     text = run('test sem')
@@ -1808,7 +2013,8 @@ def cmd_crash():
         subprocess.run([sys.executable, os.path.join(TOOLS, 'appsym.py'), dbg, arena] +
                        (['--fast', fast] if fast else []) + [pc, lr], env=env)
         return 0
-    if 0x60000000 <= int(pc, 16) < 0x64000000 and kernel_axf():
+    info = board_info()
+    if info['kernel_addr'] <= int(pc, 16) < info['kernel_addr'] + info['kernel_size'] and kernel_axf():
         say('in the kernel (%s):' % rel(kernel_axf()))
         tool = os.path.join(gcc_bin() or '', 'arm-none-eabi-addr2line')
         subprocess.run([tool, '-f', '-C', '-i', '-p', '-e', kernel_axf(), pc, lr])
@@ -1908,7 +2114,10 @@ def _check_rows():
 
 
 def _board_rows():
-    rows = []
+    rows = [('ok', 'board', '%s - %s ("crtos board" changes it)' % (board(), board_info()['title']))]
+    if board_info()['flasher'] == 'stm32cubeprog':
+        cli = stm32_programmer()
+        rows.append(('ok' if cli else 'missing', 'STM32CubeProgrammer', cli or 'not found (st.com; it writes the flash)'))
     try:
         swdcon = swdcon_module()
         probe = swdcon.find_probe()
@@ -2082,8 +2291,11 @@ def main():
     cmd('doctor', 'check the tools, the debug probe and the board')
     p = cmd('setup', 'install what is missing')
     p.add_argument('--netsurf', action='store_true', help='also fetch the NetSurf web browser and its tools')
+    p = cmd('board', 'show the boards, or choose the one the commands work with')
+    p.add_argument('name', nargs='?', choices=sorted(BOARDS))
     p = cmd('build', 'build everything, or the named parts (kernel, program names)')
     p.add_argument('targets', nargs='*', metavar='TARGET')
+    p.add_argument('--board', choices=sorted(BOARDS), help='for this board from now on ("crtos board")')
     p.add_argument('-j', '--jobs', type=int)
     p.add_argument('-v', '--verbose', action='store_true', help='show the compiler command lines')
     p.add_argument('--fresh', action='store_true', help='configure again from scratch')
@@ -2099,6 +2311,8 @@ def main():
     p.add_argument('--net', action='store_true', help='over the network, through the running system (no probe)')
     p.add_argument('--host', help='(--net) the board\'s IP address')
     p.add_argument('--rtos', action='store_true', help='the RTOS build (build/rtos/kernel/crtos.bin, "crtos build --rtos")')
+    p.add_argument('--boot', action='store_true', help='(STM32H7S78-DK) also write the boot loader into the internal '
+                                                     'flash (done by itself when the board\'s differs)')
     p = cmd('sdcard', 'copy the system files to an SD card in this computer (only its /crtos)')
     p.add_argument('drive', help='the card: a drive letter (E:) or a directory')
     p.add_argument('--full', action='store_true', help='copy every file, also unchanged ones')
@@ -2137,6 +2351,12 @@ def main():
     p.add_argument('file', nargs='?')
     p = cmd('reboot', 'restart the board')
     p.add_argument('--host')
+    p = cmd('sh', 'run a command line on the board over the network (deployd, sh -c) and show its output')
+    p.add_argument('words', nargs=argparse.REMAINDER, metavar='COMMAND')
+    p.add_argument('--host', help="the board's IP address")
+    p.add_argument('--time', type=int, default=30, help='seconds it may run (then it is stopped)')
+    p = cmd('dmesg', 'the kernel log over the network (deployd, no debug probe needed)')
+    p.add_argument('--host', help="the board's IP address")
     p = cmd('scp', 'copy files between this computer and the board (a board path: board:/path)')
     p.add_argument('paths', nargs='+', metavar='PATH', help='SRC... DST; e.g. notes.txt board:/sd/crtos/home/, '
                                                             'board:/sd/crtos/var/log.txt .')
@@ -2212,12 +2432,16 @@ def main():
         return cmd_doctor()
     if c == 'setup':
         return cmd_setup(a.netsurf)
+    if c == 'board':
+        return cmd_board(a.name)
     if c == 'build':
+        if a.board:
+            cmd_board(a.board)
         return cmd_build(a.targets, a.jobs, a.verbose, a.fresh, a.base, a.rtos)
     if c == 'clean':
         return cmd_clean(a.all)
     if c == 'flash':
-        return cmd_flash(a.file, a.net, a.host, a.rtos)
+        return cmd_flash(a.file, a.net, a.host, a.rtos, a.boot)
     if c == 'sdcard':
         return cmd_sdcard(a.drive, a.full)
     if c == 'deploy':
@@ -2239,6 +2463,10 @@ def main():
         return cmd_reboot('auto', a.host)
     if c == 'scp':
         return cmd_scp(a.paths, a.recursive, a.host)
+    if c == 'dmesg':
+        return cmd_dmesg(a.host)
+    if c == 'sh':
+        return cmd_sh(a.words, a.host, a.time)
     if c == 'desktop':
         return cmd_desktop(a.host, a.zoom, a.password, a.shot, a.fullscreen, a.stats)
     if c == 'wallpaper':

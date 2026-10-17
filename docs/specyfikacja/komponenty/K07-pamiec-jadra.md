@@ -31,7 +31,7 @@ arena jako całość jest jednak przydzielana stąd (`kmalloc_bounded`, pula SDR
 | REQ-K07-04 | `kfree` wskaźnika, który nie jest początkiem bloku żadnej puli, albo przy uszkodzonej stercie zatrzymuje system (`panic`). | przegląd kodu |
 | REQ-K07-05 | Funkcje są bezpieczne w przerwaniach (operacje na puli pod `irq_lock`). | przegląd kodu |
 | REQ-K07-06 | Sąsiednie wolne bloki są zawsze scalane; `mm_check` wykrywa naruszenie struktury sterty. | `kmon test heap`, `kmon mem` |
-| REQ-K07-07 | Obszar szybkiego kodu (koniec ITCM za kodem jądra i 2 KB jego sterty, od granicy 8 KB) ma jednego właściciela naraz; blok z niego leży na szczycie ITCM i ma rozmiar dający się opisać jednym regionem MPU (co 8 KB do 64 KB, co 16 KB powyżej). | przegląd kodu, `crtos kmon mem` (`fastcode`) |
+| REQ-K07-07 | Obszar szybkiego kodu (koniec ITCM za kodem jądra i 2 KB jego sterty) ma jednego właściciela naraz; blok z niego leży na szczycie ITCM (końcem tam, gdzie kończy się ITCM układu: `platform_itcm_top`) i ma rozmiar dający się opisać jednym regionem MPU – górne ósme części (podregiony) najmniejszego regionu, który go mieści. Obszar zaczyna się w najniższym miejscu, od którego taki blok może się zaczynać; ITCM poniżej zostaje stertą jądra. | przegląd kodu, `crtos kmon mem` (`fastcode`): RT 64 KB, STM32H7S7 przy ITCM 128 KB: 64 KB od 0x10000, przy 192 KB: 128 KB (04.10.2026) |
 | REQ-K07-08 | Z flagami `KM_FAST`, `KM_EXEC` i `KM_ONCHIP` blok pochodzi wyłącznie z pamięci w układzie (ITCM, OCRAM), nigdy z SDRAM. | przegląd kodu |
 | REQ-K07-09 | Blok z granicą leży w wybranym wolnym bloku w najniższym albo najwyższym możliwym miejscu – w tym, po którym zostaje większy ciągły kawałek wolnej pamięci. | przegląd kodu, `heaptest` (arena `cc1` na górze, okno sterty 21,5 MB z reszty) |
 
@@ -47,7 +47,7 @@ arena jako całość jest jednak przydzielana stąd (`kmalloc_bounded`, pula SDR
 | `ksize(ptr)` | wątek, ISR | użyteczny rozmiar bloku | bajty |
 | `mm_pool_count()`, `mm_pool_info(i, &info)` | wątek | nazwa, adres, rozmiar, wolne, największy wolny blok | 0, `-EINVAL` |
 | `mm_check()` | wątek | przegląd wszystkich bloków (wolne!) | 0 albo kod błędu |
-| `kmalloc_fastcode(size, &got)` | wątek, ISR | blok obszaru szybkiego kodu na szczycie ITCM (zaokrąglony do 8 KB, powyżej 64 KB do 16 KB) dla jednego programu (K16); `kfree` go oddaje | wskaźnik albo `NULL` (zajęty, za mały) |
+| `kmalloc_fastcode(size, &got)` | wątek, ISR | blok obszaru szybkiego kodu na szczycie ITCM (zaokrąglony do ósmej części najmniejszego regionu MPU, który go mieści i kończy się na szczycie ITCM) dla jednego programu (K16); `kfree` go oddaje | wskaźnik albo `NULL` (zajęty, za mały) |
 
 Flagi: `KM_ANY` (0), `KM_FAST`, `KM_EXEC`, `KM_LARGE`, `KM_NOCACHE`, `KM_DMA`, `KM_ONCHIP`,
 `KM_ZERO`. `mm_pool_info` podaje po pulach TLSF jeszcze obszar szybkiego kodu (`fastcode`).
@@ -69,7 +69,7 @@ K02/arch (`irq_lock`), symbole linkera końców sekcji w każdej pamięci
 |---|---|---|---|
 | `dtcm` | DTCM | `KM_FAST` | od `_pvHeapLimit` do dna stosu MSP |
 | `itcm` | ITCM | `KM_FAST`, `KM_EXEC` | za kodem jądra w ITCM, do obszaru szybkiego kodu (co najmniej 2 KB) |
-| `fastcode` | ITCM | – (nie TLSF) | od granicy 8 KB za pulą `itcm` do końca ITCM (ok. 80 KB): szybki kod jednego programu |
+| `fastcode` | ITCM | – (nie TLSF) | od najniższego miejsca, od którego blok opisany regionem MPU może sięgać do końca ITCM (RT: 64 KB; STM32H7S7: ok. 8 KB przy ITCM 64 KB – domyślne option bytes, potrzebne przy Zephyrze z MCUboot na tej samej płytce – i 64 KB przy 128 KB, zalecanym dla CRTOS; podziału 192 KB się nie używa, bo zabiera pamięć kafelków GPU): szybki kod jednego programu; blok, który się tu nie mieści, loader bierze z puli `ocram` (STM32H7S7: `axisram`; `KM_ONCHIP`, K16) |
 | `ocram` | OCRAM | `KM_EXEC`, `KM_DMA` | za logiem jądra |
 | `sdram` | SDRAM | `KM_EXEC`, `KM_DMA`, `KM_LARGE` | cała SDRAM poza sekcjami `.noinit` |
 | `ncache` | SDRAM bez cache | `KM_NOCACHE`, `KM_DMA` | 2 MB |
@@ -128,7 +128,8 @@ Kolejność prób (pierwsza pula, która ma miejsce):
 
 ## 11. Konfiguracja
 
-Granice pul wynikają ze skryptu linkera (`kernel/platform/evkbimxrt1050/linker/`). Stałe
+Granice pul wynikają ze skryptu linkera (`kernel/platform/<płytka>/linker/`), a koniec ITCM
+także z `platform_itcm_top()` (STM32H7S7: option bytes `ITCM_AXI_SHARE`, [Architektura](../../architektura.md#stm32h7s78-dk)). Stałe
 TLSF: `ALIGN` 8, `SL_LOG2` 4 (16 przedziałów), `MAX_REQUEST` ok. 2 GB.
 
 ## 12. Weryfikacja

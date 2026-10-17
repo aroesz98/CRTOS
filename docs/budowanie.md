@@ -7,7 +7,15 @@ CRTOS składa się z dwóch części:
 1. **Jądro**: plik `build/kernel/crtos.bin`, zapisywany w pamięci flash płytki
    (`crtos flash`). Zmienia się rzadko, tylko po zmianach w `kernel/`.
 2. **Pliki na kartę SD**: katalog `build/sdcard/crtos/`, wysyłany na kartę jako `/crtos`
-   (`crtos deploy`). Są w nim sterowniki, usługi, programy i konfiguracja:
+   (`crtos deploy`). Są w nim sterowniki, usługi, programy i konfiguracja.
+
+System buduje się dla jednej z dwóch płytek: **NXP MIMXRT1050-EVKB** (domyślna) albo **ST
+STM32H7S78-DK**. Płytkę wybiera `crtos board NAZWA` (zapamiętuje ją w pliku `.crtos-board`)
+albo zmienna `CRTOS_BOARD`; `crtos board` bez nazwy pokazuje, która jest wybrana. Każda
+płytka ma własny katalog budowania: `build/` dla EVKB, `build-stm32h7s78dk/` dla STM32 (w tym
+opisie `build/` to katalog wybranej płytki). Na STM32H7S78-DK budowanie daje też program
+startowy `build-stm32h7s78dk/kernel/crtos-boot.bin` dla 64 KB flasha wewnętrznego: ustawia
+zegary i pamięci XSPI i uruchamia jądro z pamięci NOR.
 
 Źródła w drzewie:
 
@@ -35,7 +43,10 @@ CRTOS składa się z dwóch części:
 ## `crtos build`
 
 ```
+.\crtos board              płytki i katalog budowania wybranej
+.\crtos board stm32h7s78dk od teraz dla ST STM32H7S78-DK (evkbimxrt1050: z powrotem EVKB)
 .\crtos build              wszystko
+.\crtos build --board stm32h7s78dk   wybór płytki i budowanie naraz
 .\crtos build kernel       samo jądro
 .\crtos build paint        jeden program (nazwa jego katalogu)
 .\crtos build --base       sam system bazowy (bez apps/, tests/, examples/)
@@ -48,7 +59,8 @@ CRTOS składa się z dwóch części:
 Przy pierwszym budowaniu `crtos build` konfiguruje CMake. Później buduje tylko to, co się
 zmieniło. Nowe katalogi programów (np. z `crtos new`) CMake wykrywa sam.
 
-Kodu z zewnątrz (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK, newlib i biblioteki GCC) nie ma
+Kodu z zewnątrz (lwIP, TinyUSB, pdpmake, sterowniki NXP SDK, newlib i biblioteki GCC; dla
+STM32H7S78-DK także STM32CubeH7RS – nagłówki układu i sterowniki HAL/LL, grupa `stm32`) nie ma
 w repozytorium. Każda konfiguracja CMake uruchamia `tools/thirdparty.py`:
 
 - brakujące źródła pobiera do `third_party/` (git; za pierwszym razem pobiera ok. 40 MB,
@@ -95,6 +107,7 @@ Opcje CMake:
 
 | Opcja | Znaczenie |
 |---|---|
+| `-DCRTOS_BOARD=stm32h7s78dk` | dla ST STM32H7S78-DK (domyślnie `evkbimxrt1050`; `cmake/boards/<płytka>.cmake`); każda płytka w osobnym katalogu `-B` |
 | `-DCRTOS_BUILD_NETSURF=OFF` | bez przeglądarki (szybsze budowanie) |
 | `-DCRTOS_BUILD_APPS=OFF`, `-DCRTOS_BUILD_TESTS=OFF`, `-DCRTOS_BUILD_EXAMPLES=OFF` | bez programów dodatkowych, testów, przykładów (`crtos build --base`: wszystkie trzy) |
 | `-DCRTOS_PROFILE=rtos -DCRTOS_RTOS_APP=<katalog>` | sam RTOS z aplikacją (`crtos build --rtos`, w `build/rtos`; [RTOS](rtos.md)) |
@@ -108,6 +121,15 @@ Opcje CMake:
 Zapisuje `build/kernel/crtos.bin` w pamięci HyperFlash przez sondę DAPLink (pyOCD) i
 restartuje płytkę. Trwa około 10 sekund. Jeśli pyOCD zawiedzie, a zainstalowany jest NXP
 LinkServer, `crtos` spróbuje nim.
+
+Na **STM32H7S78-DK** zapis robi STM32CubeProgrammer od ST przez ST-LINK (gniazdo CN1). `crtos`
+szuka `STM32_Programmer_CLI` w `PATH` i w zwykłych katalogach instalacji (inny: zmienna
+`CRTOS_STM32PROG`); `crtos doctor` pokazuje, czy go znalazł. Jądro trafia do pamięci NOR
+(0x70000000, przez external loader płytki z instalacji STM32CubeProgrammer), a program
+startowy `crtos-boot.bin` do flasha wewnętrznego (0x08000000) – sam, gdy na płytce jest inny,
+albo zawsze z `crtos flash --boot`. Przed zapisem `crtos` sprawdza nagłówek obrazu (rozmiar
+i CRC-32), a program startowy sprawdza go jeszcze raz przed każdym startem jądra. W czasie
+zapisu sonda musi być wolna (bez sesji debugera).
 
 `crtos flash --net` robi to samo przez sieć, bez sondy: obraz dostaje działający system
 (usługa `deployd`), sprawdza go, zapisuje i restartuje płytkę. Trwa kilka sekund. Jeśli
@@ -219,8 +241,8 @@ ntp pool.ntp.org
 
 ## MCUXpresso IDE (opcjonalnie)
 
-Katalog repozytorium jest też projektem MCUXpresso IDE o nazwie `crtos`. IDE przydaje się
-głównie do debugowania jądra krok po kroku.
+Katalog repozytorium jest też projektem MCUXpresso IDE o nazwie `crtos` (jądro EVKB). IDE
+przydaje się głównie do debugowania jądra krok po kroku.
 
 1. *File → Import → General → Existing Projects into Workspace*, wskaż katalog
    repozytorium.

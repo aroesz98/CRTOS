@@ -9,6 +9,7 @@
 | Moduły | `gt911.ko` (`goodix,gt911`), `ft5406.ko` (`focaltech,ft5406`), `gpio-keys.ko` (`gpio-keys`), `esp32-pad.ko` (`crtos,esp32-pad`) |
 | Pliki | `drivers/input/gt911.c`, `drivers/input/ft5406.c`, `drivers/input/gpio-keys.c`, `drivers/input/esp32-pad.c` |
 | Interfejsy realizowane | urządzenia wejścia (S04); klienci I2C (S02); przerwania GPIO (K02, D01); czytelnik portu szeregowego (K13, D02) |
+| Płytki | te same moduły na EVKB i STM32H7S78-DK (tam nad `i2c-stm32`, `gpio-stm32` z EXTI i `uart-stm32`, D01, D02); własnych sterowników STM32 komponent nie ma |
 
 ## 2. Odpowiedzialność
 
@@ -30,6 +31,13 @@
   urządzenie wejścia z kodami padów Linuksa (`BTN_SOUTH`, `BTN_DPAD_UP`, ...), a gałki
   i spusty jako osie (`ABS_X/Y`, `ABS_RX/RY`, `ABS_Z/RZ`). Lewa gałka działa też jak
   krzyżak (dla menu i gier bez sterowania analogowego).
+
+Na STM32H7S78-DK: GT911 panelu RK050HR18 (800×480) pod stałym adresem 0x5D (płytka nie ma
+linii resetu dotyku), na I2C1 razem z kodekiem WM8904 (D09) i układem TCPP03 (D06); FT5406
+nie ma. `gpio-keys` obsługuje przycisk USER (B2). Mostek ESP32 nadaje do UART7 (D0 złącza
+Arduino), więc `esp32-pad` czyta `/dev/ttyS7`. Wymagania REQ-D04-01–13 dotyczą kodu
+wspólnego dla obu płytek (na STM32 bez FT5406 i bez drugiego adresu GT911); weryfikacja
+w tabeli jest z EVKB.
 
 ## 3. Wymagania
 
@@ -92,13 +100,18 @@ z węzłami dzieci (`gpios`, `linux,code`, `label`, `debounce-interval`); `esp32
 węzeł główny `gamepad` z `compatible = "crtos,esp32-pad"`, `port` (domyślnie
 `"/dev/ttyS3"`) i `current-speed` (domyślnie 460800).
 
+Na STM32H7S78-DK (`dts/stm32h7s78dk.dts`): jeden węzeł `touchscreen@5d` na `&i2c1`, INT na
+PE3 (`interrupt-parent = <&gpioe>`, `interrupts = <3 IRQ_TYPE_EDGE_RISING>`, linia EXTI 3,
+grupa pinów z podciąganiem w dół); `gpio-keys` z `user-button` (PC13, aktywny stanem wysokim,
+`KEY_HOME`, 20 ms); `gamepad` z `port = "/dev/ttyS7"` i `&uart7` (460800 bodów, PE7/PE8).
+
 ## 5. Interfejsy wymagane
 
 S02 (`i2c_client_get`, `i2c_write_read`, `i2c_write`), S04 (`input_register`,
 `input_report`, `input_sync`, `input_set_abs`, `input_set_key`), S01 (`gpiod_*`), K02
 (`irq_request`, `irq_set_type`), K05 (`kthread_create`, `task_should_stop`,
 `task_sleep_ms`), K06 (semafor); `esp32-pad`: K13 (`vfs_open`, `vfs_read`, `vfs_ioctl`)
-i port `lpuart-imxrt` (D02, S03: `TTY_IOC_SET_SPEED`).
+i port `lpuart-imxrt` albo `uart-stm32` (D02, S03: `TTY_IOC_SET_SPEED`).
 
 ## 6. Struktura statyczna
 
@@ -168,7 +181,7 @@ i port `lpuart-imxrt` (D02, S03: `TTY_IOC_SET_SPEED`).
 | GT911: suma kontrolna konfiguracji się nie zgadza | konfiguracja bez zmian (`W:`), dotyk jednym palcem |
 | GT911: zapis konfiguracji nieudany | ostrzeżenie `W:`, dalej z tym, co kontroler ma |
 | `esp32-pad`: błędna suma ramki | ramka pominięta, licznik `bad` |
-| `esp32-pad`: brak portu (moduł `lpuart-imxrt` jeszcze się ładuje) | ponowna próba co 500 ms |
+| `esp32-pad`: brak portu (moduł `lpuart-imxrt` albo `uart-stm32` jeszcze się ładuje) | ponowna próba co 500 ms |
 | `esp32-pad`: błąd odczytu portu | zamknięcie, ponowne otwarcie po 500 ms |
 | `esp32-pad`: cisza na łączu ≥ 700 ms | zwolnienie wszystkich przycisków, „pad link quiet” |
 
@@ -178,6 +191,8 @@ i port `lpuart-imxrt` (D02, S03: `TTY_IOC_SET_SPEED`).
 `dts/evkbimxrt1050.dts` (oba kontrolery dotyku opisane, dołącza się ten, który odpowiada).
 `esp32-pad`: `POLL_MS` (2), `QUIET_MS` (700), `STICK_ON`/`STICK_OFF` (56/40), `NAXES` (6); węzeł
 `gamepad` i `current-speed = <460800>` portu `&lpuart3` w `dts/evkbimxrt1050.dts`.
+STM32H7S78-DK: węzły `touchscreen@5d`, `gpio-keys`, `gamepad` i port `&uart7`
+w `dts/stm32h7s78dk.dts` (rozdz. 4).
 
 ## 11. Weryfikacja
 
@@ -192,6 +207,9 @@ i port `lpuart-imxrt` (D02, S03: `TTY_IOC_SET_SPEED`).
   pokazuje surowe ramki mostka; `dmesg` – „listening on /dev/ttyS3 at 460800 baud” i „pad
   link up (…, 0 bad)” po pierwszej poprawnej ramce; `evtest /dev/event1` – przyciski
   (ręcznie, z padem).
+- STM32H7S78-DK: te same sprawdzenia, z przyciskiem USER zamiast SW8 i portem `/dev/ttyS7`
+  (`dmesg`: „listening on /dev/ttyS7 at 460800 baud”); wyników z tej płytki dokumentacja nie
+  zawiera.
 
 ## 12. Ograniczenia i znane problemy
 
@@ -209,3 +227,6 @@ i port `lpuart-imxrt` (D02, S03: `TTY_IOC_SET_SPEED`).
 - `esp32-pad`: jeden pad; bez wibracji, diody, głośnika i czujników ruchu pada; łącze
   działa w jedną stronę (mostek → płytka). Czy pad jest połączony, widać tylko po ramkach:
   pad uśpiony daje ramki „nic nie wciśnięte”, więc łącze i tak wygląda na żywe.
+- STM32: dotyk dzieli I2C1 z kodekiem WM8904 i TCPP03 (USB-C); `i2c-stm32` też nie odzyskuje
+  zawieszonej magistrali (D02). Przerwanie dotyku zajmuje linię EXTI 3, więc pin 3 innego
+  portu nie może mieć przerwania (REQ-D01-07); EXTI zna tylko zbocza (D01).

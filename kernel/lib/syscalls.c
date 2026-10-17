@@ -1,7 +1,7 @@
 /*
  * lib/syscalls.c - the system hooks newlib-nano needs inside the kernel: a small heap for the
  * C library itself (between _pvHeapStart and _pvHeapLimit, see linker/crtos.ld) and no files.
- * _read and _write are the debug console's (fsl_debug_console.c). The kernel's own memory is
+ * _read and _write are the board's (the i.MX RT: fsl_debug_console.c). The kernel's own memory is
  * kmalloc; this only serves what newlib allocates internally.
  *
  * (MCUXpresso IDE builds link NXP's libcr_newlib_nohost, which has the same functions; these
